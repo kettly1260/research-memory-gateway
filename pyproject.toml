@@ -1,0 +1,23 @@
+[project]
+name = "research-memory-gateway"
+version = "0.1.0"
+description = "A lightweight evidence-first MCP gateway for cross-tool scientific research memory."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "mcp>=1.2.0",
+  "pydantic>=2.7.0",
+  "pyyaml>=6.0.0",
+  "httpx>=0.27.0",
+  "starlette>=0.40,<0.47",
+]
+
+[project.scripts]
+research-memory-gateway = "research_memory_gateway.server:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

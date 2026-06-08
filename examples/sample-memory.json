@@ -1,0 +1,53 @@
+{
+  "project": "demo",
+  "topic": "Hg2+ fluorescence probe",
+  "memory_type": "literature_review",
+  "title": "Sulfur-doped carbon dots for Hg2+ detection",
+  "summary": "A reusable note about sulfur-doped carbon dots as Hg2+ fluorescence probes. The summary is only an index entry; claims below carry verification status.",
+  "claims": [
+    {
+      "claim": "Sulfur-containing surface groups may improve Hg2+ affinity through soft acid-soft base interactions.",
+      "confidence": "medium",
+      "verification_status": "evidence_backed",
+      "evidence_ids": ["ev_demo_001"]
+    },
+    {
+      "claim": "This route may tolerate common alkali metal ions better than undoped carbon dots.",
+      "confidence": "low",
+      "verification_status": "unverified",
+      "evidence_ids": []
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "ev_demo_001",
+      "type": "paper",
+      "quote": "Example quote placeholder. Replace with exact source text when saving real memories.",
+      "doi": "10.example/demo",
+      "paper_title": "Example paper title"
+    }
+  ],
+  "source_refs": [
+    {
+      "source_type": "kilo_session",
+      "tool": "KiloCode",
+      "path": "G:/LLM/memory/examples/sample-memory.json",
+      "message_range": "example"
+    }
+  ],
+  "entities": [
+    {"name": "sulfur-doped carbon dots", "entity_type": "material"},
+    {"name": "Hg2+", "entity_type": "analyte"}
+  ],
+  "relations": [
+    {
+      "source": "sulfur-doped carbon dots",
+      "relation": "detects",
+      "target": "Hg2+",
+      "confidence": "medium",
+      "evidence_ids": ["ev_demo_001"]
+    }
+  ],
+  "tags": ["fluorescence", "carbon-dots", "heavy-metal-detection"],
+  "next_actions": ["Replace example evidence with exact DOI-backed quote."]
+}

@@ -1,0 +1,15 @@
+services:
+  research-memory-gateway:
+    build: .
+    container_name: research-memory-gateway
+    ports:
+      - "8787:8787"
+    environment:
+      RESEARCH_MEMORY_TOKEN: "change-me"
+      NOCTURNE_URL: ""
+      NOCTURNE_TOKEN: ""
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data
+      - ./exports:/app/exports
+    restart: unless-stopped

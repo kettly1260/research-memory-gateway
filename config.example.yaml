@@ -1,0 +1,39 @@
+server:
+  name: research-memory-gateway
+  host: 127.0.0.1
+  port: 8787
+  auth_token_env: RESEARCH_MEMORY_TOKEN
+
+backend:
+  # Use sqlite for local smoke tests. Use nocturne for NAS deployment.
+  type: sqlite
+  sqlite_path: ./data/research_memory.db
+  nocturne_url_env: NOCTURNE_URL
+  nocturne_token_env: NOCTURNE_TOKEN
+
+memory:
+  require_user_confirmation: true
+  require_evidence_for_claims: true
+  max_summary_chars: 1800
+  default_verification_status: unverified
+  enable_light_graph: true
+  overlap_limit: 5
+
+sources:
+  allowlist:
+    - name: kilo
+      type: kilo_session
+      path: G:/LLM
+      readonly: true
+    - name: codex
+      type: codex_session
+      path: C:/Users/YING/.codex
+      readonly: true
+    - name: cherry
+      type: cherry_export
+      path: G:/LLM/cherry-exports
+      readonly: true
+
+export:
+  markdown_dir: ./exports/markdown
+  json_dir: ./exports/json
