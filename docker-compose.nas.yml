@@ -6,6 +6,12 @@ services:
       - "8787:8787"
     environment:
       RESEARCH_MEMORY_TOKEN: "change-me"
+      EMBEDDING_BASE_URL: ""
+      EMBEDDING_API_KEY: ""
+      EMBEDDING_MODEL: ""
+      RERANK_BASE_URL: ""
+      RERANK_API_KEY: ""
+      RERANK_MODEL: ""
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data

@@ -21,6 +21,32 @@ class BackendConfig(BaseModel):
     nocturne_token_env: str = "NOCTURNE_TOKEN"
 
 
+class EmbeddingConfig(BaseModel):
+    enabled: bool = False
+    base_url_env: str = "EMBEDDING_BASE_URL"
+    api_key_env: str = "EMBEDDING_API_KEY"
+    model_env: str = "EMBEDDING_MODEL"
+    endpoint_path: str = "/embeddings"
+    timeout_seconds: float = 30.0
+
+
+class RerankConfig(BaseModel):
+    enabled: bool = False
+    base_url_env: str = "RERANK_BASE_URL"
+    api_key_env: str = "RERANK_API_KEY"
+    model_env: str = "RERANK_MODEL"
+    endpoint_path: str = "/rerank"
+    timeout_seconds: float = 30.0
+
+
+class RetrievalConfig(BaseModel):
+    mode: Literal["keyword", "hybrid"] = "keyword"
+    vector_candidate_limit: int = 50
+    rerank_candidate_limit: int = 20
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    rerank: RerankConfig = Field(default_factory=RerankConfig)
+
+
 class MemoryConfig(BaseModel):
     require_user_confirmation: bool = True
     require_evidence_for_claims: bool = True
@@ -49,6 +75,7 @@ class ExportConfig(BaseModel):
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)

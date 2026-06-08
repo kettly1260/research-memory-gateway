@@ -6,11 +6,32 @@ server:
 
 backend:
   # Default self-contained backend. This is enough for direct MCP calls.
-  # Nocturne is optional and must be deployed separately before use.
+  # Nocturne is not required; keep SQLite when you already have embedding/rerank services.
   type: sqlite
   sqlite_path: ./data/research_memory.db
   nocturne_url_env: NOCTURNE_URL
   nocturne_token_env: NOCTURNE_TOKEN
+
+retrieval:
+  # keyword: SQLite FTS only.
+  # hybrid: SQLite FTS + optional external embedding model + optional rerank model.
+  mode: keyword
+  vector_candidate_limit: 50
+  rerank_candidate_limit: 20
+  embedding:
+    enabled: false
+    base_url_env: EMBEDDING_BASE_URL
+    api_key_env: EMBEDDING_API_KEY
+    model_env: EMBEDDING_MODEL
+    endpoint_path: /embeddings
+    timeout_seconds: 30
+  rerank:
+    enabled: false
+    base_url_env: RERANK_BASE_URL
+    api_key_env: RERANK_API_KEY
+    model_env: RERANK_MODEL
+    endpoint_path: /rerank
+    timeout_seconds: 30
 
 memory:
   require_user_confirmation: true

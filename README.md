@@ -2,11 +2,11 @@
 
 面向科研工作的轻量 MCP 记忆网关，用来在 Codex、Cherry Studio、KiloCode 等 AI 工具之间共享长期科研记忆，同时避免上下文溢出、重复会话、摘要幻觉和本地资源过度消耗。
 
-这个项目不是重型 RAG，也不是完整替代 Nocturne Memory、Engram 或其它长期记忆系统。它的定位是一个“自包含科研记忆 MCP 服务 + 可选外部底座网关”：默认用内置 SQLite 保存和检索记忆，Docker 部署后 AI 工具可以直接调用；Nocturne Memory 是后续可选增强底座，不会随本项目 Docker 自动部署。
+这个项目不是重型 RAG，也不是完整替代 Nocturne Memory、Engram 或其它长期记忆系统。它的定位是一个“自包含科研记忆 MCP 服务 + 可选向量/重排检索增强”：默认用内置 SQLite 保存和关键词检索记忆，Docker 部署后 AI 工具可以直接调用；如果你已经部署了 embedding 模型和 rerank 模型，可以把它们接进来做混合检索。
 
-## 重要说明：默认不自动部署 Nocturne
+## 重要说明：当前不需要 Nocturne
 
-本项目 Docker 镜像只部署 `research-memory-gateway` 本身。
+本项目 Docker 镜像只部署 `research-memory-gateway` 本身，不部署 Nocturne。
 
 默认模式已经可以满足调用：
 
@@ -23,13 +23,15 @@ AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
 - `audit_unverified` 审计未验证结论。
 - `export_memories` 导出 Markdown/JSON。
 
-Nocturne Memory 的角色是可选外部长期记忆底座。只有当你明确部署 Nocturne，并完成适配器映射后，才会变成：
+如果你已经部署了向量模型和重排模型，推荐模式是：
 
 ```text
-AI 客户端 -> research-memory-gateway MCP -> Nocturne Memory
+AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
+                                      |-> embedding 模型（可选）
+                                      |-> rerank 模型（可选）
 ```
 
-因此第一版推荐直接用 SQLite 自包含模式上线，等保存/检索/审计流程稳定后，再决定是否接 Nocturne。
+因此当前推荐直接用 SQLite 自包含模式上线，再按需开启 embedding/rerank 混合检索。Nocturne 不在当前部署路径内。
 
 ## 设计目标
 
@@ -56,9 +58,9 @@ Research Memory Gateway MCP
         v
 SQLite 默认后端
         |
-        |  可选：后续接 Nocturne Memory
+        |  可选：embedding 向量召回 + rerank 重排
         v
-Nocturne Memory（可选，不随本项目自动部署）
+已部署的向量模型 / 重排模型
 ```
 
 ## MCP 工具
@@ -192,7 +194,7 @@ docker compose -f docker-compose.nas.yml pull
 docker compose -f docker-compose.nas.yml up -d
 ```
 
-这个 compose 只部署 `research-memory-gateway` 和 SQLite 自包含后端，不包含 Nocturne。
+这个 compose 只部署 `research-memory-gateway` 和 SQLite 自包含后端，不包含 Nocturne。embedding/rerank 是外部服务，通过环境变量连接。
 
 如果你 fork 了仓库或换了 GitHub 用户名，则使用 `docker-compose.ghcr.yml`，并修改镜像名：
 
@@ -230,6 +232,56 @@ backend:
   type: sqlite
   sqlite_path: ./data/research_memory.db
 ```
+
+如果只用 SQLite FTS，保持默认：
+
+```yaml
+retrieval:
+  mode: keyword
+```
+
+如果已经部署了向量模型和重排模型，可以开启混合检索：
+
+```yaml
+retrieval:
+  mode: hybrid
+  embedding:
+    enabled: true
+    endpoint_path: /embeddings
+  rerank:
+    enabled: true
+    endpoint_path: /rerank
+```
+
+然后在 Docker Compose 环境变量里填入模型服务地址：
+
+```yaml
+environment:
+  EMBEDDING_BASE_URL: "http://<embedding-host>:<port>/v1"
+  EMBEDDING_MODEL: "你的向量模型名"
+  RERANK_BASE_URL: "http://<rerank-host>:<port>/v1"
+  RERANK_MODEL: "你的重排模型名"
+```
+
+接口默认兼容 OpenAI 风格 embedding 响应：
+
+```json
+{"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+```
+
+重排接口默认请求格式为：
+
+```json
+{"query": "检索问题", "documents": ["候选1", "候选2"], "top_n": 10, "model": "模型名"}
+```
+
+响应支持：
+
+```json
+{"results": [{"index": 0, "relevance_score": 0.98}]}
+```
+
+如果 embedding 或 rerank 服务不可用，服务会自动退回 SQLite 关键词检索，不影响保存和基础搜索。
 
 后续如需接 Nocturne Memory，需要先单独部署 Nocturne，并把本项目的 Nocturne 适配器映射到你的 Nocturne MCP/HTTP 契约。配置上可预留为：
 

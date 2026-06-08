@@ -7,9 +7,13 @@ services:
       - "8787:8787"
     environment:
       RESEARCH_MEMORY_TOKEN: "change-me"
-      # Nocturne is optional and is not deployed by this compose file.
-      NOCTURNE_URL: ""
-      NOCTURNE_TOKEN: ""
+      # Optional external embedding and rerank services. Leave empty for SQLite FTS only.
+      EMBEDDING_BASE_URL: ""
+      EMBEDDING_API_KEY: ""
+      EMBEDDING_MODEL: ""
+      RERANK_BASE_URL: ""
+      RERANK_API_KEY: ""
+      RERANK_MODEL: ""
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data

@@ -10,8 +10,9 @@ from typing import Any
 
 import httpx
 
-from .config import AppConfig
+from .config import AppConfig, RetrievalConfig
 from .models import ResearchMemory, SearchResult
+from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
 
 
 class MemoryBackend(ABC):
@@ -40,8 +41,11 @@ class MemoryBackend(ABC):
 
 
 class SQLiteMemoryBackend(MemoryBackend):
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, retrieval: RetrievalConfig | None = None) -> None:
         self.path = Path(path)
+        self.retrieval = retrieval or RetrievalConfig()
+        self.embedding_client = EmbeddingClient(self.retrieval.embedding)
+        self.rerank_client = RerankClient(self.retrieval.rerank)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -79,6 +83,16 @@ class SQLiteMemoryBackend(MemoryBackend):
                     tags,
                     entities,
                     claims
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_embeddings (
+                    memory_id TEXT PRIMARY KEY,
+                    embedding TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
                 )
                 """
             )
@@ -132,9 +146,46 @@ class SQLiteMemoryBackend(MemoryBackend):
                     claims,
                 ),
             )
+            if self.embedding_client.enabled:
+                embedding = self.embedding_client.embed(memory_to_search_document(memory))
+                connection.execute(
+                    "DELETE FROM memory_embeddings WHERE memory_id = ?", (memory.memory_id,)
+                )
+                if embedding:
+                    connection.execute(
+                        """
+                        INSERT INTO memory_embeddings(memory_id, embedding, updated_at)
+                        VALUES (?, ?, ?)
+                        """,
+                        (memory.memory_id, json.dumps(embedding), memory.updated_at),
+                    )
         return memory
 
     def search(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        memory_type: str | None = None,
+        limit: int = 10,
+    ) -> list[SearchResult]:
+        safe_limit = max(1, min(limit, 50))
+        if self.retrieval.mode == "hybrid" and query.strip() and self.embedding_client.enabled:
+            return self._search_hybrid(
+                query,
+                project=project,
+                memory_type=memory_type,
+                limit=safe_limit,
+            )
+
+        return self._search_keyword(
+            query,
+            project=project,
+            memory_type=memory_type,
+            limit=safe_limit,
+        )
+
+    def _search_keyword(
         self,
         query: str,
         *,
@@ -185,6 +236,127 @@ class SQLiteMemoryBackend(MemoryBackend):
             memory = ResearchMemory.model_validate_json(row["data"])
             results.append(SearchResult(memory=memory, score=float(row["rank"]), match_reason="fts"))
         return results
+
+    def _search_hybrid(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        memory_type: str | None = None,
+        limit: int = 10,
+    ) -> list[SearchResult]:
+        candidate_limit = max(limit, min(self.retrieval.rerank_candidate_limit, 50))
+        keyword_results = self._search_keyword(
+            query,
+            project=project,
+            memory_type=memory_type,
+            limit=candidate_limit,
+        )
+        vector_results = self._search_vector(
+            query,
+            project=project,
+            memory_type=memory_type,
+            limit=self.retrieval.vector_candidate_limit,
+        )
+        merged = self._merge_results(keyword_results, vector_results)
+        if not merged:
+            return []
+        reranked = self._rerank_results(query, merged[: self.retrieval.rerank_candidate_limit], limit)
+        if reranked:
+            return reranked
+        return merged[:limit]
+
+    def _search_vector(
+        self,
+        query: str,
+        *,
+        project: str | None = None,
+        memory_type: str | None = None,
+        limit: int = 50,
+    ) -> list[SearchResult]:
+        query_embedding = self.embedding_client.embed(query)
+        if not query_embedding:
+            return []
+
+        filters: list[str] = []
+        params: list[Any] = []
+        if project:
+            filters.append("m.project = ?")
+            params.append(project)
+        if memory_type:
+            filters.append("m.memory_type = ?")
+            params.append(memory_type)
+
+        where = filters or ["1 = 1"]
+        sql = f"""
+            SELECT m.data, e.embedding
+            FROM memory_embeddings e
+            JOIN memories m ON m.memory_id = e.memory_id
+            WHERE {' AND '.join(where)}
+        """
+
+        results: list[SearchResult] = []
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        for row in rows:
+            try:
+                embedding = [float(value) for value in json.loads(row["embedding"])]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            score = cosine_similarity(query_embedding, embedding)
+            if score <= 0:
+                continue
+            memory = ResearchMemory.model_validate_json(row["data"])
+            results.append(SearchResult(memory=memory, score=score, match_reason="vector"))
+
+        results.sort(key=lambda item: item.score, reverse=True)
+        return results[: max(1, min(limit, 100))]
+
+    def _merge_results(
+        self,
+        keyword_results: list[SearchResult],
+        vector_results: list[SearchResult],
+    ) -> list[SearchResult]:
+        merged: dict[str, SearchResult] = {}
+        for index, result in enumerate(keyword_results):
+            # FTS bm25 uses lower-is-better rank, so convert position into a positive merge signal.
+            merged[result.memory.memory_id] = SearchResult(
+                memory=result.memory,
+                score=1.0 / (index + 1),
+                match_reason=result.match_reason,
+            )
+        for result in vector_results:
+            existing = merged.get(result.memory.memory_id)
+            if existing is None:
+                merged[result.memory.memory_id] = result
+                continue
+            existing.score += result.score
+            existing.match_reason = f"{existing.match_reason}+vector"
+        return sorted(merged.values(), key=lambda item: item.score, reverse=True)
+
+    def _rerank_results(
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        limit: int,
+    ) -> list[SearchResult]:
+        if not self.rerank_client.enabled or not candidates:
+            return []
+        documents = [memory_to_search_document(candidate.memory) for candidate in candidates]
+        rerank_scores = self.rerank_client.rerank(query, documents, top_n=limit)
+        reranked: list[SearchResult] = []
+        for index, score in rerank_scores:
+            if index < 0 or index >= len(candidates):
+                continue
+            candidate = candidates[index]
+            reranked.append(
+                SearchResult(
+                    memory=candidate.memory,
+                    score=score,
+                    match_reason=f"{candidate.match_reason}+rerank",
+                )
+            )
+        return reranked[:limit]
 
     def _search_like(
         self,
@@ -272,7 +444,7 @@ class NocturneMemoryBackend(MemoryBackend):
 
 def build_backend(config: AppConfig) -> MemoryBackend:
     if config.backend.type == "sqlite":
-        return SQLiteMemoryBackend(config.backend.sqlite_path)
+        return SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval)
 
     url = os.getenv(config.backend.nocturne_url_env, "")
     token = os.getenv(config.backend.nocturne_token_env)
