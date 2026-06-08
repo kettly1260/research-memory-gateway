@@ -2,7 +2,34 @@
 
 面向科研工作的轻量 MCP 记忆网关，用来在 Codex、Cherry Studio、KiloCode 等 AI 工具之间共享长期科研记忆，同时避免上下文溢出、重复会话、摘要幻觉和本地资源过度消耗。
 
-这个项目不是重型 RAG，也不是完整替代 Nocturne Memory、Engram 或其它长期记忆系统。它的定位是一个“科研记忆网关”：负责保存提醒、用户确认、强证据 schema、source_refs 回溯、重复检测、轻知识图谱和导出；底层可以先用内置 SQLite，后续再接 Nocturne Memory 等远程记忆底座。
+这个项目不是重型 RAG，也不是完整替代 Nocturne Memory、Engram 或其它长期记忆系统。它的定位是一个“自包含科研记忆 MCP 服务 + 可选外部底座网关”：默认用内置 SQLite 保存和检索记忆，Docker 部署后 AI 工具可以直接调用；Nocturne Memory 是后续可选增强底座，不会随本项目 Docker 自动部署。
+
+## 重要说明：默认不自动部署 Nocturne
+
+本项目 Docker 镜像只部署 `research-memory-gateway` 本身。
+
+默认模式已经可以满足调用：
+
+```text
+AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
+```
+
+也就是说，不接 Nocturne 时，仍然可以正常使用：
+
+- `propose_save` 生成保存建议。
+- `save_research_memory` 写入 SQLite。
+- `search_research_memory` 从 SQLite 检索。
+- `check_overlap` 检查重复/相似记忆。
+- `audit_unverified` 审计未验证结论。
+- `export_memories` 导出 Markdown/JSON。
+
+Nocturne Memory 的角色是可选外部长期记忆底座。只有当你明确部署 Nocturne，并完成适配器映射后，才会变成：
+
+```text
+AI 客户端 -> research-memory-gateway MCP -> Nocturne Memory
+```
+
+因此第一版推荐直接用 SQLite 自包含模式上线，等保存/检索/审计流程稳定后，再决定是否接 Nocturne。
 
 ## 设计目标
 
@@ -13,7 +40,7 @@
 - 每条记忆保存 `source_refs`，可回溯原会话、论文、文件、DOI 或 URL。
 - 使用轻图谱字段 `entities` 和 `relations`，支持材料、论文、合成路线、实验条件和机理假设之间的关系检索。
 - 支持 Markdown 和 JSON 导出，便于 Obsidian、备份和迁移。
-- 默认本地 SQLite 可直接验证，NAS/VPS 部署时可通过 SSE 暴露给 AI 客户端。
+- 默认 SQLite 后端可直接在 NAS/VPS 上长期运行，并通过 SSE 暴露给 AI 客户端。
 
 ## 推荐架构
 
@@ -27,7 +54,11 @@ Research Memory Gateway MCP
         |
         |  schema 校验 / source_refs / 去重 / 审计 / 导出 / 轻图谱
         v
-SQLite 默认后端，或后续接 Nocturne Memory on NAS
+SQLite 默认后端
+        |
+        |  可选：后续接 Nocturne Memory
+        v
+Nocturne Memory（可选，不随本项目自动部署）
 ```
 
 ## MCP 工具
@@ -153,7 +184,17 @@ git push origin v0.1.0
 
 ## NAS 直接拉取镜像
 
-把 `docker-compose.ghcr.yml` 复制到 NAS，并修改镜像名：
+如果使用当前仓库的公开镜像，可直接把 `docker-compose.nas.yml` 复制到 NAS：
+
+```bash
+cp config.example.yaml config.yaml
+docker compose -f docker-compose.nas.yml pull
+docker compose -f docker-compose.nas.yml up -d
+```
+
+这个 compose 只部署 `research-memory-gateway` 和 SQLite 自包含后端，不包含 Nocturne。
+
+如果你 fork 了仓库或换了 GitHub 用户名，则使用 `docker-compose.ghcr.yml`，并修改镜像名：
 
 ```yaml
 image: ghcr.io/<你的GitHub用户名或组织名>/research-memory-gateway:latest
@@ -190,7 +231,7 @@ backend:
   sqlite_path: ./data/research_memory.db
 ```
 
-后续如需接 Nocturne Memory，可切换为：
+后续如需接 Nocturne Memory，需要先单独部署 Nocturne，并把本项目的 Nocturne 适配器映射到你的 Nocturne MCP/HTTP 契约。配置上可预留为：
 
 ```yaml
 backend:
@@ -199,7 +240,20 @@ backend:
   nocturne_token_env: NOCTURNE_TOKEN
 ```
 
-当前 Nocturne 适配器保留了边界，但还没有绑定具体部署的 Nocturne MCP/HTTP 契约。建议先用 SQLite 验证保存、检索、审计和导出流程，再根据 NAS 上 Nocturne 的实际接口做映射。
+当前 Nocturne 适配器只保留边界，还没有绑定具体部署的 Nocturne MCP/HTTP 契约。原因是 Nocturne 可通过 stdio、SSE、Streamable HTTP 或 Nginx 反代暴露，不同部署的调用契约不同。建议先用 SQLite 自包含模式验证保存、检索、审计和导出流程，再根据 NAS 上 Nocturne 的实际接口做映射。
+
+## 是否需要 Nocturne
+
+第一版不需要 Nocturne。SQLite 模式已经是完整 MCP 记忆服务。
+
+建议选择：
+
+| 场景 | 推荐 |
+|---|---|
+| 单人科研、多工具共享、NAS 部署 | 直接用 SQLite 模式 |
+| 想要 Nocturne Dashboard、PostgreSQL、复杂审计 | 单独部署 Nocturne 后再接入 |
+| 只是想让 Codex/Cherry/KiloCode 能保存和检索长期科研记忆 | 不需要 Nocturne |
+| 想做完整人格/长期 agent memory 系统 | 可考虑 Nocturne |
 
 ## 安全建议
 

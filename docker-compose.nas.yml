@@ -1,15 +1,11 @@
 services:
   research-memory-gateway:
-    # Replace OWNER with your GitHub username or organization.
-    image: ghcr.io/OWNER/research-memory-gateway:latest
+    image: ghcr.io/kettly1260/research-memory-gateway:latest
     container_name: research-memory-gateway
     ports:
       - "8787:8787"
     environment:
       RESEARCH_MEMORY_TOKEN: "change-me"
-      # Nocturne is optional and is not deployed by this compose file.
-      NOCTURNE_URL: ""
-      NOCTURNE_TOKEN: ""
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data

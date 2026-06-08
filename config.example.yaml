@@ -5,7 +5,8 @@ server:
   auth_token_env: RESEARCH_MEMORY_TOKEN
 
 backend:
-  # Use sqlite for local smoke tests. Use nocturne for NAS deployment.
+  # Default self-contained backend. This is enough for direct MCP calls.
+  # Nocturne is optional and must be deployed separately before use.
   type: sqlite
   sqlite_path: ./data/research_memory.db
   nocturne_url_env: NOCTURNE_URL

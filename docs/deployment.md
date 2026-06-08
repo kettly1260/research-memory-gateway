@@ -1,15 +1,43 @@
 # Deployment Guide
 
+## Deployment Modes
+
+This project is self-contained by default. Docker does not deploy Nocturne Memory automatically.
+
+Default mode:
+
+```text
+AI client -> research-memory-gateway MCP -> SQLite
+```
+
+Optional future mode:
+
+```text
+AI client -> research-memory-gateway MCP -> Nocturne Memory
+```
+
+Use SQLite mode first unless you have already deployed Nocturne and know its final MCP/HTTP contract.
+
 ## Recommended NAS Deployment
 
 1. Copy this project to the NAS.
 2. Copy `config.example.yaml` to `config.yaml`.
 3. Set `RESEARCH_MEMORY_TOKEN` in the environment.
-4. Start with SQLite backend for smoke testing.
+4. Use SQLite backend for normal first deployment.
 5. Put the service behind Tailscale, ZeroTier, or WireGuard.
 6. Configure clients to use `http://<nas-ip>:8787/sse`.
 
 ## Docker Compose
+
+Published GHCR image for NAS:
+
+```powershell
+Copy-Item config.example.yaml config.yaml
+docker compose -f docker-compose.nas.yml pull
+docker compose -f docker-compose.nas.yml up -d
+```
+
+Local build:
 
 ```powershell
 Copy-Item config.example.yaml config.yaml
@@ -32,9 +60,11 @@ Client -> HTTPS -> Nginx on VPS -> Tailscale/WireGuard -> NAS gateway
 
 Nginx should enforce HTTPS and authentication. Do not expose the NAS service directly to the public internet without auth.
 
-## Nocturne Backend
+## Optional Nocturne Backend
 
-The first implementation includes a SQLite backend for immediate validation and a Nocturne adapter boundary. Keep the gateway as the public MCP endpoint. Once your Nocturne deployment contract is fixed, map the adapter methods to Nocturne's `create_memory`, `search_memory`, and `read_memory` tools or HTTP endpoints.
+The first implementation includes a complete SQLite backend and a Nocturne adapter boundary. Nocturne is not required for AI clients to call the gateway.
+
+Nocturne is useful only if you want its Dashboard, PostgreSQL deployment, or broader long-term agent-memory features. If you choose to use it, deploy Nocturne separately, then map the adapter methods to Nocturne's `create_memory`, `search_memory`, and `read_memory` tools or HTTP endpoints.
 
 Until then, use:
 
@@ -43,7 +73,7 @@ backend:
   type: sqlite
 ```
 
-This still preserves the final data shape and can export JSON for migration into Nocturne.
+This preserves the final data shape and can export JSON for migration into Nocturne later.
 
 ## Backup
 
