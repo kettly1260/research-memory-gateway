@@ -13,6 +13,28 @@ Every saved memory is a structured research asset. The `summary` field is only a
 - `evidence`
 - `source_refs`
 
+## Memory Lifecycle Status
+
+Each `ResearchMemory` has a memory-level lifecycle status independent from claim verification status:
+
+- `active`: default state. Normal search, audit, AI retrieval, and export include active memories.
+- `archived`: retained for reference but hidden from normal search/export unless explicitly included.
+- `deleted`: soft-deleted tombstone state. Hidden from normal search/export and recoverable until hard delete.
+
+Lifecycle metadata fields:
+
+- `memory_status`
+- `status_changed_at`
+- `status_change_reason`
+
+Default semantics:
+
+- `search_research_memory` returns only `active` unless archived/deleted are explicitly included.
+- `check_overlap` searches `active`, `archived`, and `deleted` by default so duplicate/deleted history can be detected.
+- `audit_unverified` audits only `active` by default.
+- `export_memories` exports only `active` by default.
+- Hard delete physically removes rows from `memories`, `memories_fts`, and `memory_embeddings`; it is only available after soft delete.
+
 ## Verification Status
 
 - `evidence_backed`: claim links to evidence IDs.

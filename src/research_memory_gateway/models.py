@@ -28,6 +28,12 @@ class VerificationStatus(str, Enum):
     retracted = "retracted"
 
 
+class MemoryStatus(str, Enum):
+    active = "active"
+    archived = "archived"
+    deleted = "deleted"
+
+
 class Confidence(str, Enum):
     low = "low"
     medium = "medium"
@@ -86,6 +92,9 @@ class ResearchMemory(BaseModel):
     project: str = "default"
     topic: str
     memory_type: MemoryType
+    memory_status: MemoryStatus = MemoryStatus.active
+    status_changed_at: str | None = None
+    status_change_reason: str | None = None
     title: str
     summary: str
     claims: list[Claim] = Field(default_factory=list)
@@ -95,6 +104,7 @@ class ResearchMemory(BaseModel):
     relations: list[Relation] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     next_actions: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

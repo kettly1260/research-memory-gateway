@@ -4,6 +4,8 @@ services:
     container_name: research-memory-gateway
     ports:
       - "8787:8787"
+      # Optional WebUI, disabled by default. Publish only on trusted networks.
+      # - "127.0.0.1:8788:8788"
     environment:
       RESEARCH_MEMORY_TOKEN: "change-me"
       EMBEDDING_BASE_URL: ""
@@ -12,6 +14,9 @@ services:
       RERANK_BASE_URL: ""
       RERANK_API_KEY: ""
       RERANK_MODEL: ""
+      NOCTURNE_URL: ""
+      NOCTURNE_TOKEN: ""
+      WEBUI_SECRET_KEY: ""
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data

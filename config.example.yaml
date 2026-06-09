@@ -23,8 +23,11 @@ retrieval:
     base_url_env: EMBEDDING_BASE_URL
     api_key_env: EMBEDDING_API_KEY
     model_env: EMBEDDING_MODEL
+    # Supports EMBEDDING_BASE_URL ending in either the server root or /v1.
+    # If /embeddings returns 404, the client also tries /v1/embeddings.
     endpoint_path: /embeddings
     timeout_seconds: 30
+    max_retries: 1
   rerank:
     enabled: false
     base_url_env: RERANK_BASE_URL
@@ -32,6 +35,7 @@ retrieval:
     model_env: RERANK_MODEL
     endpoint_path: /rerank
     timeout_seconds: 30
+    max_retries: 1
 
 memory:
   require_user_confirmation: true
@@ -59,3 +63,16 @@ sources:
 export:
   markdown_dir: ./exports/markdown
   json_dir: ./exports/json
+
+webui:
+  # Optional single-admin private WebUI. Disabled by default.
+  # Expose port 8788 only on trusted networks or behind a VPN/reverse proxy.
+  enabled: false
+  host: 127.0.0.1
+  port: 8788
+  web_config_path: ./data/web_config.yaml
+  auth_store_path: ./data/webui-auth.json
+  secret_store_path: ./data/webui-secrets.json.enc
+  # Set only for first bootstrap, then remove the plaintext value from config.yaml.
+  initial_password: null
+  session_max_age_seconds: 43200

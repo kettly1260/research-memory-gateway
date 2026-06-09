@@ -1,0 +1,119 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f2ff;
+  --fg: #17121f;
+  --muted: #655a72;
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-solid: #fff;
+  --primary: #6750a4;
+  --on-primary: #fff;
+  --error: #b3261e;
+  --radius: 28px;
+  --shadow: 0 18px 60px rgba(34, 18, 73, 0.18);
+}
+[data-theme="dark"],
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15121b;
+    --fg: #f3edf7;
+    --muted: #cac4d0;
+    --surface: rgba(35, 31, 42, 0.72);
+    --surface-solid: #211f26;
+    --primary: #d0bcff;
+    --on-primary: #1d192b;
+    --error: #ffb4ab;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.bg {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(circle at 10% 10%, #d0bcff88, transparent 28rem), radial-gradient(circle at 85% 20%, #9adbe888, transparent 24rem), linear-gradient(135deg, var(--bg), #fff0);
+  z-index: -1;
+}
+.shell { display: grid; grid-template-columns: 280px 1fr; min-height: 100vh; }
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 24px;
+  backdrop-filter: blur(24px);
+  background: rgba(255, 255, 255, 0.2);
+  border-right: 1px solid rgba(255, 255, 255, 0.35);
+}
+.brand { display: block; margin-bottom: 28px; color: var(--fg); font-weight: 800; text-decoration: none; }
+.sidebar nav { display: grid; gap: 8px; }
+.sidebar a, .ghost { border: 0; border-radius: 999px; padding: 11px 14px; color: var(--fg); background: transparent; text-decoration: none; text-align: left; }
+.sidebar a:hover, .ghost:hover { background: rgba(103, 80, 164, 0.14); }
+.content { padding: 24px; min-width: 0; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.card, .login-card {
+  background: var(--surface);
+  backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+.hero h1 { font-size: clamp(32px, 6vw, 64px); line-height: 1; margin: 0 0 12px; }
+.grid { display: grid; gap: 16px; }
+.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.metric { font-size: 44px; font-weight: 800; margin: 0; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.button, button { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 999px; padding: 11px 18px; background: var(--primary); color: var(--on-primary); font-weight: 700; text-decoration: none; cursor: pointer; }
+input, select, textarea { width: 100%; border: 1px solid rgba(103, 80, 164, 0.24); border-radius: 18px; background: var(--surface-solid); color: var(--fg); padding: 12px 14px; }
+textarea { min-height: 120px; resize: vertical; }
+.filters { display: grid; grid-template-columns: 2fr 1fr auto; gap: 12px; margin: 16px 0; }
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+.form-grid label { display: grid; gap: 6px; font-weight: 700; color: var(--muted); }
+.span-all { grid-column: 1 / -1; }
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0 8px; }
+.data-table th { text-align: left; color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.data-table td { background: var(--surface-solid); padding: 14px; }
+.data-table td:first-child { border-radius: 18px 0 0 18px; }
+.data-table td:last-child { border-radius: 0 18px 18px 0; }
+.chip { display: inline-flex; border-radius: 999px; padding: 4px 10px; background: rgba(103, 80, 164, 0.14); color: var(--primary); font-size: 12px; font-weight: 700; margin: 2px; }
+.status-deleted, .danger-zone { --primary: var(--error); }
+.danger-zone { border: 2px solid var(--error); background: color-mix(in srgb, var(--error) 12%, var(--surface-solid)); border-radius: var(--radius); padding: 20px; margin-top: 18px; }
+.danger-zone button { background: var(--error); color: #fff; }
+.mobile-list { display: none; }
+.detail pre, pre { white-space: pre-wrap; overflow: auto; background: rgba(0, 0, 0, 0.06); border-radius: 20px; padding: 16px; }
+.json-editor { min-height: 320px; font-family: ui-monospace, Consolas, monospace; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.actions form { display: flex; gap: 8px; align-items: center; }
+output { display: block; grid-column: 1 / -1; white-space: pre-wrap; overflow: auto; color: var(--muted); font-family: ui-monospace, Consolas, monospace; }
+.diff-panel { background: rgba(0, 0, 0, 0.08); border-left: 4px solid var(--primary); padding: 16px; border-radius: 16px; }
+.secret-field input { font-family: ui-monospace, Consolas, monospace; }
+.alert { border-radius: 18px; padding: 14px 16px; background: rgba(103, 80, 164, 0.14); }
+.progress { height: 12px; border-radius: 999px; background: rgba(103, 80, 164, 0.18); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: var(--primary); }
+.login { display: grid; place-items: center; padding: 24px; }
+.login-card { width: min(420px, 100%); }
+.error { color: var(--error); }
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.35); }
+  .sidebar nav { grid-template-columns: repeat(2, 1fr); }
+  .two, .form-grid, .filters { grid-template-columns: 1fr; }
+  .data-table { display: none; }
+  .mobile-list { display: grid; gap: 14px; }
+  .actions, .actions form { display: grid; width: 100%; }
+  .toolbar { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 560px) {
+  .content { padding: 14px; }
+  .sidebar { padding: 14px; }
+  .topbar { position: sticky; top: 0; z-index: 5; padding: 10px; border-radius: 18px; background: var(--surface); }
+  .card, .login-card { border-radius: 22px; padding: 18px; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .card, .login-card, .sidebar { backdrop-filter: none; background: var(--surface-solid); }
+  .bg { background: var(--bg); }
+}

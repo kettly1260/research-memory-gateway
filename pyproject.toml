@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 research-memory-gateway = "research_memory_gateway.server:main"
+research-memory-admin = "research_memory_gateway.admin:main"
 
 [tool.ruff]
 line-length = 100

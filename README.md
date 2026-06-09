@@ -71,8 +71,16 @@ SQLite 默认后端
 | `save_research_memory` | 用户确认后保存记忆，要求 `user_confirmed=true`。 |
 | `search_research_memory` | 按关键词、项目、记忆类型检索科研记忆。 |
 | `check_overlap` | 检查当前内容是否和已有记忆重复、相似或冲突。 |
+| `get_research_memory` | 按 `memory_id` 读取单条记忆。 |
+| `update_research_memory` | 用户确认后更新记忆，并刷新 SQLite FTS/embedding。 |
+| `delete_research_memory` | 用户确认后删除记忆、FTS 和向量。 |
+| `mark_memory_status` | 用户确认后标记 `superseded`、`retracted` 或 `conflicting`。 |
+| `merge_research_memories` | 合并多条记忆并把旧记忆标记为 superseded。 |
 | `open_source_ref` | 根据白名单 source ref 回溯本地文件、会话、DOI 或 URL。 |
 | `audit_unverified` | 找出缺证据、未验证或推断型 claim。 |
+| `health` | 报告服务、SQLite、retrieval 和记忆策略状态。 |
+| `retrieval_health` | 报告 SQLite、embedding、rerank、向量维度和最近降级原因。 |
+| `audit_database_integrity` | 检查/修复 FTS 缺失、orphan embeddings 和 JSON/source_refs 问题。 |
 | `export_memories` | 导出 Markdown 和 JSON。 |
 
 ## 记忆类型
@@ -233,6 +241,43 @@ backend:
   sqlite_path: ./data/research_memory.db
 ```
 
+## 可选 WebUI 管理台
+
+WebUI 是单管理员私有管理台，用于管理记忆、运行时 API 配置、检索状态、JSON 导入导出和受控 embedding backfill。它不替代 MCP；AI 客户端仍通过 MCP tools 调用服务。
+
+默认关闭：
+
+```yaml
+webui:
+  enabled: false
+  host: 127.0.0.1
+  port: 8788
+```
+
+首次开启时必须提供初始密码或 `WEBUI_PASSWORD_HASH`：
+
+```yaml
+webui:
+  enabled: true
+  initial_password: "change-this-immediately"
+```
+
+首次启动会把密码 hash 写入 `./data/webui-auth.json`。确认登录成功后，应从 `config.yaml` 删除明文 `initial_password`，后续登录只使用 auth store。WebUI session 使用固定过期 HttpOnly cookie，不提供“记住我”。所有写操作需要 CSRF。
+
+如果要在 WebUI 保存 embedding/rerank API key 或 Nocturne token，必须设置：
+
+```text
+WEBUI_SECRET_KEY=<long-random-secret>
+```
+
+密钥会加密写入 `./data/webui-secrets.json.enc`，不会写入 `web_config.yaml`，也不会在 API、HTML、日志或导出中明文返回。非密钥运行时配置写入 `./data/web_config.yaml`，例如 retrieval mode、base URL、model、timeout 和 retry。配置优先级为：密钥 `env > webui-secrets > unset`，非密钥运行时配置 `env > web_config.yaml > config.yaml > defaults`。
+
+WebUI 默认端口为 `8788`。是否暴露给宿主机或公网由 Docker compose、NAS、防火墙或反向代理配置决定。建议只在本机、Tailscale/WireGuard/ZeroTier 或受认证反向代理后访问。
+
+WebUI v1 的 Nocturne 页面只支持配置保存、token 加密保存和连接测试。不会执行 SQLite 同步、Nocturne 导入、双写或直接编辑 Nocturne 记忆。
+
+Embedding backfill 会消耗模型 API 额度。建议先 dry-run，限制 batch/concurrency/timeout，并确认只有一个 backfill job 运行。Hard delete 仅允许在 deleted 详情页执行，且不清理历史备份、导出文件或 Nocturne 远端数据。
+
 如果只用 SQLite FTS，保持默认：
 
 ```yaml
@@ -248,9 +293,13 @@ retrieval:
   embedding:
     enabled: true
     endpoint_path: /embeddings
+    timeout_seconds: 30
+    max_retries: 1
   rerank:
     enabled: true
     endpoint_path: /rerank
+    timeout_seconds: 30
+    max_retries: 1
 ```
 
 然后在 Docker Compose 环境变量里填入模型服务地址：
@@ -269,6 +318,14 @@ environment:
 {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
 ```
 
+也支持直接返回：
+
+```json
+{"embedding": [0.1, 0.2, 0.3]}
+```
+
+`EMBEDDING_BASE_URL` 可以填服务根路径或 `/v1` 路径。默认 `endpoint_path: /embeddings`，如果服务根路径下的 `/embeddings` 返回 404，客户端会再尝试 `/v1/embeddings`。
+
 重排接口默认请求格式为：
 
 ```json
@@ -281,7 +338,37 @@ environment:
 {"results": [{"index": 0, "relevance_score": 0.98}]}
 ```
 
-如果 embedding 或 rerank 服务不可用，服务会自动退回 SQLite 关键词检索，不影响保存和基础搜索。
+也支持：
+
+```json
+{"results": [{"document": {"index": 0}, "score": 0.98}]}
+```
+
+以及：
+
+```json
+{"data": [{"index": 0, "score": 0.98}]}
+```
+
+如果 embedding 服务不可用，搜索会自动退回 SQLite FTS。保存记忆时如果 embedding 失败，记忆仍会保存到 SQLite，已有向量不会被失败请求删除。如果 rerank 服务不可用，搜索会返回未重排的 hybrid 合并结果。所有降级都会写入日志，并可通过 `retrieval_health` 查看最近错误、HTTP 状态、已有向量数量和维度分布。
+
+混合检索的分数含义：SQLite FTS 的 `bm25` 结果会按排序位置转换为合并分数，向量结果使用 cosine similarity，重排结果使用模型返回的 score。`match_reason` 会标出 `fts:rank_position=...`、`vector:cosine=...` 和 `rerank:score=...`。
+
+已有记忆开启 embedding 后可以回填向量：
+
+```powershell
+research-memory-admin backfill-embeddings --config config.yaml --dry-run
+research-memory-admin backfill-embeddings --config config.yaml
+```
+
+数据库维护命令：
+
+```powershell
+research-memory-admin inspect-db --config config.yaml
+research-memory-admin audit-integrity --config config.yaml --repair-fts --repair-orphan-embeddings
+```
+
+更多客户端矩阵、NAS 容器内回填、模型模板和安全规范见 `docs/operations.md`。
 
 后续如需接 Nocturne Memory，需要先单独部署 Nocturne，并把本项目的 Nocturne 适配器映射到你的 Nocturne MCP/HTTP 契约。配置上可预留为：
 
@@ -352,11 +439,30 @@ Copy-Item "G:\LLM\memory\skills\research-memory-gateway\SKILL.md" "$env:USERPROF
 pytest
 ```
 
+轻量 smoke 验证：
+
+```powershell
+./scripts/smoke.ps1
+```
+
 已覆盖：
 
 - `evidence_backed` claim 必须绑定 evidence。
 - `unverified` claim 可无 evidence。
 - SQLite 检索支持 `sulfur-doped`、`Hg2+` 等含连字符或符号的科研术语。
+
+## 发布版本
+
+GitHub Actions 会在 PR/push 时运行 `pytest`。Docker 镜像发布 workflow 也会先运行测试，只有测试通过才 build/push GHCR 镜像。
+
+发布 tag 示例：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+tag 触发后会发布 `ghcr.io/<owner>/<repo>:v0.1.0` 和对应 sha 标签；默认分支会额外发布 `latest`。
 
 ## 目录结构
 

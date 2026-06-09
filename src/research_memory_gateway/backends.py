@@ -5,14 +5,22 @@ import os
 import re
 import sqlite3
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from logging import getLogger
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from .config import AppConfig, RetrievalConfig
-from .models import ResearchMemory, SearchResult
+from .config import AppConfig, RetrievalConfig, RuntimeConfigResolver
+from .models import MemoryStatus, ResearchMemory, SearchResult
 from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
+
+
+logger = getLogger(__name__)
+SCHEMA_VERSION = 2
+ACTIVE_STATUSES = (MemoryStatus.active.value,)
+ALL_STATUSES = tuple(status.value for status in MemoryStatus)
 
 
 class MemoryBackend(ABC):
@@ -27,25 +35,42 @@ class MemoryBackend(ABC):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
         raise NotImplementedError
 
     @abstractmethod
-    def list_all(self) -> list[ResearchMemory]:
+    def list_all(self, *, statuses: list[str] | None = None) -> list[ResearchMemory]:
         raise NotImplementedError
 
     @abstractmethod
     def get(self, memory_id: str) -> ResearchMemory | None:
         raise NotImplementedError
 
+    def retrieval_health(self) -> dict[str, Any]:
+        return {"backend": self.__class__.__name__}
+
+    def health(self) -> dict[str, Any]:
+        return self.retrieval_health()
+
+    def delete(self, memory_id: str) -> bool:
+        raise NotImplementedError
+
 
 class SQLiteMemoryBackend(MemoryBackend):
-    def __init__(self, path: str, retrieval: RetrievalConfig | None = None) -> None:
+    def __init__(
+        self,
+        path: str,
+        retrieval: RetrievalConfig | None = None,
+        runtime_resolver: RuntimeConfigResolver | None = None,
+    ) -> None:
         self.path = Path(path)
         self.retrieval = retrieval or RetrievalConfig()
+        self.runtime_resolver = runtime_resolver
         self.embedding_client = EmbeddingClient(self.retrieval.embedding)
         self.rerank_client = RerankClient(self.retrieval.rerank)
+        self.last_vector_dimension_mismatches = 0
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -58,6 +83,15 @@ class SQLiteMemoryBackend(MemoryBackend):
         with self._connect() as connection:
             connection.execute(
                 """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
                 CREATE TABLE IF NOT EXISTS memories (
                     memory_id TEXT PRIMARY KEY,
                     project TEXT NOT NULL,
@@ -65,6 +99,9 @@ class SQLiteMemoryBackend(MemoryBackend):
                     memory_type TEXT NOT NULL,
                     title TEXT NOT NULL,
                     summary TEXT NOT NULL,
+                    memory_status TEXT NOT NULL DEFAULT 'active',
+                    status_changed_at TEXT,
+                    status_change_reason TEXT,
                     data TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -86,6 +123,16 @@ class SQLiteMemoryBackend(MemoryBackend):
                 )
                 """
             )
+            self._ensure_column(connection, "memories", "memory_status", "TEXT NOT NULL DEFAULT 'active'")
+            self._ensure_column(connection, "memories", "status_changed_at", "TEXT")
+            self._ensure_column(connection, "memories", "status_change_reason", "TEXT")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (1, "initial_sqlite_memory_schema", datetime.now(timezone.utc).isoformat()),
+            )
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_embeddings (
@@ -96,23 +143,46 @@ class SQLiteMemoryBackend(MemoryBackend):
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    event_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    actor TEXT,
+                    memory_id TEXT,
+                    metadata TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (SCHEMA_VERSION, "webui_memory_lifecycle_and_audit", datetime.now(timezone.utc).isoformat()),
+            )
 
     def save(self, memory: ResearchMemory) -> ResearchMemory:
+        self._refresh_retrieval_clients()
         data = memory.model_dump_json()
-        tags = " ".join(memory.tags)
-        entities = " ".join(entity.name for entity in memory.entities)
-        claims = " ".join(claim.claim for claim in memory.claims)
         with self._connect() as connection:
             connection.execute(
                 """
-                INSERT INTO memories(memory_id, project, topic, memory_type, title, summary, data, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO memories(
+                    memory_id, project, topic, memory_type, title, summary,
+                    memory_status, status_changed_at, status_change_reason, data, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     project=excluded.project,
                     topic=excluded.topic,
                     memory_type=excluded.memory_type,
                     title=excluded.title,
                     summary=excluded.summary,
+                    memory_status=excluded.memory_status,
+                    status_changed_at=excluded.status_changed_at,
+                    status_change_reason=excluded.status_change_reason,
                     data=excluded.data,
                     updated_at=excluded.updated_at
                 """,
@@ -123,41 +193,33 @@ class SQLiteMemoryBackend(MemoryBackend):
                     memory.memory_type.value,
                     memory.title,
                     memory.summary,
+                    memory.memory_status.value,
+                    memory.status_changed_at,
+                    memory.status_change_reason,
                     data,
                     memory.created_at,
                     memory.updated_at,
                 ),
             )
-            connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory.memory_id,))
-            connection.execute(
-                """
-                INSERT INTO memories_fts(memory_id, project, topic, memory_type, title, summary, tags, entities, claims)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    memory.memory_id,
-                    memory.project,
-                    memory.topic,
-                    memory.memory_type.value,
-                    memory.title,
-                    memory.summary,
-                    tags,
-                    entities,
-                    claims,
-                ),
-            )
+            self._write_fts(connection, memory)
             if self.embedding_client.enabled:
                 embedding = self.embedding_client.embed(memory_to_search_document(memory))
-                connection.execute(
-                    "DELETE FROM memory_embeddings WHERE memory_id = ?", (memory.memory_id,)
-                )
                 if embedding:
+                    connection.execute(
+                        "DELETE FROM memory_embeddings WHERE memory_id = ?", (memory.memory_id,)
+                    )
                     connection.execute(
                         """
                         INSERT INTO memory_embeddings(memory_id, embedding, updated_at)
                         VALUES (?, ?, ?)
                         """,
                         (memory.memory_id, json.dumps(embedding), memory.updated_at),
+                    )
+                else:
+                    logger.warning(
+                        "Embedding generation skipped for memory_id=%s: %s",
+                        memory.memory_id,
+                        getattr(self.embedding_client, "last_error", None),
                     )
         return memory
 
@@ -167,14 +229,18 @@ class SQLiteMemoryBackend(MemoryBackend):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
+        self._refresh_retrieval_clients()
         safe_limit = max(1, min(limit, 50))
+        status_filter = _normalize_statuses(statuses)
         if self.retrieval.mode == "hybrid" and query.strip() and self.embedding_client.enabled:
             return self._search_hybrid(
                 query,
                 project=project,
                 memory_type=memory_type,
+                statuses=status_filter,
                 limit=safe_limit,
             )
 
@@ -182,6 +248,7 @@ class SQLiteMemoryBackend(MemoryBackend):
             query,
             project=project,
             memory_type=memory_type,
+            statuses=status_filter,
             limit=safe_limit,
         )
 
@@ -191,6 +258,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
         safe_limit = max(1, min(limit, 50))
@@ -202,6 +270,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         if memory_type:
             filters.append("m.memory_type = ?")
             params.append(memory_type)
+        filters.extend(_status_sql(statuses, params, alias="m"))
 
         if query.strip():
             where = ["memories_fts MATCH ?", *filters]
@@ -243,6 +312,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
         candidate_limit = max(limit, min(self.retrieval.rerank_candidate_limit, 50))
@@ -250,12 +320,14 @@ class SQLiteMemoryBackend(MemoryBackend):
             query,
             project=project,
             memory_type=memory_type,
+            statuses=statuses,
             limit=candidate_limit,
         )
         vector_results = self._search_vector(
             query,
             project=project,
             memory_type=memory_type,
+            statuses=statuses,
             limit=self.retrieval.vector_candidate_limit,
         )
         merged = self._merge_results(keyword_results, vector_results)
@@ -272,10 +344,15 @@ class SQLiteMemoryBackend(MemoryBackend):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 50,
     ) -> list[SearchResult]:
         query_embedding = self.embedding_client.embed(query)
         if not query_embedding:
+            logger.warning(
+                "Vector search unavailable; hybrid retrieval will use SQLite FTS fallback: %s",
+                getattr(self.embedding_client, "last_error", None),
+            )
             return []
 
         filters: list[str] = []
@@ -286,6 +363,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         if memory_type:
             filters.append("m.memory_type = ?")
             params.append(memory_type)
+        filters.extend(_status_sql(statuses, params, alias="m"))
 
         where = filters or ["1 = 1"]
         sql = f"""
@@ -296,18 +374,32 @@ class SQLiteMemoryBackend(MemoryBackend):
         """
 
         results: list[SearchResult] = []
+        dimension_mismatches = 0
         with self._connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         for row in rows:
             try:
                 embedding = [float(value) for value in json.loads(row["embedding"])]
             except (TypeError, ValueError, json.JSONDecodeError):
+                logger.warning("Skipping invalid stored embedding payload")
+                continue
+            if len(query_embedding) != len(embedding):
+                dimension_mismatches += 1
                 continue
             score = cosine_similarity(query_embedding, embedding)
             if score <= 0:
                 continue
             memory = ResearchMemory.model_validate_json(row["data"])
-            results.append(SearchResult(memory=memory, score=score, match_reason="vector"))
+            results.append(
+                SearchResult(memory=memory, score=score, match_reason=f"vector:cosine={score:.4f}")
+            )
+
+        self.last_vector_dimension_mismatches = dimension_mismatches
+        if dimension_mismatches:
+            logger.warning(
+                "Skipped %s stored embedding(s) due to vector dimension mismatch",
+                dimension_mismatches,
+            )
 
         results.sort(key=lambda item: item.score, reverse=True)
         return results[: max(1, min(limit, 100))]
@@ -320,10 +412,11 @@ class SQLiteMemoryBackend(MemoryBackend):
         merged: dict[str, SearchResult] = {}
         for index, result in enumerate(keyword_results):
             # FTS bm25 uses lower-is-better rank, so convert position into a positive merge signal.
+            fts_score = 1.0 / (index + 1)
             merged[result.memory.memory_id] = SearchResult(
                 memory=result.memory,
-                score=1.0 / (index + 1),
-                match_reason=result.match_reason,
+                score=fts_score,
+                match_reason=f"fts:rank_position={index + 1}",
             )
         for result in vector_results:
             existing = merged.get(result.memory.memory_id)
@@ -331,7 +424,7 @@ class SQLiteMemoryBackend(MemoryBackend):
                 merged[result.memory.memory_id] = result
                 continue
             existing.score += result.score
-            existing.match_reason = f"{existing.match_reason}+vector"
+            existing.match_reason = f"{existing.match_reason}+{result.match_reason}"
         return sorted(merged.values(), key=lambda item: item.score, reverse=True)
 
     def _rerank_results(
@@ -344,6 +437,12 @@ class SQLiteMemoryBackend(MemoryBackend):
             return []
         documents = [memory_to_search_document(candidate.memory) for candidate in candidates]
         rerank_scores = self.rerank_client.rerank(query, documents, top_n=limit)
+        if not rerank_scores:
+            logger.warning(
+                "Rerank unavailable; returning un-reranked hybrid results: %s",
+                getattr(self.rerank_client, "last_error", None),
+            )
+            return []
         reranked: list[SearchResult] = []
         for index, score in rerank_scores:
             if index < 0 or index >= len(candidates):
@@ -353,10 +452,52 @@ class SQLiteMemoryBackend(MemoryBackend):
                 SearchResult(
                     memory=candidate.memory,
                     score=score,
-                    match_reason=f"{candidate.match_reason}+rerank",
+                    match_reason=f"{candidate.match_reason}+rerank:score={score:.4f}",
                 )
             )
         return reranked[:limit]
+
+    def retrieval_health(self) -> dict[str, Any]:
+        vector_count = 0
+        dimension_counts: dict[int, int] = {}
+        invalid_vectors = 0
+        with self._connect() as connection:
+            rows = connection.execute("SELECT embedding FROM memory_embeddings").fetchall()
+        for row in rows:
+            try:
+                embedding = json.loads(row["embedding"])
+                if not isinstance(embedding, list):
+                    raise TypeError
+                dimension_counts[len(embedding)] = dimension_counts.get(len(embedding), 0) + 1
+                vector_count += 1
+            except (TypeError, json.JSONDecodeError):
+                invalid_vectors += 1
+        return {
+            "backend": "sqlite",
+            "retrieval_mode": self.retrieval.mode,
+            "sqlite_path": str(self.path),
+            "embedding": _client_health(self.embedding_client),
+            "rerank": _client_health(self.rerank_client),
+            "stored_embedding_count": vector_count,
+            "stored_embedding_dimensions": dimension_counts,
+            "invalid_stored_embeddings": invalid_vectors,
+            "last_vector_dimension_mismatches": self.last_vector_dimension_mismatches,
+        }
+
+    def health(self) -> dict[str, Any]:
+        writable = False
+        error: str | None = None
+        try:
+            with self._connect() as connection:
+                connection.execute("PRAGMA user_version")
+                connection.execute("CREATE TABLE IF NOT EXISTS _healthcheck(value INTEGER)")
+                connection.execute("DELETE FROM _healthcheck")
+                connection.execute("INSERT INTO _healthcheck(value) VALUES (1)")
+                connection.execute("DROP TABLE _healthcheck")
+            writable = True
+        except sqlite3.Error as exc:
+            error = exc.__class__.__name__
+        return {**self.retrieval_health(), "sqlite_writable": writable, "sqlite_error": error}
 
     def _search_like(
         self,
@@ -378,9 +519,12 @@ class SQLiteMemoryBackend(MemoryBackend):
         """
         return connection.execute(sql, params).fetchall()
 
-    def list_all(self) -> list[ResearchMemory]:
+    def list_all(self, *, statuses: list[str] | None = None) -> list[ResearchMemory]:
+        params: list[Any] = []
+        filters = _status_sql(_normalize_statuses(statuses), params)
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
         with self._connect() as connection:
-            rows = connection.execute("SELECT data FROM memories ORDER BY updated_at DESC").fetchall()
+            rows = connection.execute(f"SELECT data FROM memories {where} ORDER BY updated_at DESC", params).fetchall()
         return [ResearchMemory.model_validate_json(row["data"]) for row in rows]
 
     def get(self, memory_id: str) -> ResearchMemory | None:
@@ -389,6 +533,146 @@ class SQLiteMemoryBackend(MemoryBackend):
         if row is None:
             return None
         return ResearchMemory.model_validate_json(row["data"])
+
+    def delete(self, memory_id: str) -> bool:
+        with self._connect() as connection:
+            connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
+            connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
+            cursor = connection.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
+            return cursor.rowcount > 0
+
+    def append_audit_event(
+        self,
+        event_type: str,
+        *,
+        actor: str | None = "webui",
+        memory_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event = {
+            "event_id": f"audit_{datetime.now(timezone.utc).timestamp():.6f}_{os.urandom(4).hex()}",
+            "event_type": event_type,
+            "actor": actor,
+            "memory_id": memory_id,
+            "metadata": metadata or {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO audit_events(event_id, event_type, actor, memory_id, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event["event_id"],
+                    event_type,
+                    actor,
+                    memory_id,
+                    json.dumps(_sanitize_metadata(event["metadata"]), ensure_ascii=False),
+                    event["created_at"],
+                ),
+            )
+        return event
+
+    def list_audit_events(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM audit_events ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 500)),)
+            ).fetchall()
+        return [
+            {
+                "event_id": row["event_id"],
+                "event_type": row["event_type"],
+                "actor": row["actor"],
+                "memory_id": row["memory_id"],
+                "metadata": json.loads(row["metadata"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def audit_integrity(self, *, repair_fts: bool = False, repair_orphans: bool = False) -> dict[str, Any]:
+        report: dict[str, Any] = {
+            "schema_version": SCHEMA_VERSION,
+            "missing_fts": [],
+            "orphan_embeddings": [],
+            "invalid_memory_json": [],
+            "invalid_source_refs": [],
+            "repaired_fts": 0,
+            "removed_orphan_embeddings": 0,
+        }
+        with self._connect() as connection:
+            memory_rows = connection.execute("SELECT memory_id, data FROM memories").fetchall()
+            fts_ids = {
+                row["memory_id"]
+                for row in connection.execute("SELECT memory_id FROM memories_fts").fetchall()
+            }
+            memory_ids = {row["memory_id"] for row in memory_rows}
+            embedding_ids = {
+                row["memory_id"]
+                for row in connection.execute("SELECT memory_id FROM memory_embeddings").fetchall()
+            }
+            report["orphan_embeddings"] = sorted(embedding_ids - memory_ids)
+            if repair_orphans and report["orphan_embeddings"]:
+                for memory_id in report["orphan_embeddings"]:
+                    connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
+                report["removed_orphan_embeddings"] = len(report["orphan_embeddings"])
+
+            for row in memory_rows:
+                try:
+                    memory = ResearchMemory.model_validate_json(row["data"])
+                except ValueError:
+                    report["invalid_memory_json"].append(row["memory_id"])
+                    continue
+                if row["memory_id"] not in fts_ids:
+                    report["missing_fts"].append(row["memory_id"])
+                    if repair_fts:
+                        self._write_fts(connection, memory)
+                        report["repaired_fts"] += 1
+                for source_ref in memory.source_refs:
+                    if not any([source_ref.path, source_ref.url, source_ref.doi, source_ref.source_id]):
+                        report["invalid_source_refs"].append(
+                            {"memory_id": memory.memory_id, "source_type": source_ref.source_type}
+                        )
+        return report
+
+    def _write_fts(self, connection: sqlite3.Connection, memory: ResearchMemory) -> None:
+        tags = " ".join(memory.tags)
+        entities = " ".join(entity.name for entity in memory.entities)
+        claims = " ".join(claim.claim for claim in memory.claims)
+        connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory.memory_id,))
+        connection.execute(
+            """
+            INSERT INTO memories_fts(memory_id, project, topic, memory_type, title, summary, tags, entities, claims)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                memory.memory_id,
+                memory.project,
+                memory.topic,
+                memory.memory_type.value,
+                memory.title,
+                memory.summary,
+                tags,
+                entities,
+                claims,
+            ),
+        )
+
+    def _ensure_column(self, connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+        columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _refresh_retrieval_clients(self) -> None:
+        if self.runtime_resolver is None:
+            return
+        previous = self.retrieval.model_dump(mode="json")
+        self.retrieval = self.runtime_resolver.retrieval_config()
+        current = self.retrieval.model_dump(mode="json")
+        if current != previous:
+            self.embedding_client = EmbeddingClient(self.retrieval.embedding)
+            self.rerank_client = RerankClient(self.retrieval.rerank)
 
 
 class NocturneMemoryBackend(MemoryBackend):
@@ -423,6 +707,7 @@ class NocturneMemoryBackend(MemoryBackend):
         *,
         project: str | None = None,
         memory_type: str | None = None,
+        statuses: list[str] | None = None,
         limit: int = 10,
     ) -> list[SearchResult]:
         raise NotImplementedError(
@@ -430,10 +715,13 @@ class NocturneMemoryBackend(MemoryBackend):
             "Use backend.type=sqlite for local validation."
         )
 
-    def list_all(self) -> list[ResearchMemory]:
+    def list_all(self, *, statuses: list[str] | None = None) -> list[ResearchMemory]:
         raise NotImplementedError("Nocturne adapter is not yet mapped to a concrete endpoint")
 
     def get(self, memory_id: str) -> ResearchMemory | None:
+        raise NotImplementedError("Nocturne adapter is not yet mapped to a concrete endpoint")
+
+    def delete(self, memory_id: str) -> bool:
         raise NotImplementedError("Nocturne adapter is not yet mapped to a concrete endpoint")
 
     def health(self) -> dict[str, Any]:
@@ -444,7 +732,8 @@ class NocturneMemoryBackend(MemoryBackend):
 
 def build_backend(config: AppConfig) -> MemoryBackend:
     if config.backend.type == "sqlite":
-        return SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval)
+        resolver = RuntimeConfigResolver(config) if config.webui.enabled else None
+        return SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval, resolver)
 
     url = os.getenv(config.backend.nocturne_url_env, "")
     token = os.getenv(config.backend.nocturne_token_env)
@@ -455,9 +744,50 @@ def memory_to_search_document(memory: ResearchMemory) -> str:
     return json.dumps(memory.model_dump(), ensure_ascii=False, indent=2)
 
 
+def _client_health(client: Any) -> dict[str, Any]:
+    if hasattr(client, "health"):
+        return client.health()
+    return {
+        "enabled": bool(getattr(client, "enabled", False)),
+        "status": "custom_client",
+        "last_error": getattr(client, "last_error", None),
+    }
+
+
 def _to_fts_query(query: str) -> str:
     tokens = re.findall(r"[\w\u4e00-\u9fff]+", query, flags=re.UNICODE)
     tokens = [token for token in tokens if token.strip()]
     if not tokens:
         return '""'
     return " OR ".join(f'"{token}"' for token in tokens[:20])
+
+
+def _normalize_statuses(statuses: list[str] | None) -> list[str]:
+    if statuses is None:
+        return list(ACTIVE_STATUSES)
+    parsed = [MemoryStatus(status).value for status in statuses]
+    return parsed or list(ACTIVE_STATUSES)
+
+
+def _status_sql(statuses: list[str] | None, params: list[Any], alias: str | None = None) -> list[str]:
+    if not statuses:
+        return []
+    column = f"{alias}.memory_status" if alias else "memory_status"
+    placeholders = ", ".join("?" for _ in statuses)
+    params.extend(statuses)
+    return [f"{column} IN ({placeholders})"]
+
+
+def _sanitize_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in ("secret", "token", "api_key", "password", "authorization")):
+                sanitized[key] = "[redacted]"
+            else:
+                sanitized[key] = _sanitize_metadata(item)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_metadata(item) for item in value]
+    return value
