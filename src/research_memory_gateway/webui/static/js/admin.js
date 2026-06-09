@@ -60,6 +60,30 @@ document.addEventListener("DOMContentLoaded", () => {
       if (output) output.textContent = JSON.stringify(data, null, 2);
     });
   });
+
+  document.querySelectorAll("[data-model-picker]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const provider = button.dataset.modelProvider;
+      const form = button.closest("form");
+      const baseUrl = form?.elements[`${provider}.base_url`]?.value || "";
+      const datalist = document.getElementById(`${provider}-models`);
+      const status = document.querySelector(`[data-model-status="${provider}"]`);
+      if (status) status.textContent = "正在获取模型列表...";
+      const params = new URLSearchParams({ provider });
+      if (baseUrl) params.set("base_url", baseUrl);
+      const response = await fetch(`/admin/api/config/models?${params.toString()}`);
+      const data = await response.json().catch(() => ({ models: [] }));
+      if (datalist) {
+        datalist.innerHTML = "";
+        (data.models || []).forEach((model) => {
+          const option = document.createElement("option");
+          option.value = model;
+          datalist.appendChild(option);
+        });
+      }
+      if (status) status.textContent = response.ok && data.ok ? `已加载 ${data.models.length} 个模型` : `获取失败：${data.error || data.status || response.status}`;
+    });
+  });
 });
 
 function formPayload(form, skipEmpty) {

@@ -812,6 +812,41 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
     assert "value" not in effective["embedding"]["api_key"]
 
 
+def test_webui_config_models_fetches_openai_compatible_list(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {"data": [{"id": "z-model"}, {"id": "a-model"}, {"id": "a-model"}]}
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        async def get(self, url, headers=None):
+            calls.append((url, headers or {}))
+            return FakeResponse()
+
+    monkeypatch.setattr("research_memory_gateway.webui.app.httpx.AsyncClient", FakeAsyncClient)
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    login_webui(client)
+
+    response = client.get("/admin/api/config/models?provider=embedding&base_url=http://models.local/v1")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "models": ["a-model", "z-model"]}
+    assert calls == [("http://models.local/v1/models", {})]
+
+
 def test_webui_json_import_export_and_lifecycle(tmp_path, monkeypatch) -> None:
     client, _app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)

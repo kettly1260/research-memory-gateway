@@ -83,6 +83,7 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/config/web-config", api_config_web_patch, methods=["PATCH"]),
         Route("/admin/api/config/secrets", api_config_secrets_patch, methods=["PATCH"]),
         Route("/admin/api/config/secrets/{provider:str}/{field:str}", api_config_secret_delete, methods=["DELETE"]),
+        Route("/admin/api/config/models", api_config_models, methods=["GET"]),
         Route("/admin/api/config/test", api_config_test, methods=["POST"]),
         Route("/admin/api/nocturne/{operation:str}", api_nocturne_reserved_operation, methods=["POST"]),
         Route("/admin/api/security/password", api_security_password, methods=["POST"]),
@@ -363,7 +364,7 @@ async def login_post(request: Request) -> Response:
     form = await _form(request)
     password = form.get("password", "")
     if not state.auth_store.verify(password, state.config.webui):
-        return HTMLResponse(_login_html(error="Invalid password"), status_code=401)
+        return HTMLResponse(_login_html(error="密码错误"), status_code=401)
     session = state.sessions.create()
     response = RedirectResponse("/admin", status_code=303)
     response.set_cookie(
@@ -386,10 +387,10 @@ async def dashboard(request: Request) -> Response:
     state = request.app.state.webui
     memories = state.service.backend.list_all(statuses=[MemoryStatus.active.value])
     body = f"""
-    <section class="hero card"><h1>Research Memory Admin</h1><p>Single-admin private console. WebUI is optional; MCP remains the official client interface.</p></section>
-    <section class="grid two"><div class="card"><h2>Active memories</h2><p class="metric">{len(memories)}</p></div><div class="card"><h2>Retrieval</h2><p>{_esc(state.resolver.effective()['retrieval']['mode']['value'])}</p></div></section>
+    <section class="hero card"><h1>研究记忆管理台</h1><p>单管理员私有控制台。WebUI 用于管理和配置，MCP 仍是正式客户端接口。</p></section>
+    <section class="grid two"><div class="card"><h2>活跃记忆</h2><p class="metric">{len(memories)}</p></div><div class="card"><h2>检索模式</h2><p>{_esc(state.resolver.effective()['retrieval']['mode']['value'])}</p></div></section>
     """
-    return _page(request, "Dashboard", body)
+    return _page(request, "控制台", body)
 
 
 async def memories_page(request: Request) -> Response:
@@ -403,29 +404,29 @@ async def memories_page(request: Request) -> Response:
         for m in data
     )
     body = f"""
-    <div class="toolbar"><h1>Memories</h1><a class="button" href="/admin/memories/new">New memory</a></div>
-    <form class="filters" method="get"><input name="query" placeholder="Search" value="{_esc(request.query_params.get('query',''))}"><select name="status"><option>active</option><option>archived</option><option>deleted</option><option>all</option></select><button>Filter</button></form>
-    <table class="data-table"><thead><tr><th>Title</th><th>Project</th><th>Topic</th><th>Type</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table>
+    <div class="toolbar"><h1>记忆</h1><a class="button" href="/admin/memories/new">新建记忆</a></div>
+    <form class="filters" method="get"><input name="query" placeholder="搜索" value="{_esc(request.query_params.get('query',''))}"><select name="status"><option>active</option><option>archived</option><option>deleted</option><option>all</option></select><button>筛选</button></form>
+    <table class="data-table"><thead><tr><th>标题</th><th>项目</th><th>主题</th><th>类型</th><th>状态</th></tr></thead><tbody>{rows}</tbody></table>
     <div class="mobile-list">{cards}</div>
     """
-    return _page(request, "Memories", body)
+    return _page(request, "记忆", body)
 
 
 async def memory_new_page(request: Request) -> Response:
     csrf = request.app.state.webui.sessions.csrf(request)
     body = f"""
-    <h1>New Memory</h1>
+    <h1>新建记忆</h1>
     <form class="card form-grid" data-json-form method="post" action="/admin/api/memories" data-success="/admin/memories">
       <input type="hidden" name="confirmed" value="true"><input type="hidden" name="csrf_token" value="{csrf}">
-      <label>Project<input name="project" required></label><label>Topic<input name="topic" required></label>
-      <label>Memory type<select name="memory_type">{_memory_type_options()}</select></label><label>Title<input name="title" required></label>
-      <label class="span-all">Summary<textarea name="summary" required></textarea></label>
-      <label>Tags comma-separated<input name="tags" data-list></label>
-      <button>Validate overlap and save</button><output data-form-output></output>
+      <label>项目<input name="project" required></label><label>主题<input name="topic" required></label>
+      <label>记忆类型<select name="memory_type">{_memory_type_options()}</select></label><label>标题<input name="title" required></label>
+      <label class="span-all">摘要<textarea name="summary" required></textarea></label>
+      <label>标签，逗号分隔<input name="tags" data-list></label>
+      <button>校验重叠并保存</button><output data-form-output></output>
     </form>
-    <section class="card"><h2>Advanced JSON</h2><textarea class="json-editor" data-memory-json placeholder='{{"project":"demo","topic":"..."}}'></textarea></section>
+    <section class="card"><h2>高级 JSON</h2><textarea class="json-editor" data-memory-json placeholder='{{"project":"demo","topic":"..."}}'></textarea></section>
     """
-    return _page(request, "New Memory", body)
+    return _page(request, "新建记忆", body)
 
 
 async def memory_detail_page(request: Request) -> Response:
@@ -433,67 +434,71 @@ async def memory_detail_page(request: Request) -> Response:
     memory = state.service.get_research_memory(request.path_params["memory_id"])
     danger = ""
     if memory.memory_status == MemoryStatus.deleted:
-        danger = f"""<section class='danger-zone'><h2>Danger Zone</h2><p>Hard delete requires full memory_id, current password, and reason. It does not clean backups, exports, or Nocturne.</p><form data-json-form method='delete' action='/admin/api/memories/{memory.memory_id}/hard-delete'><input name='confirm_memory_id' placeholder='Type {memory.memory_id}'><input type='password' name='current_password' placeholder='Current password'><input name='reason' placeholder='Reason'><button>Hard delete</button><output data-form-output></output></form></section>"""
+        danger = f"""<section class='danger-zone'><h2>危险区域</h2><p>硬删除需要完整 memory_id、当前密码和原因。该操作不会清理备份、导出文件或 Nocturne。</p><form data-json-form method='delete' action='/admin/api/memories/{memory.memory_id}/hard-delete'><input name='confirm_memory_id' placeholder='输入 {memory.memory_id}'><input type='password' name='current_password' placeholder='当前密码'><input name='reason' placeholder='原因'><button>硬删除</button><output data-form-output></output></form></section>"""
     evidence_json = json.dumps([e.model_dump(mode="json") for e in memory.evidence], ensure_ascii=False, indent=2)
     edit_json = _esc(json.dumps(memory.model_dump(mode="json"), ensure_ascii=False, indent=2))
     body = f"""
     <article class="card detail"><h1>{_esc(memory.title)}</h1><p>{_esc(memory.summary)}</p><p><span class='chip status-{memory.memory_status.value}'>{memory.memory_status.value}</span><span class='chip'>{memory.memory_type.value}</span></p>
-    <dl><dt>Project</dt><dd>{_esc(memory.project)}</dd><dt>Topic</dt><dd>{_esc(memory.topic)}</dd><dt>Created</dt><dd>{_esc(memory.created_at)}</dd><dt>Updated</dt><dd>{_esc(memory.updated_at)}</dd></dl>
-    <h2>Claims</h2><ul>{''.join(f'<li>{_esc(c.claim)} <span class="chip">{c.verification_status.value}</span></li>' for c in memory.claims)}</ul>
-    <h2>Evidence</h2><pre>{_esc(evidence_json)}</pre></article>
-    <section class="card"><h2>Edit</h2><form data-json-form method="patch" action="/admin/api/memories/{memory.memory_id}"><label class="span-all">Memory JSON<textarea name="__json" class="json-editor">{edit_json}</textarea></label><button>Preview diff and save</button><output data-form-output></output></form></section>
-    <section class="card"><h2>Status Actions</h2><div class="actions"><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/archive"><input name="reason" placeholder="Reason"><button>Archive</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/soft-delete"><input name="reason" placeholder="Reason"><button>Soft delete</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/restore"><input name="reason" placeholder="Reason"><button>Restore</button></form></div></section>{danger}
+    <dl><dt>项目</dt><dd>{_esc(memory.project)}</dd><dt>主题</dt><dd>{_esc(memory.topic)}</dd><dt>创建时间</dt><dd>{_esc(memory.created_at)}</dd><dt>更新时间</dt><dd>{_esc(memory.updated_at)}</dd></dl>
+    <h2>主张</h2><ul>{''.join(f'<li>{_esc(c.claim)} <span class="chip">{c.verification_status.value}</span></li>' for c in memory.claims)}</ul>
+    <h2>证据</h2><pre>{_esc(evidence_json)}</pre></article>
+    <section class="card"><h2>编辑</h2><form data-json-form method="patch" action="/admin/api/memories/{memory.memory_id}"><label class="span-all">记忆 JSON<textarea name="__json" class="json-editor">{edit_json}</textarea></label><button>预览差异并保存</button><output data-form-output></output></form></section>
+    <section class="card"><h2>状态操作</h2><div class="actions"><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/archive"><input name="reason" placeholder="原因"><button>归档</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/soft-delete"><input name="reason" placeholder="原因"><button>软删除</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/restore"><input name="reason" placeholder="原因"><button>恢复</button></form></div></section>{danger}
     """
     return _page(request, memory.title, body)
 
 
 async def config_page(request: Request) -> Response:
     effective = _redact_effective(request.app.state.webui.resolver.effective())
+    embedding = effective["embedding"]
+    rerank = effective["rerank"]
     body = f"""
-    <h1>Configuration</h1><section class='card'><p>Runtime config is hot-reloaded. Env overrides take precedence over WebUI saved values.</p><pre>{_esc(json.dumps(effective, indent=2))}</pre></section>
+    <h1>配置</h1><section class='card'><p>运行时配置会热重载。环境变量优先级高于 WebUI 保存值。</p><pre>{_esc(json.dumps(effective, indent=2, ensure_ascii=False))}</pre></section>
     <form class="card form-grid" data-json-form method="patch" action="/admin/api/config/web-config">
-      <label>Retrieval mode<select name="retrieval.mode"><option>keyword</option><option>hybrid</option></select></label>
-      <label>Embedding enabled<select name="embedding.enabled" data-bool><option value="false">false</option><option value="true">true</option></select></label>
-      <label>Embedding base URL<input name="embedding.base_url"></label><label>Embedding model<input name="embedding.model"></label>
-      <label>Embedding endpoint<input name="embedding.endpoint_path" value="/embeddings"></label><label>Embedding timeout<input name="embedding.timeout_seconds" type="number" value="30"></label>
-      <label>Embedding retries<input name="embedding.max_retries" type="number" value="1"></label>
-      <label>Rerank enabled<select name="rerank.enabled" data-bool><option value="false">false</option><option value="true">true</option></select></label>
-      <label>Rerank base URL<input name="rerank.base_url"></label><label>Rerank model<input name="rerank.model"></label>
-      <label>Rerank endpoint<input name="rerank.endpoint_path" value="/rerank"></label><label>Rerank timeout<input name="rerank.timeout_seconds" type="number" value="30"></label>
-      <label>Rerank retries<input name="rerank.max_retries" type="number" value="1"></label>
-      <button>Save runtime config</button><output data-form-output></output>
+      <label>检索模式<select name="retrieval.mode">{_selected_options(["keyword", "hybrid"], effective["retrieval"]["mode"]["value"])}</select></label>
+      <label>启用 Embedding<select name="embedding.enabled" data-bool>{_selected_options(["false", "true"], str(embedding["enabled"]["value"]).lower())}</select></label>
+      <label>Embedding Base URL<input name="embedding.base_url" value="{_esc(embedding['base_url']['value'] or '')}"></label>
+      <label>Embedding 模型<input name="embedding.model" list="embedding-models" value="{_esc(embedding['model']['value'] or '')}"><datalist id="embedding-models"></datalist><button type="button" class="ghost" data-model-picker data-model-provider="embedding">获取模型列表</button><small data-model-status="embedding"></small></label>
+      <label>Embedding 接口路径<input name="embedding.endpoint_path" value="{_esc(embedding['endpoint_path']['value'] or '/embeddings')}"></label><label>Embedding 超时秒数<input name="embedding.timeout_seconds" type="number" value="{_esc(embedding['timeout_seconds']['value'] or 30)}"></label>
+      <label>Embedding 重试次数<input name="embedding.max_retries" type="number" value="{_esc(embedding['max_retries']['value'] or 1)}"></label>
+      <label>启用 Rerank<select name="rerank.enabled" data-bool>{_selected_options(["false", "true"], str(rerank["enabled"]["value"]).lower())}</select></label>
+      <label>Rerank Base URL<input name="rerank.base_url" value="{_esc(rerank['base_url']['value'] or '')}"></label>
+      <label>Rerank 模型<input name="rerank.model" list="rerank-models" value="{_esc(rerank['model']['value'] or '')}"><datalist id="rerank-models"></datalist><button type="button" class="ghost" data-model-picker data-model-provider="rerank">获取模型列表</button><small data-model-status="rerank"></small></label>
+      <label>Rerank 接口路径<input name="rerank.endpoint_path" value="{_esc(rerank['endpoint_path']['value'] or '/rerank')}"></label><label>Rerank 超时秒数<input name="rerank.timeout_seconds" type="number" value="{_esc(rerank['timeout_seconds']['value'] or 30)}"></label>
+      <label>Rerank 重试次数<input name="rerank.max_retries" type="number" value="{_esc(rerank['max_retries']['value'] or 1)}"></label>
+      <button>保存运行时配置</button><output data-form-output></output>
     </form>
-    <form class="card form-grid" data-secret-form method="patch" action="/admin/api/config/secrets"><label>Embedding API key<input type="password" name="embedding.api_key" autocomplete="off"></label><label>Rerank API key<input type="password" name="rerank.api_key" autocomplete="off"></label><button>Save encrypted secrets</button><output data-form-output></output></form>
+    <form class="card form-grid" data-secret-form method="patch" action="/admin/api/config/secrets"><label>Embedding API Key<input type="password" name="embedding.api_key" autocomplete="off"></label><label>Rerank API Key<input type="password" name="rerank.api_key" autocomplete="off"></label><button>保存加密密钥</button><output data-form-output></output></form>
     """
-    return _page(request, "Config", body)
+    return _page(request, "配置", body)
 
 
 async def nocturne_page(request: Request) -> Response:
-    body = """<h1>Nocturne</h1><section class='card'><p>Nocturne v1 is reserved/test-only: configuration, token storage, status and capabilities probes only. Sync/import/write APIs return not_implemented.</p></section><form class='card form-grid' data-json-form method='patch' action='/admin/api/config/web-config'><label>Transport<select name='nocturne.transport'><option>unknown</option><option>rest</option><option>sse</option><option>streamable_http</option><option>stdio</option></select></label><label>URL<input name='nocturne.url'></label><button>Save Nocturne config</button><output data-form-output></output></form><form class='card form-grid' data-secret-form method='patch' action='/admin/api/config/secrets'><label>Token<input type='password' name='nocturne.token' autocomplete='off'></label><button>Save encrypted token</button><output data-form-output></output></form>"""
+    body = """<h1>Nocturne</h1><section class='card'><p>Nocturne v1 当前保留为测试配置：仅支持配置、令牌存储、状态和能力探测。同步、导入和写入 API 返回 not_implemented。</p></section><form class='card form-grid' data-json-form method='patch' action='/admin/api/config/web-config'><label>传输方式<select name='nocturne.transport'><option>unknown</option><option>rest</option><option>sse</option><option>streamable_http</option><option>stdio</option></select></label><label>URL<input name='nocturne.url'></label><button>保存 Nocturne 配置</button><output data-form-output></output></form><form class='card form-grid' data-secret-form method='patch' action='/admin/api/config/secrets'><label>令牌<input type='password' name='nocturne.token' autocomplete='off'></label><button>保存加密令牌</button><output data-form-output></output></form>"""
     return _page(request, "Nocturne", body)
 
 
 async def security_page(request: Request) -> Response:
     csrf = request.app.state.webui.sessions.csrf(request)
     body = f"""
-    <h1>Security</h1><section class="card"><form method="post" action="/admin/api/security/password?csrf_token={csrf}"><input name="current_password" type="password" placeholder="Current password"><input name="new_password" type="password" placeholder="New password"><button>Change password</button></form></section>
+    <h1>安全</h1><section class="card"><form method="post" action="/admin/api/security/password?csrf_token={csrf}"><input name="current_password" type="password" placeholder="当前密码"><input name="new_password" type="password" placeholder="新密码"><button>修改密码</button></form></section>
     """
-    return _page(request, "Security", body)
+    return _page(request, "安全", body)
 
 
 async def audit_page(request: Request) -> Response:
     events = request.app.state.webui.service.list_audit_events()
-    return _page(request, "Audit", f"<h1>Audit</h1><pre>{_esc(json.dumps(events, indent=2))}</pre>")
+    return _page(request, "审计", f"<h1>审计</h1><pre>{_esc(json.dumps(events, indent=2, ensure_ascii=False))}</pre>")
 
 
 async def import_page(request: Request) -> Response:
-    body = """<h1>Import</h1><section class='card'><p>JSON memory import supports validate, skip_existing, overwrite_existing, and import_as_new. Markdown import is planned for vector index and AI JSON generation.</p></section><form class='card form-grid' data-json-import><label class='span-all'>JSON export<textarea name='memories' class='json-editor' placeholder='[{"project":"demo",...}]'></textarea></label><label>Policy<select name='policy'><option>skip_existing</option><option>overwrite_existing</option><option>import_as_new</option></select></label><label>Confirmed<select name='confirmed' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button formaction='/admin/api/import/json/validate'>Validate</button><button formaction='/admin/api/import/json/execute'>Execute</button><output data-form-output></output></form>"""
-    return _page(request, "Import", body)
+    body = """<h1>导入</h1><section class='card'><p>JSON 记忆导入支持 validate、skip_existing、overwrite_existing 和 import_as_new。Markdown 导入计划用于向量索引和 AI JSON 生成。</p></section><form class='card form-grid' data-json-import><label class='span-all'>JSON 导出内容<textarea name='memories' class='json-editor' placeholder='[{"project":"demo",...}]'></textarea></label><label>策略<select name='policy'><option>skip_existing</option><option>overwrite_existing</option><option>import_as_new</option></select></label><label>已确认<select name='confirmed' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button formaction='/admin/api/import/json/validate'>校验</button><button formaction='/admin/api/import/json/execute'>执行</button><output data-form-output></output></form>"""
+    return _page(request, "导入", body)
 
 
 async def exports_page(request: Request) -> Response:
-    body = """<h1>Exports</h1><section class='card'><p>Export Markdown, JSON, or both. Active memories are exported by default; archived/deleted require explicit include flags.</p></section><form class='card form-grid' data-json-form method='post' action='/admin/api/export'><label>Format<select name='format'><option>both</option><option>json</option><option>markdown</option></select></label><label>Include archived<select name='include_archived' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><label>Include deleted<select name='include_deleted' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button>Create export</button><output data-form-output></output></form>"""
-    return _page(request, "Exports", body)
+    body = """<h1>导出</h1><section class='card'><p>导出 Markdown、JSON 或两者。默认只导出活跃记忆；归档和删除记忆需要显式包含。</p></section><form class='card form-grid' data-json-form method='post' action='/admin/api/export'><label>格式<select name='format'><option>both</option><option>json</option><option>markdown</option></select></label><label>包含归档<select name='include_archived' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><label>包含删除<select name='include_deleted' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button>创建导出</button><output data-form-output></output></form>"""
+    return _page(request, "导出", body)
 
 
 async def api_memories(request: Request) -> Response:
@@ -596,6 +601,17 @@ async def api_config_secret_delete(request: Request) -> Response:
     if key not in SAFE_SECRET_KEYS:
         return JSONResponse({"error": "unsupported_secret"}, status_code=400)
     return JSONResponse({"deleted": state.secret_store.delete_secret(key)})
+
+
+async def api_config_models(request: Request) -> Response:
+    provider = request.query_params.get("provider", "")
+    if provider not in {"embedding", "rerank"}:
+        return JSONResponse({"error": "unsupported_provider"}, status_code=400)
+    effective = request.app.state.webui.resolver.effective()[provider]
+    base_url = (request.query_params.get("base_url") or effective["base_url"]["value"] or "").strip()
+    if not base_url:
+        return JSONResponse({"ok": False, "status": "not_configured", "models": []})
+    return await _safe_models_fetch(base_url, effective["api_key"]["value"])
 
 
 async def api_config_test(request: Request) -> Response:
@@ -757,12 +773,12 @@ async def _memory_list(request: Request) -> list[ResearchMemory]:
 
 def _page(request: Request, title: str, body: str) -> HTMLResponse:
     csrf = request.app.state.webui.sessions.csrf(request)
-    html = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{csrf}"><title>{_esc(title)}</title><link rel="stylesheet" href="/admin/static/css/app.css"><script defer src="/admin/static/js/htmx.min.js"></script><script defer src="/admin/static/js/alpine.min.js"></script><script defer src="/admin/static/js/admin.js"></script></head><body><div class="bg"></div><div class="shell"><aside class="sidebar"><a class="brand" href="/admin">Research Memory</a><nav><a href="/admin/memories">Memories</a><a href="/admin/config">Config</a><a href="/admin/import">Import</a><a href="/admin/exports">Exports</a><a href="/admin/audit">Audit</a><a href="/admin/security">Security</a></nav><form method="post" action="/admin/logout?csrf_token={csrf}"><button class="ghost">Logout</button></form></aside><main class="content"><header class="topbar"><span>{_esc(title)}</span><button class="ghost" data-theme-toggle>Theme</button></header>{body}</main></div></body></html>"""
+    html = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{csrf}"><title>{_esc(title)}</title><link rel="stylesheet" href="/admin/static/css/app.css"><script defer src="/admin/static/js/htmx.min.js"></script><script defer src="/admin/static/js/alpine.min.js"></script><script defer src="/admin/static/js/admin.js"></script></head><body><div class="bg"></div><div class="shell"><aside class="sidebar"><a class="brand" href="/admin">研究记忆</a><nav><a href="/admin/memories">记忆</a><a href="/admin/config">配置</a><a href="/admin/import">导入</a><a href="/admin/exports">导出</a><a href="/admin/audit">审计</a><a href="/admin/security">安全</a></nav><form method="post" action="/admin/logout?csrf_token={csrf}"><button class="ghost">退出</button></form></aside><main class="content"><header class="topbar"><span>{_esc(title)}</span><button class="ghost" data-theme-toggle>主题</button></header>{body}</main></div></body></html>"""
     return HTMLResponse(html)
 
 
 def _login_html(error: str) -> str:
-    return f"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/admin/static/css/app.css"><title>Login</title></head><body class="login"><form class="login-card" method="post"><h1>Admin Login</h1><p class="error">{_esc(error)}</p><input type="password" name="password" required placeholder="Password"><button>Login</button></form></body></html>"""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/admin/static/css/app.css"><title>登录</title></head><body class="login"><form class="login-card" method="post"><h1>管理员登录</h1><p class="error">{_esc(error)}</p><input type="password" name="password" required placeholder="密码"><button>登录</button></form></body></html>"""
 
 
 def _status_filter(status: str) -> list[str]:
@@ -781,6 +797,14 @@ def _scope_to_statuses(scope: str) -> list[str]:
 
 def _memory_type_options() -> str:
     return "".join(f"<option value='{item.value}'>{item.value}</option>" for item in MemoryType)
+
+
+def _selected_options(values: list[str], selected: Any) -> str:
+    selected_value = str(selected)
+    return "".join(
+        f"<option value='{_esc(value)}'{' selected' if value == selected_value else ''}>{_esc(value)}</option>"
+        for value in values
+    )
 
 
 def _validate_backfill(payload: dict[str, Any]) -> dict[str, Any]:
@@ -831,6 +855,44 @@ async def _safe_probe(url: str, token: str | None, *, reserved: bool = False) ->
         return JSONResponse({"ok": response.status_code < 500, "status_code": response.status_code, "reserved": reserved, "headers_sent": list(headers)})
     except httpx.HTTPError as exc:
         return JSONResponse({"ok": False, "error": exc.__class__.__name__, "reserved": reserved})
+
+
+async def _safe_models_fetch(base_url: str, token: str | None) -> JSONResponse:
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(_models_url(base_url), headers=headers)
+        response.raise_for_status()
+        models = _extract_model_ids(response.json())
+        return JSONResponse({"ok": True, "models": models})
+    except (httpx.HTTPError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": exc.__class__.__name__, "models": []}, status_code=502)
+
+
+def _models_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/models"):
+        return normalized
+    if normalized.endswith("/v1"):
+        return f"{normalized}/models"
+    return f"{normalized}/v1/models"
+
+
+def _extract_model_ids(data: Any) -> list[str]:
+    if not isinstance(data, dict):
+        raise ValueError("models response is not an object")
+    raw_models = data.get("data") or data.get("models") or []
+    if not isinstance(raw_models, list):
+        raise ValueError("models response does not contain a list")
+    models: list[str] = []
+    for item in raw_models:
+        if isinstance(item, str):
+            models.append(item)
+        elif isinstance(item, dict) and item.get("id"):
+            models.append(str(item["id"]))
+        elif isinstance(item, dict) and item.get("name"):
+            models.append(str(item["name"]))
+    return sorted(dict.fromkeys(models))
 
 
 async def _json_or_empty(request: Request) -> dict[str, Any]:
