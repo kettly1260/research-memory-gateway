@@ -1,3 +1,4 @@
+import anyio
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import Response
@@ -20,7 +21,7 @@ from research_memory_gateway.config import (
 from research_memory_gateway.models import ExportFormat, MemoryStatus, ResearchMemory
 from research_memory_gateway.nocturne import NocturneReservedConnector
 from research_memory_gateway.retrieval import EmbeddingClient, RerankClient
-from research_memory_gateway.server import BearerAuthMiddleware
+from research_memory_gateway.server import BearerAuthMiddleware, build_mcp
 from research_memory_gateway.service import ResearchMemoryService
 from research_memory_gateway.webui.app import build_webui_app
 
@@ -485,6 +486,56 @@ def test_bearer_auth_middleware_rejects_missing_token() -> None:
 
     assert client.get("/sse").status_code == 401
     assert client.get("/sse", headers={"Authorization": "Bearer secret"}).status_code == 200
+
+
+def test_mcp_uses_configured_remote_host_for_transport_security(tmp_path) -> None:
+    config = AppConfig()
+    config.server.host = "0.0.0.0"
+    config.server.port = 8787
+    config.backend.sqlite_path = str(tmp_path / "memory.db")
+
+    mcp = build_mcp(config)
+
+    assert mcp.settings.host == "0.0.0.0"
+    assert mcp.settings.port == 8787
+    assert mcp.settings.transport_security is None
+
+
+def test_bearer_auth_middleware_preserves_streaming_asgi_messages() -> None:
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.debug", "info": {"template": None}})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    async def run() -> list[dict]:
+        messages = []
+        middleware = BearerAuthMiddleware(app, token="secret")
+        scope = {
+            "type": "http",
+            "path": "/sse",
+            "headers": [(b"authorization", b"Bearer secret")],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "root_path": "",
+            "query_string": b"",
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await middleware(scope, receive, send)
+        return messages
+
+    assert [message["type"] for message in anyio.run(run)] == [
+        "http.response.start",
+        "http.response.debug",
+        "http.response.body",
+    ]
 
 
 def test_service_health_reports_sqlite_writable(tmp_path) -> None:

@@ -7,9 +7,8 @@ import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
 
 from .backends import build_backend
@@ -22,25 +21,35 @@ from .webui.app import build_webui_app
 logger = logging.getLogger(__name__)
 
 
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app: Any, token: str) -> None:
-        super().__init__(app)
+class BearerAuthMiddleware:
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
         self.token = token
 
-    async def dispatch(self, request: Request, call_next: Any) -> Response:
-        if request.url.path in {"/health", "/healthz"}:
-            return await call_next(request)
-        authorization = request.headers.get("Authorization", "")
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") in {"/health", "/healthz"}:
+            await self.app(scope, receive, send)
+            return
+
+        authorization = ""
+        for raw_name, raw_value in scope.get("headers", []):
+            if raw_name.lower() == b"authorization":
+                authorization = raw_value.decode("latin-1")
+                break
+
         if authorization != f"Bearer {self.token}":
-            logger.warning("Rejected unauthenticated request path=%s", request.url.path)
-            return Response("Unauthorized", status_code=401)
-        return await call_next(request)
+            logger.warning("Rejected unauthenticated request path=%s", scope.get("path"))
+            response = Response("Unauthorized", status_code=401)
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
 
 
 def build_mcp(config: AppConfig) -> FastMCP:
     backend = build_backend(config)
     service = ResearchMemoryService(config, backend)
-    mcp = FastMCP(config.server.name)
+    mcp = FastMCP(config.server.name, host=config.server.host, port=config.server.port)
 
     @mcp.tool()
     def propose_save(
