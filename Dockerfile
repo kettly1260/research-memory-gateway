@@ -14,7 +14,7 @@ COPY src ./src
 COPY prompts ./prompts
 
 # Copy built frontend assets to the correct static folder
-COPY --from=frontend-builder /app/frontend/dist ./src/research_memory_gateway/webui/static/dist
+COPY --from=frontend-builder /app/static/dist ./src/research_memory_gateway/webui/static/dist
 
 RUN pip install --no-cache-dir -e .
 
