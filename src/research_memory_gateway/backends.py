@@ -18,7 +18,7 @@ from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
 
 
 logger = getLogger(__name__)
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACTIVE_STATUSES = (MemoryStatus.active.value,)
 ALL_STATUSES = tuple(status.value for status in MemoryStatus)
 
@@ -160,7 +160,39 @@ class SQLiteMemoryBackend(MemoryBackend):
                 INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
                 VALUES (?, ?, ?)
                 """,
-                (SCHEMA_VERSION, "webui_memory_lifecycle_and_audit", datetime.now(timezone.utc).isoformat()),
+                (2, "webui_memory_lifecycle_and_audit", datetime.now(timezone.utc).isoformat()),
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    key_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    key_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_used_at TEXT,
+                    status TEXT NOT NULL DEFAULT 'active'
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS active_connections (
+                    key_id TEXT NOT NULL,
+                    client_ip TEXT NOT NULL,
+                    client_info TEXT,
+                    request_count INTEGER DEFAULT 1,
+                    last_request_at TEXT NOT NULL,
+                    PRIMARY KEY (key_id, client_ip),
+                    FOREIGN KEY(key_id) REFERENCES api_keys(key_id) ON DELETE CASCADE
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (3, "webui_api_keys_and_connections", datetime.now(timezone.utc).isoformat()),
             )
 
     def save(self, memory: ResearchMemory) -> ResearchMemory:

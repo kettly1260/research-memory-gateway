@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Database, Lock } from 'lucide-react'
+import { api } from '@/lib/api'
 
 export function Login() {
   const { t } = useTranslation()
@@ -18,24 +19,12 @@ export function Login() {
     setError('')
 
     try {
-      const form = new URLSearchParams()
-      form.set('password', password)
-
-      const res = await fetch('/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: form.toString(),
-        credentials: 'include',
-        redirect: 'manual',
-      })
-
-      if (res.type === 'opaqueredirect' || res.status === 303 || res.ok) {
-        window.location.href = '/admin'
-      } else {
-        setError(t('auth.invalid_password') || 'Invalid password')
-      }
-    } catch {
-      setError(t('common.error'))
+      const data = await api.auth.login(password)
+      localStorage.setItem('access_token', data.access_token)
+      localStorage.setItem('refresh_token', data.refresh_token)
+      window.location.href = '/admin'
+    } catch (err: any) {
+      setError(err?.message || t('auth.invalid_password') || 'Invalid password')
     } finally {
       setLoading(false)
     }

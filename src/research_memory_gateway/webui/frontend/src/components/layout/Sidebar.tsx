@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { api } from '@/lib/api'
 
 interface SidebarProps {
   collapsed: boolean
@@ -88,6 +89,14 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Footer */}
       <div className="border-t border-sidebar-border p-2 space-y-1">
         <button
+          onClick={() => {
+            const refreshToken = localStorage.getItem('refresh_token') || undefined
+            api.auth.logout(refreshToken).finally(() => {
+              localStorage.removeItem('access_token')
+              localStorage.removeItem('refresh_token')
+              window.location.href = '/admin/login'
+            })
+          }}
           className={cn(
             'flex w-full items-center gap-3 rounded-lg text-sm transition-colors text-sidebar-foreground/70 hover:bg-destructive/10 hover:text-destructive',
             collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2',
@@ -145,7 +154,17 @@ export function MobileSidebarContent({ onClose }: { onClose: () => void }) {
         })}
       </nav>
       <div className="p-4 border-t">
-        <button className="flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors">
+        <button
+          onClick={() => {
+            const refreshToken = localStorage.getItem('refresh_token') || undefined
+            api.auth.logout(refreshToken).finally(() => {
+              localStorage.removeItem('access_token')
+              localStorage.removeItem('refresh_token')
+              window.location.href = '/admin/login'
+            })
+          }}
+          className="flex w-full items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+        >
           <LogOut className="w-4 h-4" />
           {t('nav.logout')}
         </button>

@@ -188,6 +188,16 @@ export function useBackfillStart() {
   })
 }
 
+export function useBackfillCancel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => api.retrieval.backfillCancel(jobId),
+    onSuccess: (_, jobId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.backfillJob(jobId) })
+    },
+  })
+}
+
 // ─── Import ───
 
 export function useImportValidate() {
@@ -233,5 +243,44 @@ export function useStats() {
     queryKey: ['stats'] as const,
     queryFn: () => api.stats.get(),
     refetchInterval: 30000, // refresh every 30s
+  })
+}
+
+// ─── Security API Keys ───
+
+export function useApiKeys() {
+  return useQuery({
+    queryKey: ['security', 'api-keys'] as const,
+    queryFn: () => api.apiKeys.list(),
+  })
+}
+
+export function useCreateApiKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, customKey }: { name: string; customKey?: string }) => api.apiKeys.create(name, customKey),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['security', 'api-keys'] })
+    },
+  })
+}
+
+export function useDeleteApiKey() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.apiKeys.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['security', 'api-keys'] })
+    },
+  })
+}
+
+// ─── Connections ───
+
+export function useConnections() {
+  return useQuery({
+    queryKey: ['security', 'connections'] as const,
+    queryFn: () => api.connections.list(),
+    refetchInterval: 5000, // refresh every 5s for active connection monitoring
   })
 }

@@ -108,7 +108,7 @@ export interface VectorCoverageResponse {
 
 export interface BackfillJob {
   job_id: string
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'completed_with_errors'
   total: number
   completed: number
   failed: number

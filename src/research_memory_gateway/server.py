@@ -4,6 +4,9 @@ import argparse
 import asyncio
 import logging
 import os
+import sqlite3
+import hashlib
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -25,9 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class BearerAuthMiddleware:
-    def __init__(self, app: ASGIApp, token: str) -> None:
+    def __init__(self, app: ASGIApp, token: str | None = None, sqlite_path: str = "") -> None:
         self.app = app
         self.token = token
+        self.sqlite_path = sqlite_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("path") in {"/health", "/healthz"}:
@@ -40,11 +44,71 @@ class BearerAuthMiddleware:
                 authorization = raw_value.decode("latin-1")
                 break
 
-        if authorization != f"Bearer {self.token}":
-            logger.warning("Rejected unauthenticated request path=%s", scope.get("path"))
+        if not authorization.startswith("Bearer "):
+            logger.warning("Rejected unauthenticated request path=%s: Missing Bearer token", scope.get("path"))
             response = Response("Unauthorized", status_code=401)
             await response(scope, receive, send)
             return
+
+        token_val = authorization[7:]
+        authenticated = False
+        key_id = None
+
+        # 1. 优先校验内置 master token
+        if self.token and token_val == self.token:
+            authenticated = True
+        elif os.path.exists(self.sqlite_path):
+            # 2. 从数据库中进行 API Key 匹配 (SHA-256)
+            token_hash = hashlib.sha256(token_val.encode("utf-8")).hexdigest()
+            try:
+                with sqlite3.connect(self.sqlite_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute(
+                        "SELECT key_id, name FROM api_keys WHERE key_hash = ? AND status = 'active'",
+                        (token_hash,)
+                    ).fetchone()
+                    if row:
+                        authenticated = True
+                        key_id = row["key_id"]
+            except Exception as e:
+                logger.error("Database error in BearerAuthMiddleware: %s", e)
+
+        if not authenticated:
+            logger.warning("Rejected unauthorized request path=%s", scope.get("path"))
+            response = Response("Unauthorized", status_code=401)
+            await response(scope, receive, send)
+            return
+
+        # 3. 校验通过，如果是 API Key，则记录活跃连接
+        if key_id:
+            client = scope.get("client")
+            client_ip = client[0] if client else "unknown"
+
+            user_agent = "unknown"
+            for raw_name, raw_value in scope.get("headers", []):
+                if raw_name.lower() == b"user-agent":
+                    user_agent = raw_value.decode("latin-1")
+                    break
+
+            try:
+                with sqlite3.connect(self.sqlite_path) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO active_connections(key_id, client_ip, client_info, request_count, last_request_at)
+                        VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(key_id, client_ip) DO UPDATE SET
+                            request_count = request_count + 1,
+                            last_request_at = excluded.last_request_at,
+                            client_info = excluded.client_info
+                        """,
+                        (key_id, client_ip, user_agent, datetime.now(timezone.utc).isoformat())
+                    )
+                    conn.execute(
+                        "UPDATE api_keys SET last_used_at = ? WHERE key_id = ?",
+                        (datetime.now(timezone.utc).isoformat(), key_id)
+                    )
+            except Exception as e:
+                logger.error("Database error recording active connection: %s", e)
 
         await self.app(scope, receive, send)
 
@@ -265,23 +329,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_streamable_http_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+def _build_streamable_http_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only Streamable HTTP at /mcp."""
     app = mcp.streamable_http_app()
-    if auth_token:
-        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    if auth_token or config.backend.type == "sqlite":
+        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
 
 
-def _build_sse_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+def _build_sse_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
     app = mcp.sse_app()
-    if auth_token:
-        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    if auth_token or config.backend.type == "sqlite":
+        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
 
 
-def _build_combined_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+def _build_combined_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving both Streamable HTTP (/mcp) and legacy SSE (/sse).
 
     We mount both transports on the same port so that:
@@ -312,8 +376,8 @@ def _build_combined_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
         routes=combined_routes,
         lifespan=combined_lifespan,
     )
-    if auth_token:
-        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    if auth_token or config.backend.type == "sqlite":
+        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
 
 
@@ -342,11 +406,11 @@ def main() -> None:
 
     # Build the appropriate ASGI app based on transport choice.
     if transport == "streamable-http":
-        app = _build_streamable_http_app(mcp, auth_token)
+        app = _build_streamable_http_app(mcp, auth_token, config)
     elif transport == "sse":
-        app = _build_sse_app(mcp, auth_token)
+        app = _build_sse_app(mcp, auth_token, config)
     elif transport == "both":
-        app = _build_combined_app(mcp, auth_token)
+        app = _build_combined_app(mcp, auth_token, config)
     else:
         raise ValueError(f"Unknown transport: {transport}")
 

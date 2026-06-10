@@ -56,6 +56,18 @@ interface RequestOptions {
   params?: Record<string, string | undefined>
 }
 
+let isRefreshing = false
+let refreshSubscribers: ((token: string) => void)[] = []
+
+function subscribeTokenRefresh(cb: (token: string) => void) {
+  refreshSubscribers.push(cb)
+}
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token))
+  refreshSubscribers = []
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, params } = options
 
@@ -75,7 +87,13 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers['Content-Type'] = 'application/json'
   }
 
-  // Inject CSRF token for write methods
+  // 1. Inject JWT Access Token
+  const accessToken = localStorage.getItem('access_token')
+  if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`
+  }
+
+  // 2. Inject CSRF token for backward compatibility
   if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
     const token = await getCsrfToken()
     if (token) {
@@ -83,17 +101,73 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
   }
 
-  const response = await fetch(url, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: 'include',
-  })
+  const performFetch = async (currentHeaders: Record<string, string>) => {
+    return fetch(url, {
+      method,
+      headers: currentHeaders,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: 'include',
+    })
+  }
 
-  // Handle auth redirect
-  if (response.status === 401) {
-    window.location.href = '/admin/login'
-    throw new ApiError(401, { error: 'unauthorized' })
+  let response = await performFetch(headers)
+
+  // 3. Handle auth expired & retry with refreshed token
+  if (response.status === 401 && !path.startsWith('/auth/')) {
+    const refreshToken = localStorage.getItem('refresh_token')
+    if (refreshToken) {
+      if (!isRefreshing) {
+        isRefreshing = true
+        try {
+          const refreshRes = await fetch('/admin/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          })
+
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json()
+            const newAccessToken = refreshData.access_token
+            localStorage.setItem('access_token', newAccessToken)
+            isRefreshing = false
+            onRefreshed(newAccessToken)
+          } else {
+            isRefreshing = false
+            localStorage.removeItem('access_token')
+            localStorage.removeItem('refresh_token')
+            window.location.href = '/admin/login'
+            throw new ApiError(401, { error: 'unauthorized' })
+          }
+        } catch (err) {
+          isRefreshing = false
+          localStorage.removeItem('access_token')
+          localStorage.removeItem('refresh_token')
+          window.location.href = '/admin/login'
+          throw err
+        }
+      }
+
+      return new Promise<T>((resolve, reject) => {
+        subscribeTokenRefresh((newToken) => {
+          const newHeaders = { ...headers, Authorization: `Bearer ${newToken}` }
+          performFetch(newHeaders)
+            .then(async (newRes) => {
+              const newData = await newRes.json()
+              if (!newRes.ok) {
+                reject(new ApiError(newRes.status, newData))
+              } else {
+                resolve(newData as T)
+              }
+            })
+            .catch(reject)
+        })
+      })
+    } else {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      window.location.href = '/admin/login'
+      throw new ApiError(401, { error: 'unauthorized' })
+    }
   }
 
   const data = await response.json()
@@ -265,6 +339,54 @@ export const api = {
   stats: {
     get() {
       return request<StatsResponse>('/stats')
+    },
+  },
+
+  // ─── Auth ───
+  auth: {
+    login(password: string) {
+      return request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login', {
+        method: 'POST',
+        body: { password },
+      })
+    },
+    refresh(refreshToken: string) {
+      return request<{ access_token: string; expires_in: number }>('/auth/refresh', {
+        method: 'POST',
+        body: { refresh_token: refreshToken },
+      })
+    },
+    logout(refreshToken?: string) {
+      return request<{ logged_out: boolean }>('/auth/logout', {
+        method: 'POST',
+        body: { refresh_token: refreshToken },
+      })
+    },
+  },
+
+  // ─── Security API Keys ───
+  apiKeys: {
+    list() {
+      return request<{ items: Array<{ key_id: string; name: string; created_at: string; last_used_at: string | null; status: string }> }>('/security/api-keys')
+    },
+    create(name: string, customKey?: string) {
+      return request<{ key_id: string; name: string; api_key: string; created_at: string; status: string }>('/security/api-keys', {
+        method: 'POST',
+        body: { name, custom_key: customKey },
+      })
+    },
+    delete(id: string) {
+      return request<{ deleted: boolean }>(`/security/api-keys/${id}`, { method: 'DELETE' })
+    },
+    usage(id: string) {
+      return request<{ connections: Array<{ client_ip: string; client_info: string; request_count: number; last_request_at: string }> }>(`/security/api-keys/${id}/usage`)
+    },
+  },
+
+  // ─── Connections ───
+  connections: {
+    list() {
+      return request<{ items: Array<{ key_id: string; key_name: string | null; client_ip: string; client_info: string | null; request_count: number; last_request_at: string }> }>('/security/connections')
     },
   },
 }

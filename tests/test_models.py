@@ -656,7 +656,8 @@ def test_schema_migrations_table_is_initialized(tmp_path) -> None:
         rows = connection.execute("SELECT version, name FROM schema_migrations ORDER BY version").fetchall()
 
     assert (rows[0]["version"], rows[0]["name"]) == (1, "initial_sqlite_memory_schema")
-    assert (rows[-1]["version"], rows[-1]["name"]) == (2, "webui_memory_lifecycle_and_audit")
+    assert (rows[1]["version"], rows[1]["name"]) == (2, "webui_memory_lifecycle_and_audit")
+    assert (rows[2]["version"], rows[2]["name"]) == (3, "webui_api_keys_and_connections")
 
 
 def test_integrity_audit_repairs_missing_fts_and_orphan_embeddings(tmp_path) -> None:
