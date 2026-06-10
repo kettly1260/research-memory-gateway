@@ -43,7 +43,7 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
   const matchRoute = useMatchRoute()
 
   return (
-    <header className="h-14 border-b bg-background/80 backdrop-blur-sm flex items-center justify-between px-4 md:px-6 shrink-0 sticky top-0 z-30">
+    <header className="h-16 border-b bg-background flex items-center justify-between px-4 md:px-6 shrink-0 sticky top-0 z-50 shadow-sm">
       <div className="flex items-center gap-4 flex-1">
         {/* Mobile menu button */}
         <Button
@@ -73,9 +73,9 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors',
+                  'flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200',
                   isActive
-                    ? 'bg-primary/10 text-primary font-medium'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                 )}
               >

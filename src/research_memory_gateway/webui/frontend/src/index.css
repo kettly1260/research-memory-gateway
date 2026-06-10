@@ -10,8 +10,8 @@
  */
 
 :root {
-  /* Core radius & spacing */
-  --radius: 0.625rem;
+  /* Core radius & spacing for M3 style */
+  --radius: 1rem;
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
 
   /* ── Light theme tokens ── */
