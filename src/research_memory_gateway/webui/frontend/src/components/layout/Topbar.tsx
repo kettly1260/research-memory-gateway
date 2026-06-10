@@ -1,4 +1,5 @@
-import { Search, Sun, Moon, Monitor, Menu, Palette } from 'lucide-react'
+import { Search, Sun, Moon, Monitor, Menu, Palette, Database, LayoutDashboard, Settings, Shield, Import, Download, History, LogOut } from 'lucide-react'
+import { Link, useMatchRoute } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -10,6 +11,18 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTranslation } from 'react-i18next'
 import { useThemeConfig } from '@/hooks/useTheme'
+import { cn } from '@/lib/utils'
+import { api } from '@/lib/api'
+
+export const navItems = [
+  { to: '/' as const, icon: LayoutDashboard, labelKey: 'nav.dashboard' },
+  { to: '/memories' as const, icon: Database, labelKey: 'nav.memories' },
+  { to: '/config' as const, icon: Settings, labelKey: 'nav.config' },
+  { to: '/security' as const, icon: Shield, labelKey: 'nav.security' },
+  { to: '/import' as const, icon: Import, labelKey: 'nav.import' },
+  { to: '/exports' as const, icon: Download, labelKey: 'nav.export' },
+  { to: '/audit' as const, icon: History, labelKey: 'nav.audit' },
+]
 
 interface TopbarProps {
   onMenuClick: () => void
@@ -27,20 +40,57 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
   }
 
 
+  const matchRoute = useMatchRoute()
+
   return (
     <header className="h-14 border-b bg-background/80 backdrop-blur-sm flex items-center justify-between px-4 md:px-6 shrink-0 sticky top-0 z-30">
-      {/* Mobile menu button */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="md:hidden mr-2"
-        onClick={onMenuClick}
-      >
-        <Menu className="h-5 w-5" />
-      </Button>
+      <div className="flex items-center gap-4 flex-1">
+        {/* Mobile menu button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="md:hidden"
+          onClick={onMenuClick}
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
 
-      {/* Search bar */}
-      <div className="flex items-center flex-1 max-w-md">
+        {/* Brand */}
+        <div className="hidden md:flex items-center gap-2 mr-4">
+          <Database className="w-5 h-5 text-primary shrink-0" />
+          <span className="font-semibold tracking-tight text-foreground whitespace-nowrap">
+            Memory Gateway
+          </span>
+        </div>
+
+        {/* Desktop Navigation */}
+        <nav className="hidden md:flex items-center gap-1">
+          {navItems.map((item) => {
+            const isActive = !!matchRoute({ to: item.to, fuzzy: item.to !== '/' })
+              || (item.to === '/' && !!matchRoute({ to: '/' }))
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={cn(
+                  'flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors',
+                  isActive
+                    ? 'bg-primary/10 text-primary font-medium'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                <item.icon className="w-4 h-4 shrink-0" />
+                <span>{t(item.labelKey)}</span>
+              </Link>
+            )
+          })}
+        </nav>
+      </div>
+
+      {/* Right side group: Search and actions */}
+      <div className="flex items-center gap-2">
+        {/* Search bar */}
+        <div className="flex items-center w-full max-w-xs md:max-w-md">
         <button
           onClick={onSearchClick}
           className="relative w-full group"
@@ -102,6 +152,25 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         >
           {i18n.language === 'zh-CN' ? 'EN' : '中'}
         </Button>
+
+        {/* Logout */}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            const refreshToken = localStorage.getItem('refresh_token') || undefined
+            api.auth.logout(refreshToken).finally(() => {
+              localStorage.removeItem('access_token')
+              localStorage.removeItem('refresh_token')
+              window.location.href = '/admin/login'
+            })
+          }}
+          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+          title={t('nav.logout') || 'Logout'}
+        >
+          <LogOut className="h-4 w-4" />
+        </Button>
+      </div>
       </div>
     </header>
   )

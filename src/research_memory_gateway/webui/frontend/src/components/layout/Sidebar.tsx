@@ -1,13 +1,7 @@
 import { Link, useMatchRoute } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
-  LayoutDashboard,
   Database,
-  Settings,
-  Shield,
-  Import,
-  Download,
-  History,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -21,15 +15,7 @@ interface SidebarProps {
   onToggle: () => void
 }
 
-const navItems = [
-  { to: '/' as const, icon: LayoutDashboard, labelKey: 'nav.dashboard' },
-  { to: '/memories' as const, icon: Database, labelKey: 'nav.memories' },
-  { to: '/config' as const, icon: Settings, labelKey: 'nav.config' },
-  { to: '/security' as const, icon: Shield, labelKey: 'nav.security' },
-  { to: '/import' as const, icon: Import, labelKey: 'nav.import' },
-  { to: '/exports' as const, icon: Download, labelKey: 'nav.export' },
-  { to: '/audit' as const, icon: History, labelKey: 'nav.audit' },
-]
+import { navItems } from './Topbar'
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { t } = useTranslation()
