@@ -1,0 +1,93 @@
+{
+  "common": {
+    "save": "保存",
+    "saving": "保存中...",
+    "cancel": "取消",
+    "confirm": "确定",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "loading": "加载中...",
+    "success": "成功",
+    "error": "错误",
+    "actions": "操作",
+    "status": "状态",
+    "search": "搜索...",
+    "all": "全部",
+    "filter": "筛选",
+    "refresh": "刷新",
+    "back": "返回",
+    "theme": "主题",
+    "no_results": "未找到结果"
+  },
+  "nav": {
+    "dashboard": "控制台",
+    "memories": "记忆管理",
+    "config": "参数配置",
+    "security": "安全与授权",
+    "import": "导入数据",
+    "export": "导出数据",
+    "audit": "审计日志",
+    "logout": "退出登录"
+  },
+  "dashboard": {
+    "title": "系统控制台",
+    "subtitle": "监控与管理您的知识记忆网关",
+    "stat_active_memories": "活跃记忆数",
+    "stat_archived_memories": "归档记忆数",
+    "stat_vector_coverage": "向量化覆盖率",
+    "stat_last_updated": "最后更新时间",
+    "chart_types": "记忆类别分布",
+    "chart_projects": "项目分布统计",
+    "chart_trends": "记忆增长趋势",
+    "quick_actions": "快捷操作",
+    "recent_edits": "最近活动"
+  },
+  "memories": {
+    "title": "知识记忆列表",
+    "new_memory": "新建记忆",
+    "col_title": "标题",
+    "col_project": "项目",
+    "col_topic": "主题",
+    "col_type": "类型",
+    "col_status": "状态",
+    "col_updated": "更新时间",
+    "filter_project": "项目筛选",
+    "filter_type": "类型筛选",
+    "filter_status": "状态筛选",
+    "bulk_archive": "批量归档",
+    "bulk_delete": "批量删除",
+    "detail_title": "记忆详情",
+    "claims": "断言列表",
+    "evidence": "证据 (JSON)"
+  },
+  "config": {
+    "title": "参数配置",
+    "tab_retrieval": "检索配置",
+    "tab_embedding": "Embedding 配置",
+    "tab_rerank": "Rerank 配置",
+    "tab_nocturne": "Nocturne 配置",
+    "test_connection": "测试连接",
+    "test_success": "连接成功",
+    "test_failed": "连接失败"
+  },
+  "security": {
+    "title": "安全与授权",
+    "tab_password": "修改密码",
+    "tab_apikeys": "API 密钥管理",
+    "tab_connections": "活跃客户端",
+    "apikey_name": "密钥名称",
+    "apikey_val": "密钥值",
+    "apikey_created": "创建时间",
+    "apikey_last_used": "最后使用",
+    "create_key": "创建新密钥"
+  },
+  "auth": {
+    "login": "登录",
+    "username": "用户名",
+    "password": "密码",
+    "welcome": "欢迎回来",
+    "description": "请输入管理员凭据以访问控制台",
+    "invalid_password": "密码错误"
+  }
+}

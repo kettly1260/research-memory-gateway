@@ -10,3 +10,5 @@ exports/
 config.yaml
 *.db
 *.db-*
+/node_modules/
+/package-lock.json

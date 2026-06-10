@@ -1,0 +1,93 @@
+{
+  "common": {
+    "save": "Save",
+    "saving": "Saving...",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "loading": "Loading...",
+    "success": "Success",
+    "error": "Error",
+    "actions": "Actions",
+    "status": "Status",
+    "search": "Search...",
+    "all": "All",
+    "filter": "Filter",
+    "refresh": "Refresh",
+    "back": "Back",
+    "theme": "Theme",
+    "no_results": "No results found."
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "memories": "Memories",
+    "config": "Configuration",
+    "security": "Security",
+    "import": "Import",
+    "export": "Export",
+    "audit": "Audit Log",
+    "logout": "Logout"
+  },
+  "dashboard": {
+    "title": "System Dashboard",
+    "subtitle": "Monitor and manage your knowledge memory gateway",
+    "stat_active_memories": "Active Memories",
+    "stat_archived_memories": "Archived Memories",
+    "stat_vector_coverage": "Vector Coverage",
+    "stat_last_updated": "Last Updated",
+    "chart_types": "Memory Types Distribution",
+    "chart_projects": "Projects Distribution",
+    "chart_trends": "Memory Growth Trend",
+    "quick_actions": "Quick Actions",
+    "recent_edits": "Recent Activity"
+  },
+  "memories": {
+    "title": "Knowledge Memories",
+    "new_memory": "New Memory",
+    "col_title": "Title",
+    "col_project": "Project",
+    "col_topic": "Topic",
+    "col_type": "Type",
+    "col_status": "Status",
+    "col_updated": "Updated",
+    "filter_project": "Filter by Project",
+    "filter_type": "Filter by Type",
+    "filter_status": "Filter by Status",
+    "bulk_archive": "Bulk Archive",
+    "bulk_delete": "Bulk Delete",
+    "detail_title": "Memory Details",
+    "claims": "Claims",
+    "evidence": "Evidence (JSON)"
+  },
+  "config": {
+    "title": "Configuration",
+    "tab_retrieval": "Retrieval",
+    "tab_embedding": "Embedding",
+    "tab_rerank": "Rerank",
+    "tab_nocturne": "Nocturne",
+    "test_connection": "Test Connection",
+    "test_success": "Connected successfully",
+    "test_failed": "Connection failed"
+  },
+  "security": {
+    "title": "Security & Auth",
+    "tab_password": "Change Password",
+    "tab_apikeys": "API Keys",
+    "tab_connections": "Active Clients",
+    "apikey_name": "Key Name",
+    "apikey_val": "Key Value",
+    "apikey_created": "Created At",
+    "apikey_last_used": "Last Used",
+    "create_key": "Create New Key"
+  },
+  "auth": {
+    "login": "Login",
+    "username": "Username",
+    "password": "Password",
+    "welcome": "Welcome back",
+    "description": "Enter your administrator credentials to access the console",
+    "invalid_password": "Invalid password"
+  }
+}

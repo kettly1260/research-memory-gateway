@@ -95,6 +95,8 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/import/json/validate", api_import_validate, methods=["POST"]),
         Route("/admin/api/import/json/execute", api_import_execute, methods=["POST"]),
         Route("/admin/api/export", api_export, methods=["POST"]),
+        Route("/admin/api/audit", api_audit_events, methods=["GET"]),
+        Route("/admin/api/stats", api_stats, methods=["GET"]),
         Mount("/admin/static", StaticFiles(directory=Path(__file__).parent / "static"), name="admin-static"),
     ]
     app = Starlette(routes=routes)
@@ -746,6 +748,46 @@ async def api_export(request: Request) -> Response:
     )
     request.app.state.webui.service.append_audit_event("export.created", metadata={"format": payload.get("format", "both"), "count": result["count"]})
     return JSONResponse(result)
+
+
+async def api_audit_events(request: Request) -> Response:
+    events = request.app.state.webui.service.list_audit_events()
+    limit = int(request.query_params.get("limit", "100"))
+    offset = int(request.query_params.get("offset", "0"))
+    event_type = request.query_params.get("event_type")
+    if event_type:
+        events = [e for e in events if e.get("event_type") == event_type]
+    total = len(events)
+    events = events[offset:offset + limit]
+    return JSONResponse({"items": events, "total": total, "limit": limit, "offset": offset})
+
+
+async def api_stats(request: Request) -> Response:
+    state = request.app.state.webui
+    all_memories = state.service.backend.list_all(statuses=[s.value for s in MemoryStatus])
+    active = [m for m in all_memories if m.memory_status == MemoryStatus.active]
+    archived = [m for m in all_memories if m.memory_status == MemoryStatus.archived]
+    existing_embeddings = state.backfills._existing_embeddings()
+
+    type_counts: dict[str, int] = {}
+    for m in all_memories:
+        t = m.memory_type.value
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    project_counts: dict[str, int] = {}
+    for m in all_memories:
+        project_counts[m.project] = project_counts.get(m.project, 0) + 1
+
+    return JSONResponse({
+        "total": len(all_memories),
+        "active": len(active),
+        "archived": len(archived),
+        "deleted": len(all_memories) - len(active) - len(archived),
+        "embedded": len(existing_embeddings),
+        "vector_coverage": round(len(existing_embeddings) / max(len(all_memories), 1) * 100, 1),
+        "type_distribution": type_counts,
+        "project_distribution": project_counts,
+    })
 
 
 async def _memory_list(request: Request) -> list[ResearchMemory]:
