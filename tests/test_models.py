@@ -817,19 +817,24 @@ def make_webui_client(tmp_path, monkeypatch):
 
 
 def login_webui(client: TestClient) -> str:
-    response = client.post("/admin/login", data={"password": "admin-pass"}, follow_redirects=False)
-    assert response.status_code == 303
-    dashboard = client.get("/admin")
-    assert dashboard.status_code == 200
-    import re
-
-    token = re.search(r'name="csrf-token" content="([^"]+)"', dashboard.text).group(1)
-    return token
+    response = client.post("/admin/api/auth/login", json={"password": "admin-pass"})
+    assert response.status_code == 200
+    data = response.json()
+    token = data["access_token"]
+    
+    import base64
+    import json
+    payload_b64 = token.split(".")[1]
+    payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+    
+    return payload["csrf"]
 
 
 def test_webui_login_session_csrf_and_memory_api(tmp_path, monkeypatch) -> None:
     client, _app = make_webui_client(tmp_path, monkeypatch)
-    assert client.get("/admin", follow_redirects=False).status_code == 303
+    # The SPA doesn't redirect unauthenticated /admin to /admin/login anymore
+    # because routing is handled client-side. The API returns 401.
     token = login_webui(client)
     no_csrf = client.post("/admin/api/memories", json={})
     assert no_csrf.status_code == 403

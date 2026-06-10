@@ -97,21 +97,6 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
     state = WebState(config, service, auth_store, secret_store, web_config_store, resolver, sessions, backfills)
 
     routes = [
-        Route("/admin/login", login_get, methods=["GET"]),
-        Route("/admin/login", login_post, methods=["POST"]),
-        Route("/admin/logout", logout_post, methods=["POST"]),
-        Route("/admin", dashboard, methods=["GET"]),
-        Route("/admin/", dashboard, methods=["GET"]),
-        Route("/admin/memories", memories_page, methods=["GET"]),
-        Route("/admin/memories/new", memory_new_page, methods=["GET"]),
-        Route("/admin/memories/{memory_id:str}", memory_detail_page, methods=["GET"]),
-        Route("/admin/config", config_page, methods=["GET"]),
-        Route("/admin/config/retrieval", config_page, methods=["GET"]),
-        Route("/admin/config/nocturne", nocturne_page, methods=["GET"]),
-        Route("/admin/security", security_page, methods=["GET"]),
-        Route("/admin/audit", audit_page, methods=["GET"]),
-        Route("/admin/import", import_page, methods=["GET"]),
-        Route("/admin/exports", exports_page, methods=["GET"]),
         Route("/admin/api/memories", api_memories, methods=["GET", "POST"]),
         Route("/admin/api/memories/overlap-check", api_overlap, methods=["POST"]),
         Route("/admin/api/memories/diff", api_diff, methods=["POST"]),
@@ -147,7 +132,10 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/security/api-keys/{key_id:str}", api_delete_key, methods=["DELETE"]),
         Route("/admin/api/security/api-keys/{key_id:str}/usage", api_key_usage, methods=["GET"]),
         Route("/admin/api/security/connections", api_list_connections, methods=["GET"]),
-        Mount("/admin/static", StaticFiles(directory=Path(__file__).parent / "static"), name="admin-static"),
+        Mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "dist" / "assets"), name="admin-assets"),
+        Route("/admin/favicon.svg", serve_favicon, methods=["GET"]),
+        Route("/admin/{path:path}", serve_spa, methods=["GET"]),
+        Route("/admin", serve_spa, methods=["GET"]),
     ]
     app = Starlette(routes=routes)
     app.state.webui = state
@@ -433,150 +421,18 @@ class BackfillJobManager:
             return {row["memory_id"] for row in connection.execute("SELECT memory_id FROM memory_embeddings").fetchall()}
 
 
-async def login_get(request: Request) -> Response:
-    return HTMLResponse(_login_html(error=""))
+async def serve_spa(request: Request) -> Response:
+    index_path = Path(__file__).parent / "static" / "dist" / "index.html"
+    if index_path.exists():
+        return HTMLResponse(index_path.read_text("utf-8"))
+    return HTMLResponse("<h1>WebUI build not found</h1><p>Please run 'npm run build' in frontend directory.</p>", status_code=404)
 
 
-async def login_post(request: Request) -> Response:
-    state: WebState = request.app.state.webui
-    form = await _form(request)
-    password = form.get("password", "")
-    if not state.auth_store.verify(password, state.config.webui):
-        return HTMLResponse(_login_html(error="密码错误"), status_code=401)
-    session = state.sessions.create()
-    response = RedirectResponse("/admin", status_code=303)
-    response.set_cookie(
-        "webui_session",
-        session["cookie"],
-        httponly=True,
-        samesite="lax",
-        max_age=state.config.webui.session_max_age_seconds,
-    )
-    return response
-
-
-async def logout_post(request: Request) -> Response:
-    response = RedirectResponse("/admin/login", status_code=303)
-    response.delete_cookie("webui_session")
-    return response
-
-
-async def dashboard(request: Request) -> Response:
-    state = request.app.state.webui
-    memories = state.service.backend.list_all(statuses=[MemoryStatus.active.value])
-    body = f"""
-    <section class="hero card"><h1>研究记忆管理台</h1><p>单管理员私有控制台。WebUI 用于管理和配置，MCP 仍是正式客户端接口。</p></section>
-    <section class="grid two"><div class="card"><h2>活跃记忆</h2><p class="metric">{len(memories)}</p></div><div class="card"><h2>检索模式</h2><p>{_esc(state.resolver.effective()['retrieval']['mode']['value'])}</p></div></section>
-    """
-    return _page(request, "控制台", body)
-
-
-async def memories_page(request: Request) -> Response:
-    data = await _memory_list(request)
-    rows = "".join(
-        f"<tr><td><a href='/admin/memories/{m.memory_id}'>{_esc(m.title)}</a></td><td>{_esc(m.project)}</td><td>{_esc(m.topic)}</td><td><span class='chip'>{m.memory_type.value}</span></td><td><span class='chip status-{m.memory_status.value}'>{m.memory_status.value}</span></td></tr>"
-        for m in data
-    )
-    cards = "".join(
-        f"<article class='memory-card card'><a href='/admin/memories/{m.memory_id}'><h2>{_esc(m.title)}</h2></a><p>{_esc(m.summary[:160])}</p><span class='chip'>{m.memory_status.value}</span></article>"
-        for m in data
-    )
-    body = f"""
-    <div class="toolbar"><h1>记忆</h1><a class="button" href="/admin/memories/new">新建记忆</a></div>
-    <form class="filters" method="get"><input name="query" placeholder="搜索" value="{_esc(request.query_params.get('query',''))}"><select name="status"><option>active</option><option>archived</option><option>deleted</option><option>all</option></select><button>筛选</button></form>
-    <table class="data-table"><thead><tr><th>标题</th><th>项目</th><th>主题</th><th>类型</th><th>状态</th></tr></thead><tbody>{rows}</tbody></table>
-    <div class="mobile-list">{cards}</div>
-    """
-    return _page(request, "记忆", body)
-
-
-async def memory_new_page(request: Request) -> Response:
-    csrf = request.app.state.webui.sessions.csrf(request)
-    body = f"""
-    <h1>新建记忆</h1>
-    <form class="card form-grid" data-json-form method="post" action="/admin/api/memories" data-success="/admin/memories">
-      <input type="hidden" name="confirmed" value="true"><input type="hidden" name="csrf_token" value="{csrf}">
-      <label>项目<input name="project" required></label><label>主题<input name="topic" required></label>
-      <label>记忆类型<select name="memory_type">{_memory_type_options()}</select></label><label>标题<input name="title" required></label>
-      <label class="span-all">摘要<textarea name="summary" required></textarea></label>
-      <label>标签，逗号分隔<input name="tags" data-list></label>
-      <button>校验重叠并保存</button><output data-form-output></output>
-    </form>
-    <section class="card"><h2>高级 JSON</h2><textarea class="json-editor" data-memory-json placeholder='{{"project":"demo","topic":"..."}}'></textarea></section>
-    """
-    return _page(request, "新建记忆", body)
-
-
-async def memory_detail_page(request: Request) -> Response:
-    state = request.app.state.webui
-    memory = state.service.get_research_memory(request.path_params["memory_id"])
-    danger = ""
-    if memory.memory_status == MemoryStatus.deleted:
-        danger = f"""<section class='danger-zone'><h2>危险区域</h2><p>硬删除需要完整 memory_id、当前密码和原因。该操作不会清理备份、导出文件或 Nocturne。</p><form data-json-form method='delete' action='/admin/api/memories/{memory.memory_id}/hard-delete'><input name='confirm_memory_id' placeholder='输入 {memory.memory_id}'><input type='password' name='current_password' placeholder='当前密码'><input name='reason' placeholder='原因'><button>硬删除</button><output data-form-output></output></form></section>"""
-    evidence_json = json.dumps([e.model_dump(mode="json") for e in memory.evidence], ensure_ascii=False, indent=2)
-    edit_json = _esc(json.dumps(memory.model_dump(mode="json"), ensure_ascii=False, indent=2))
-    body = f"""
-    <article class="card detail"><h1>{_esc(memory.title)}</h1><p>{_esc(memory.summary)}</p><p><span class='chip status-{memory.memory_status.value}'>{memory.memory_status.value}</span><span class='chip'>{memory.memory_type.value}</span></p>
-    <dl><dt>项目</dt><dd>{_esc(memory.project)}</dd><dt>主题</dt><dd>{_esc(memory.topic)}</dd><dt>创建时间</dt><dd>{_esc(memory.created_at)}</dd><dt>更新时间</dt><dd>{_esc(memory.updated_at)}</dd></dl>
-    <h2>主张</h2><ul>{''.join(f'<li>{_esc(c.claim)} <span class="chip">{c.verification_status.value}</span></li>' for c in memory.claims)}</ul>
-    <h2>证据</h2><pre>{_esc(evidence_json)}</pre></article>
-    <section class="card"><h2>编辑</h2><form data-json-form method="patch" action="/admin/api/memories/{memory.memory_id}"><label class="span-all">记忆 JSON<textarea name="__json" class="json-editor">{edit_json}</textarea></label><button>预览差异并保存</button><output data-form-output></output></form></section>
-    <section class="card"><h2>状态操作</h2><div class="actions"><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/archive"><input name="reason" placeholder="原因"><button>归档</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/soft-delete"><input name="reason" placeholder="原因"><button>软删除</button></form><form data-json-form method="post" action="/admin/api/memories/{memory.memory_id}/restore"><input name="reason" placeholder="原因"><button>恢复</button></form></div></section>{danger}
-    """
-    return _page(request, memory.title, body)
-
-
-async def config_page(request: Request) -> Response:
-    effective = _redact_effective(request.app.state.webui.resolver.effective())
-    embedding = effective["embedding"]
-    rerank = effective["rerank"]
-    body = f"""
-    <h1>配置</h1><section class='card'><p>运行时配置会热重载。环境变量优先级高于 WebUI 保存值。</p><pre>{_esc(json.dumps(effective, indent=2, ensure_ascii=False))}</pre></section>
-    <form class="card form-grid" data-json-form method="patch" action="/admin/api/config/web-config">
-      <label>检索模式<select name="retrieval.mode">{_selected_options(["keyword", "hybrid"], effective["retrieval"]["mode"]["value"])}</select></label>
-      <label>启用 Embedding<select name="embedding.enabled" data-bool>{_selected_options(["false", "true"], str(embedding["enabled"]["value"]).lower())}</select></label>
-      <label>Embedding Base URL<input name="embedding.base_url" value="{_esc(embedding['base_url']['value'] or '')}"></label>
-      <label>Embedding 模型<input name="embedding.model" list="embedding-models" value="{_esc(embedding['model']['value'] or '')}"><datalist id="embedding-models"></datalist><button type="button" class="ghost" data-model-picker data-model-provider="embedding">获取模型列表</button><small data-model-status="embedding"></small></label>
-      <label>Embedding 接口路径<input name="embedding.endpoint_path" value="{_esc(embedding['endpoint_path']['value'] or '/embeddings')}"></label><label>Embedding 超时秒数<input name="embedding.timeout_seconds" type="number" value="{_esc(embedding['timeout_seconds']['value'] or 30)}"></label>
-      <label>Embedding 重试次数<input name="embedding.max_retries" type="number" value="{_esc(embedding['max_retries']['value'] or 1)}"></label>
-      <label>启用 Rerank<select name="rerank.enabled" data-bool>{_selected_options(["false", "true"], str(rerank["enabled"]["value"]).lower())}</select></label>
-      <label>Rerank Base URL<input name="rerank.base_url" value="{_esc(rerank['base_url']['value'] or '')}"></label>
-      <label>Rerank 模型<input name="rerank.model" list="rerank-models" value="{_esc(rerank['model']['value'] or '')}"><datalist id="rerank-models"></datalist><button type="button" class="ghost" data-model-picker data-model-provider="rerank">获取模型列表</button><small data-model-status="rerank"></small></label>
-      <label>Rerank 接口路径<input name="rerank.endpoint_path" value="{_esc(rerank['endpoint_path']['value'] or '/rerank')}"></label><label>Rerank 超时秒数<input name="rerank.timeout_seconds" type="number" value="{_esc(rerank['timeout_seconds']['value'] or 30)}"></label>
-      <label>Rerank 重试次数<input name="rerank.max_retries" type="number" value="{_esc(rerank['max_retries']['value'] or 1)}"></label>
-      <button>保存运行时配置</button><output data-form-output></output>
-    </form>
-    <form class="card form-grid" data-secret-form method="patch" action="/admin/api/config/secrets"><label>Embedding API Key<input type="password" name="embedding.api_key" autocomplete="off"></label><label>Rerank API Key<input type="password" name="rerank.api_key" autocomplete="off"></label><button>保存加密密钥</button><output data-form-output></output></form>
-    """
-    return _page(request, "配置", body)
-
-
-async def nocturne_page(request: Request) -> Response:
-    body = """<h1>Nocturne</h1><section class='card'><p>Nocturne v1 当前保留为测试配置：仅支持配置、令牌存储、状态和能力探测。同步、导入和写入 API 返回 not_implemented。</p></section><form class='card form-grid' data-json-form method='patch' action='/admin/api/config/web-config'><label>传输方式<select name='nocturne.transport'><option>unknown</option><option>rest</option><option>sse</option><option>streamable_http</option><option>stdio</option></select></label><label>URL<input name='nocturne.url'></label><button>保存 Nocturne 配置</button><output data-form-output></output></form><form class='card form-grid' data-secret-form method='patch' action='/admin/api/config/secrets'><label>令牌<input type='password' name='nocturne.token' autocomplete='off'></label><button>保存加密令牌</button><output data-form-output></output></form>"""
-    return _page(request, "Nocturne", body)
-
-
-async def security_page(request: Request) -> Response:
-    csrf = request.app.state.webui.sessions.csrf(request)
-    body = f"""
-    <h1>安全</h1><section class="card"><form method="post" action="/admin/api/security/password?csrf_token={csrf}"><input name="current_password" type="password" placeholder="当前密码"><input name="new_password" type="password" placeholder="新密码"><button>修改密码</button></form></section>
-    """
-    return _page(request, "安全", body)
-
-
-async def audit_page(request: Request) -> Response:
-    events = request.app.state.webui.service.list_audit_events()
-    return _page(request, "审计", f"<h1>审计</h1><pre>{_esc(json.dumps(events, indent=2, ensure_ascii=False))}</pre>")
-
-
-async def import_page(request: Request) -> Response:
-    body = """<h1>导入</h1><section class='card'><p>JSON 记忆导入支持 validate、skip_existing、overwrite_existing 和 import_as_new。Markdown 导入计划用于向量索引和 AI JSON 生成。</p></section><form class='card form-grid' data-json-import><label class='span-all'>JSON 导出内容<textarea name='memories' class='json-editor' placeholder='[{"project":"demo",...}]'></textarea></label><label>策略<select name='policy'><option>skip_existing</option><option>overwrite_existing</option><option>import_as_new</option></select></label><label>已确认<select name='confirmed' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button formaction='/admin/api/import/json/validate'>校验</button><button formaction='/admin/api/import/json/execute'>执行</button><output data-form-output></output></form>"""
-    return _page(request, "导入", body)
-
-
-async def exports_page(request: Request) -> Response:
-    body = """<h1>导出</h1><section class='card'><p>导出 Markdown、JSON 或两者。默认只导出活跃记忆；归档和删除记忆需要显式包含。</p></section><form class='card form-grid' data-json-form method='post' action='/admin/api/export'><label>格式<select name='format'><option>both</option><option>json</option><option>markdown</option></select></label><label>包含归档<select name='include_archived' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><label>包含删除<select name='include_deleted' data-bool><option value='false'>false</option><option value='true'>true</option></select></label><button>创建导出</button><output data-form-output></output></form>"""
-    return _page(request, "导出", body)
+async def serve_favicon(request: Request) -> Response:
+    favicon_path = Path(__file__).parent / "static" / "dist" / "favicon.svg"
+    if favicon_path.exists():
+        return Response(favicon_path.read_bytes(), media_type="image/svg+xml")
+    return Response(status_code=404)
 
 
 async def api_memories(request: Request) -> Response:
@@ -889,14 +745,7 @@ async def _memory_list(request: Request) -> list[ResearchMemory]:
     return memories
 
 
-def _page(request: Request, title: str, body: str) -> HTMLResponse:
-    csrf = request.app.state.webui.sessions.csrf(request)
-    html = f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{csrf}"><title>{_esc(title)}</title><link rel="stylesheet" href="/admin/static/css/app.css"><script defer src="/admin/static/js/htmx.min.js"></script><script defer src="/admin/static/js/alpine.min.js"></script><script defer src="/admin/static/js/admin.js"></script></head><body><div class="bg"></div><div class="shell"><aside class="sidebar"><a class="brand" href="/admin">研究记忆</a><nav><a href="/admin/memories">记忆</a><a href="/admin/config">配置</a><a href="/admin/import">导入</a><a href="/admin/exports">导出</a><a href="/admin/audit">审计</a><a href="/admin/security">安全</a></nav><form method="post" action="/admin/logout?csrf_token={csrf}"><button class="ghost">退出</button></form></aside><main class="content"><header class="topbar"><span>{_esc(title)}</span><button class="ghost" data-theme-toggle>主题</button></header>{body}</main></div></body></html>"""
-    return HTMLResponse(html)
 
-
-def _login_html(error: str) -> str:
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="/admin/static/css/app.css"><title>登录</title></head><body class="login"><form class="login-card" method="post"><h1>管理员登录</h1><p class="error">{_esc(error)}</p><input type="password" name="password" required placeholder="密码"><button>登录</button></form></body></html>"""
 
 
 def _status_filter(status: str) -> list[str]:
@@ -913,16 +762,7 @@ def _scope_to_statuses(scope: str) -> list[str]:
     return [MemoryStatus.active.value]
 
 
-def _memory_type_options() -> str:
-    return "".join(f"<option value='{item.value}'>{item.value}</option>" for item in MemoryType)
 
-
-def _selected_options(values: list[str], selected: Any) -> str:
-    selected_value = str(selected)
-    return "".join(
-        f"<option value='{_esc(value)}'{' selected' if value == selected_value else ''}>{_esc(value)}</option>"
-        for value in values
-    )
 
 
 def _validate_backfill(payload: dict[str, Any]) -> dict[str, Any]:
