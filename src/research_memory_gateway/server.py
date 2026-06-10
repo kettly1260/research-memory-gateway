@@ -4,10 +4,13 @@ import argparse
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
 from starlette.responses import Response
+from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
 
@@ -247,10 +250,71 @@ def build_mcp(config: AppConfig) -> FastMCP:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Research Memory Gateway MCP server")
     parser.add_argument("--config", default="config.yaml", help="Path to config YAML")
-    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http", "both"],
+        default="stdio",
+        help=(
+            "MCP transport. 'streamable-http' serves POST /mcp (recommended for "
+            "Codex / Antigravity). 'sse' serves legacy GET /sse + POST /messages/. "
+            "'both' mounts both transports on the same port."
+        ),
+    )
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     return parser.parse_args()
+
+
+def _build_streamable_http_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+    """Build a Starlette app serving only Streamable HTTP at /mcp."""
+    app = mcp.streamable_http_app()
+    if auth_token:
+        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    return app
+
+
+def _build_sse_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+    """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
+    app = mcp.sse_app()
+    if auth_token:
+        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    return app
+
+
+def _build_combined_app(mcp: FastMCP, auth_token: str | None) -> Starlette:
+    """Build a Starlette app serving both Streamable HTTP (/mcp) and legacy SSE (/sse).
+
+    We mount both transports on the same port so that:
+      - Codex / Antigravity ``type = "remote"`` + ``url = ".../mcp"`` works.
+      - Legacy SSE clients (``GET /sse``, ``POST /messages/``) still work.
+    """
+    # Get the two sub-apps. Both share the same underlying mcp._mcp_server.
+    shttp_app = mcp.streamable_http_app()
+    sse_app = mcp.sse_app()
+
+    # Extract the session_manager lifespan from the streamable HTTP app.
+    shttp_lifespan = shttp_app.router.lifespan_context
+
+    @asynccontextmanager
+    async def combined_lifespan(app: Starlette):
+        async with shttp_lifespan(app):
+            yield
+
+    # Collect routes from both apps.
+    # Streamable HTTP: Route("/mcp", ...)
+    # SSE: Route("/sse", GET), Mount("/messages/", POST)
+    combined_routes: list[Route | Mount] = []
+    combined_routes.extend(shttp_app.routes)  # /mcp
+    combined_routes.extend(sse_app.routes)     # /sse + /messages/
+
+    app = Starlette(
+        debug=mcp.settings.debug,
+        routes=combined_routes,
+        lifespan=combined_lifespan,
+    )
+    if auth_token:
+        app.add_middleware(BearerAuthMiddleware, token=auth_token)
+    return app
 
 
 def main() -> None:
@@ -262,28 +326,37 @@ def main() -> None:
         config.server.port = args.port
 
     auth_token = os.getenv(config.server.auth_token_env)
-    if args.transport == "sse" and not auth_token:
-        # FastMCP itself does not enforce bearer auth here. Keep the deployment default explicit.
+    transport = args.transport
+
+    if transport != "stdio" and not auth_token:
         print(
             f"Warning: {config.server.auth_token_env} is not set. "
             "Put this behind Tailscale/WireGuard or an authenticated reverse proxy."
         )
 
     mcp = build_mcp(config)
-    if args.transport == "stdio":
+
+    if transport == "stdio":
         mcp.run(transport="stdio")
-    elif auth_token:
-        app = mcp.sse_app()
-        app.add_middleware(BearerAuthMiddleware, token=auth_token)
-        _run_http_apps(config, app)
+        return
+
+    # Build the appropriate ASGI app based on transport choice.
+    if transport == "streamable-http":
+        app = _build_streamable_http_app(mcp, auth_token)
+    elif transport == "sse":
+        app = _build_sse_app(mcp, auth_token)
+    elif transport == "both":
+        app = _build_combined_app(mcp, auth_token)
     else:
-        mcp.settings.host = config.server.host
-        mcp.settings.port = config.server.port
-        if config.webui.enabled:
-            app = mcp.sse_app()
-            _run_http_apps(config, app)
-        else:
-            mcp.run(transport="sse")
+        raise ValueError(f"Unknown transport: {transport}")
+
+    logger.info(
+        "Starting Research Memory Gateway transport=%s host=%s port=%s",
+        transport,
+        config.server.host,
+        config.server.port,
+    )
+    _run_http_apps(config, app)
 
 
 def _run_http_apps(config: AppConfig, mcp_app: Any) -> None:
