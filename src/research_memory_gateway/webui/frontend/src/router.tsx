@@ -1,15 +1,27 @@
+import { lazy, Suspense, type ComponentType } from 'react'
 import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router'
 import { AppShell } from './components/layout/AppShell'
-import { Dashboard } from './pages/Dashboard'
-import { Memories } from './pages/Memories'
-import { MemoryDetail } from './pages/MemoryDetail'
-import { MemoryNew } from './pages/MemoryNew'
-import { Login } from './pages/Login'
-import { Config } from './pages/Config'
-import { Security } from './pages/Security'
-import { ImportPage } from './pages/Import'
-import { ExportsPage } from './pages/Export'
-import { Audit } from './pages/Audit'
+
+const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })))
+const Memories = lazy(() => import('./pages/Memories').then((module) => ({ default: module.Memories })))
+const MemoryDetail = lazy(() => import('./pages/MemoryDetail').then((module) => ({ default: module.MemoryDetail })))
+const MemoryNew = lazy(() => import('./pages/MemoryNew').then((module) => ({ default: module.MemoryNew })))
+const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })))
+const Config = lazy(() => import('./pages/Config').then((module) => ({ default: module.Config })))
+const Security = lazy(() => import('./pages/Security').then((module) => ({ default: module.Security })))
+const ImportPage = lazy(() => import('./pages/Import').then((module) => ({ default: module.ImportPage })))
+const ExportsPage = lazy(() => import('./pages/Export').then((module) => ({ default: module.ExportsPage })))
+const Audit = lazy(() => import('./pages/Audit').then((module) => ({ default: module.Audit })))
+
+function lazyRoute(Component: ComponentType) {
+  return function LazyRouteComponent() {
+    return (
+      <Suspense fallback={<div className="p-6 md:p-8 animate-fade-in text-sm text-muted-foreground">Loading...</div>}>
+        <Component />
+      </Suspense>
+    )
+  }
+}
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
@@ -24,61 +36,61 @@ const authRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/',
-  component: Dashboard,
+  component: lazyRoute(Dashboard),
 })
 
 const memoriesRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/memories',
-  component: Memories,
+  component: lazyRoute(Memories),
 })
 
 const memoryNewRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/memories/new',
-  component: MemoryNew,
+  component: lazyRoute(MemoryNew),
 })
 
 const memoryDetailRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/memories/$id',
-  component: MemoryDetail,
+  component: lazyRoute(MemoryDetail),
 })
 
 const configRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/config',
-  component: Config,
+  component: lazyRoute(Config),
 })
 
 const securityRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/security',
-  component: Security,
+  component: lazyRoute(Security),
 })
 
 const importRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/import',
-  component: ImportPage,
+  component: lazyRoute(ImportPage),
 })
 
 const exportsRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/exports',
-  component: ExportsPage,
+  component: lazyRoute(ExportsPage),
 })
 
 const auditRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/audit',
-  component: Audit,
+  component: lazyRoute(Audit),
 })
 
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
-  component: Login,
+  component: lazyRoute(Login),
 })
 
 const routeTree = rootRoute.addChildren([

@@ -9,6 +9,17 @@ export default defineConfig({
   build: {
     outDir: '../static/dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return
+
+          if (id.includes('/react/') || id.includes('/react-dom/')) return 'react'
+          if (id.includes('/@tanstack/')) return 'tanstack'
+          if (id.includes('/@base-ui/') || id.includes('/cmdk/') || id.includes('/lucide-react/') || id.includes('/sonner/')) return 'ui'
+        },
+      },
+    },
   },
   server: {
     proxy: {
