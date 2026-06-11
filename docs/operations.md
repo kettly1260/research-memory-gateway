@@ -5,7 +5,8 @@
 1. Copy `config.example.yaml` to `config.yaml`.
 2. Keep the default `backend.type: sqlite` and `retrieval.mode: keyword` for first launch.
 3. Start locally with `research-memory-gateway --config config.yaml --transport stdio` or on NAS with `--transport streamable-http --host 0.0.0.0 --port 8787`.
-4. Add `prompts/research-memory-system-prompt.md` to each AI client so save behavior is consistent.
+4. Add `prompts/research-memory-system-prompt.md` or install `skills/research-memory-gateway/SKILL.md` in each AI client/agent so save behavior is consistent.
+5. Treat this prompt/skill as the cross-agent policy: client-local memory features do not automatically write to the gateway, so each agent must proactively call `propose_save` and ask for confirmation when durable knowledge is produced.
 
 ## Client Matrix
 
@@ -13,11 +14,24 @@
 |---|---|---|---|
 | Kilo | Streamable HTTP `/mcp` when available, otherwise SSE or stdio | `.kilo/` or global Kilo MCP config | Use the bundled skill in `skills/research-memory-gateway/SKILL.md`. |
 | Cherry Studio | Remote MCP `/mcp` or legacy SSE `/sse` if supported, otherwise local command | Cherry Studio MCP settings | Embedding/rerank variables belong on the server, not in Cherry. |
-| Codex | Remote Streamable HTTP `/mcp`, otherwise local stdio | Codex MCP settings | Reuse the same system prompt to avoid inconsistent save proposals. |
+| Codex | Remote Streamable HTTP `/mcp`, otherwise local stdio | Codex MCP settings | Reuse the same system prompt or inject the bundled skill text; Codex local memory is not a gateway backend. |
 | Generic local MCP | stdio | client-specific JSON | Command: `research-memory-gateway --config <path> --transport stdio`. |
 | NAS remote MCP | Streamable HTTP | client-specific remote MCP URL | URL: `http://<nas-ip>:8787/mcp`; set `RESEARCH_MEMORY_TOKEN` for exposed deployments. |
 
 Security rule: when `RESEARCH_MEMORY_TOKEN` is unset, HTTP/SSE loopback requests from `127.0.0.1` or `::1` are allowed for local development. Non-loopback requests must use a configured master token or an active WebUI-created API key.
+
+## Updating From GitHub
+
+The repository tracks the MCP source, `prompts/`, and `skills/`, so `git pull` retrieves new gateway code and client policy assets. Copied client assets do not update themselves; after pulling, sync them into client config directories:
+
+```powershell
+cd G:\LLM\memory
+git pull
+python -m pip install -e .
+.\scripts\sync-client-assets.ps1
+```
+
+Use `-PromptTargetDir <dir>` for clients that store a copied system prompt outside the repository. Restart the gateway process and any AI client that had already loaded the old skill or prompt. For Docker deployments, rebuild or pull the latest image and restart the container.
 
 ## Retrieval Modes
 
@@ -135,7 +149,7 @@ Visual smoke breakpoints and page checklist are in `docs/webui-visual-smoke.md`.
 
 ## When Not To Save Long-Term Memory
 
-Do not save transient conversation phrasing, temporary debugging logs, private credentials, raw unpublished data without explicit consent, or claims that cannot be represented as `claims` plus evidence status. Save durable decisions, literature findings, experimental routes, mechanism hypotheses, and reusable project context.
+Do not save transient conversation phrasing, temporary debugging logs, private credentials, raw unpublished data without explicit consent, or claims that cannot be represented as `claims` plus evidence status. Save durable decisions, literature findings, experimental routes, mechanism hypotheses, reusable project context, and reusable agent/MCP/deployment configuration lessons.
 
 ## Unpublished Research Safety
 

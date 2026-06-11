@@ -12,6 +12,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY prompts ./prompts
+COPY skills ./skills
 
 # Copy built frontend assets to the correct static folder
 COPY --from=frontend-builder /app/static/dist ./src/research_memory_gateway/webui/static/dist

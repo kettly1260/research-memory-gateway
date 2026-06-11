@@ -25,7 +25,9 @@ function applyHueToDocument(hue: number, isDark: boolean) {
     // Light theme
     root.style.setProperty('--background', `hsl(${hue} 30% 98%)`)
     root.style.setProperty('--foreground', `hsl(${hue} 25% 12%)`)
+    root.style.setProperty('--card', `hsl(${hue} 42% 99%)`)
     root.style.setProperty('--card-foreground', `hsl(${hue} 25% 12%)`)
+    root.style.setProperty('--popover', `hsl(${hue} 45% 99%)`)
     root.style.setProperty('--popover-foreground', `hsl(${hue} 25% 12%)`)
     root.style.setProperty('--primary', `hsl(${hue} 70% 50%)`)
     root.style.setProperty('--primary-foreground', `hsl(${hue} 30% 98%)`)

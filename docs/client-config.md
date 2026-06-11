@@ -90,7 +90,9 @@ If Cherry Studio supports remote MCP, configure the remote URL as `http://<nas-t
 
 ## Codex Notes
 
-Use the same system prompt from `prompts/research-memory-system-prompt.md` so save suggestions are consistent across tools.
+Use the same system prompt from `prompts/research-memory-system-prompt.md`, or inject the bundled skill text from `skills/research-memory-gateway/SKILL.md`, so save suggestions are consistent across tools.
+
+Codex local memory options such as `memories`, `generate_memories`, or `use_memories` do not make this MCP a memory backend. They write Codex local memory only. To persist durable knowledge in this gateway, the agent must proactively call `propose_save`, ask for user confirmation, and only then call `save_research_memory` with `user_confirmed=true`.
 
 For remote-capable Codex clients, prefer:
 

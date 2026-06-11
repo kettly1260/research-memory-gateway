@@ -161,6 +161,25 @@ Copy-Item config.example.yaml config.yaml
 docker compose up -d --build
 ```
 
+## 从 GitHub 拉取更新
+
+仓库内的 MCP 源码、`prompts/` 和 `skills/` 都纳入版本控制，执行 `git pull` 会拉取到最新版本。已经复制到客户端全局配置目录的 skill 或 prompt 不会自动跟随仓库更新；拉取后运行同步脚本：
+
+```powershell
+cd G:\LLM\memory
+git pull
+python -m pip install -e .
+.\scripts\sync-client-assets.ps1
+```
+
+如果某个客户端使用复制版 system prompt，把目标目录显式传给脚本：
+
+```powershell
+.\scripts\sync-client-assets.ps1 -PromptTargetDir "$env:USERPROFILE\.config\research-memory-gateway\prompts"
+```
+
+更新后重启正在运行的 `research-memory-gateway` 服务和已加载旧 skill/prompt 的 AI 客户端。Docker 部署使用 `docker compose up -d --build` 或拉取新的 GHCR 镜像后重启容器。
+
 ## 推送到 GitHub 并发布镜像
 
 项目已包含 GitHub Actions workflow：`.github/workflows/docker-publish.yml`。
@@ -416,7 +435,7 @@ backend:
 prompts/research-memory-system-prompt.md
 ```
 
-它会约束 AI：只有产生可复用科研资产时才调用 `propose_save`，并且必须等待用户确认后才能调用 `save_research_memory`。
+它会约束 AI：只有产生可复用科研资产或可复用 agent/MCP/部署配置经验时才调用 `propose_save`，并且必须等待用户确认后才能调用 `save_research_memory`。
 
 ## 推荐安装 Skill
 
@@ -426,14 +445,15 @@ prompts/research-memory-system-prompt.md
 skills/research-memory-gateway/SKILL.md
 ```
 
-它的作用是让 agent 更稳定地调用 MCP：什么时候该保存、先查重还是先提议、如何区分摘要和证据、何时调用 `open_source_ref`、何时审计未验证结论。
+它的作用是让所有 agent 更稳定地调用 MCP：什么时候该主动询问保存、先查重还是先提议、如何区分摘要和证据、何时调用 `open_source_ref`、何时审计未验证结论。客户端本地 memory 不会自动写入该 gateway，新部署应把这个 skill 或同等系统提示安装到每个可访问 MCP 的 agent/client。
 
 Kilo 全局安装示例：
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\kilo\skills\research-memory-gateway"
-Copy-Item "G:\LLM\memory\skills\research-memory-gateway\SKILL.md" "$env:USERPROFILE\.config\kilo\skills\research-memory-gateway\SKILL.md"
+.\scripts\sync-client-assets.ps1
 ```
+
+之后每次 `git pull` 拉取仓库更新后，再运行一次该脚本即可把新版 skill 同步到 Kilo 全局目录。
 
 也可以把该 `SKILL.md` 的正文复制到 Codex、Cherry Studio 或其它客户端的系统提示中使用。MCP 提供工具能力，skill 提供调用策略；两者一起使用效果最好。
 

@@ -1,6 +1,8 @@
 # Research Memory System Prompt
 
-Use this MCP only for durable, reusable scientific research assets.
+Use this MCP only for durable, reusable scientific research assets and reusable agent/MCP/deployment operating knowledge.
+
+Client-local memory features do not automatically write to this gateway. When durable knowledge is produced, proactively use the gateway workflow instead of assuming local memory synchronization.
 
 Call `propose_save` when a conversation produces one of the following:
 
@@ -12,8 +14,11 @@ Call `propose_save` when a conversation produces one of the following:
 - Material system summary.
 - Presentation, report, or thesis slide outline.
 - Research decision that affects future work.
+- Reusable agent behavior rule, MCP integration lesson, deployment decision, client configuration pattern, or troubleshooting result that should apply to future agents.
 
 Do not call `save_research_memory` until the user explicitly confirms saving.
+
+For reusable agent/MCP/deployment configuration knowledge, normally classify the memory as `research_decision` and use the relevant project or client namespace.
 
 Every saved memory must separate:
 

@@ -1,17 +1,21 @@
 ---
 name: research-memory-gateway
-description: Guides agents to use the Research Memory Gateway MCP for evidence-first scientific memory across Codex, Cherry Studio, KiloCode, and related tools. Use when doing literature review, paper notes, synthesis route planning, experiment planning, mechanism hypotheses, material-system tracking, presentation outlines, or research decisions that may need long-term recall.
+description: Guides agents to use the Research Memory Gateway MCP for evidence-first long-term memory across Codex, Cherry Studio, KiloCode, and related tools. Use when doing literature review, paper notes, synthesis route planning, experiment planning, mechanism hypotheses, material-system tracking, presentation outlines, research decisions, or reusable agent/MCP/deployment configuration lessons that may need long-term recall.
 ---
 
 # Research Memory Gateway
 
-Use this skill when the user is doing reusable scientific research work and the `research-memory-gateway` MCP tools are available.
+Use this skill when the user is doing reusable scientific research work, or when the session produces reusable agent/MCP/deployment configuration knowledge, and the `research-memory-gateway` MCP tools are available.
+
+This skill is the portable cross-agent policy. New deployments should install or inject this skill for every agent/client that can access the MCP; do not rely on a client-local memory feature to write to this gateway automatically.
 
 ## Core Rule
 
-Long-term memory is for reusable research assets, not ordinary chat history.
+Long-term memory is for reusable research assets and reusable operating knowledge, not ordinary chat history.
 
 Never save directly unless the user has explicitly confirmed. First call `propose_save`; call `save_research_memory` only after confirmation with `user_confirmed=true`.
+
+Be proactive about proposing saves. Loading the MCP tools or enabling a client's local memory does not make this gateway a memory backend; the agent must explicitly call the gateway tools when durable knowledge is produced.
 
 ## When To Propose Saving
 
@@ -25,8 +29,11 @@ Call `propose_save` when the session produces one of these assets:
 - A material-system summary, performance table, or structure-property relation.
 - A PPT, report, group-meeting, or thesis-defense outline.
 - A research decision that changes future work.
+- A reusable agent behavior rule, MCP integration lesson, deployment decision, client configuration pattern, or troubleshooting result that should apply to future agents.
 
 Do not propose saving for small clarifications, one-off translations, casual discussion, or incomplete speculation unless the user asks to remember it.
+
+For reusable agent/MCP/deployment configuration knowledge, usually use `memory_type: research_decision` with a project such as `research-memory-gateway` or the relevant client/project namespace.
 
 ## Tool Workflow
 
