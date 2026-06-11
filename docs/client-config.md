@@ -15,7 +15,29 @@ Use stdio mode when the client does not support remote SSE or Streamable HTTP.
 }
 ```
 
-## SSE Mode
+## Streamable HTTP Mode
+
+The Docker image defaults to Streamable HTTP. Start the gateway on the NAS:
+
+```powershell
+research-memory-gateway --config config.yaml --transport streamable-http --host 0.0.0.0 --port 8787
+```
+
+Then point clients that support remote Streamable HTTP MCP to:
+
+```text
+http://<nas-tailscale-ip>:8787/mcp
+```
+
+Set `RESEARCH_MEMORY_TOKEN` and configure the client to send:
+
+```text
+Authorization: Bearer <token>
+```
+
+When `RESEARCH_MEMORY_TOKEN` is unset, only loopback HTTP/SSE clients from `127.0.0.1` or `::1` are allowed without a token.
+
+## Legacy SSE Mode
 
 Start the gateway on the NAS:
 
@@ -37,15 +59,57 @@ https://memory.example.com/sse
 
 ## KiloCode Notes
 
-Prefer remote SSE if your client version supports it. If not, run the gateway with `--transport stdio` locally, or create a small local stdio-to-SSE proxy that forwards to the NAS service.
+Prefer remote Streamable HTTP if your client version supports it. Example remote endpoint:
+
+```json
+{
+  "mcpServers": {
+    "research-memory-gateway": {
+      "type": "remote",
+      "url": "http://<nas-tailscale-ip>:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+If your Kilo version only supports stdio, use the stdio example above. If it supports legacy SSE but not Streamable HTTP, start the server with `--transport sse` or `--transport both` and use `/sse`.
 
 ## Cherry Studio Notes
 
-If Cherry Studio supports remote MCP/SSE, connect directly to the NAS URL. If it only supports local command MCP, use stdio mode or a local proxy.
+If Cherry Studio supports remote MCP, configure the remote URL as `http://<nas-tailscale-ip>:8787/mcp` and add an Authorization Bearer header when `RESEARCH_MEMORY_TOKEN` is set. If it only supports SSE, run the gateway with `--transport sse` or `--transport both` and use `http://<nas-tailscale-ip>:8787/sse`. If it only supports local command MCP, use:
+
+```json
+{
+  "command": "research-memory-gateway",
+  "args": ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio"]
+}
+```
 
 ## Codex Notes
 
 Use the same system prompt from `prompts/research-memory-system-prompt.md` so save suggestions are consistent across tools.
+
+For remote-capable Codex clients, prefer:
+
+```toml
+[mcp_servers.research-memory-gateway]
+type = "remote"
+url = "http://<nas-tailscale-ip>:8787/mcp"
+
+[mcp_servers.research-memory-gateway.headers]
+Authorization = "Bearer <token>"
+```
+
+For local stdio:
+
+```toml
+[mcp_servers.research-memory-gateway]
+command = "research-memory-gateway"
+args = ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio"]
+```
 
 ## Retrieval Mode Notes
 
@@ -82,7 +146,7 @@ The WebUI is not an MCP endpoint and should not be configured in AI clients. It 
 Keep client MCP URLs pointed at port `8787`:
 
 ```text
-http://<nas-tailscale-ip>:8787/sse
+http://<nas-tailscale-ip>:8787/mcp
 ```
 
 Open the WebUI only from trusted networks or through your authenticated admin proxy:

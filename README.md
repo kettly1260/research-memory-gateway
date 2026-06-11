@@ -137,17 +137,21 @@ Copy-Item config.example.yaml config.yaml
 research-memory-gateway --config config.yaml --transport stdio
 ```
 
-SSE 模式：
+Streamable HTTP 模式适合远程 MCP 客户端，也是 Docker 镜像默认启动方式：
 
 ```powershell
-research-memory-gateway --config config.yaml --transport sse --host 0.0.0.0 --port 8787
+research-memory-gateway --config config.yaml --transport streamable-http --host 0.0.0.0 --port 8787
 ```
 
 客户端访问地址通常是：
 
 ```text
-http://<nas-ip>:8787/sse
+http://<nas-ip>:8787/mcp
 ```
+
+如果客户端只支持 legacy SSE，可以显式启动 `--transport sse` 或 `--transport both`，然后使用 `http://<nas-ip>:8787/sse`。
+
+HTTP/SSE 安全规则：设置 `RESEARCH_MEMORY_TOKEN` 后所有远程 MCP 请求必须携带 `Authorization: Bearer <token>`。未设置该环境变量时，只允许来自 `127.0.0.1`、`::1` 的本机 HTTP/SSE 请求免 token；非本机请求仍会被拒绝，除非使用 WebUI 创建的 active API key。
 
 ## Docker 本地构建
 
@@ -350,7 +354,7 @@ environment:
 {"data": [{"index": 0, "score": 0.98}]}
 ```
 
-如果 embedding 服务不可用，搜索会自动退回 SQLite FTS。保存记忆时如果 embedding 失败，记忆仍会保存到 SQLite，已有向量不会被失败请求删除。如果 rerank 服务不可用，搜索会返回未重排的 hybrid 合并结果。所有降级都会写入日志，并可通过 `retrieval_health` 查看最近错误、HTTP 状态、已有向量数量和维度分布。
+如果 embedding 服务不可用，搜索会自动退回 SQLite FTS。保存记忆时如果 embedding 失败，记忆仍会保存到 SQLite，并在 `audit_database_integrity` / `inspect-db` 中标记需要回填的记忆。如果 embedding 被关闭但已有向量的记忆被更新，也会标记为需要 backfill，避免旧向量与新文本不一致。如果 rerank 服务不可用，搜索会返回未重排的 hybrid 合并结果。所有降级都会写入日志，并可通过 `retrieval_health` 查看最近错误、HTTP 状态、已有向量数量和维度分布。
 
 混合检索的分数含义：SQLite FTS 的 `bm25` 结果会按排序位置转换为合并分数，向量结果使用 cosine similarity，重排结果使用模型返回的 score。`match_reason` 会标出 `fts:rank_position=...`、`vector:cosine=...` 和 `rerank:score=...`。
 

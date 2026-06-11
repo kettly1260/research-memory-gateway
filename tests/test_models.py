@@ -1,3 +1,6 @@
+import json
+import sqlite3
+
 import anyio
 import pytest
 from starlette.applications import Starlette
@@ -488,6 +491,40 @@ def test_bearer_auth_middleware_rejects_missing_token() -> None:
     assert client.get("/sse", headers={"Authorization": "Bearer secret"}).status_code == 200
 
 
+def test_bearer_auth_middleware_allows_loopback_when_master_token_unset() -> None:
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    async def run(client_host: str) -> int:
+        messages = []
+        middleware = BearerAuthMiddleware(app, token=None)
+        scope = {
+            "type": "http",
+            "path": "/sse",
+            "headers": [],
+            "method": "GET",
+            "scheme": "http",
+            "server": ("testserver", 80),
+            "client": (client_host, 50000),
+            "root_path": "",
+            "query_string": b"",
+        }
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            messages.append(message)
+
+        await middleware(scope, receive, send)
+        return messages[0]["status"]
+
+    assert anyio.run(run, "127.0.0.1") == 200
+    assert anyio.run(run, "::1") == 200
+    assert anyio.run(run, "192.168.1.10") == 401
+
+
 def test_mcp_uses_configured_remote_host_for_transport_security(tmp_path) -> None:
     config = AppConfig()
     config.server.host = "0.0.0.0"
@@ -605,6 +642,40 @@ def test_update_research_memory_refreshes_search_index(tmp_path) -> None:
     assert [result.memory.memory_id for result in results] == [memory.memory_id]
 
 
+def test_update_research_memory_marks_existing_embedding_for_backfill_when_disabled(tmp_path) -> None:
+    service = make_service(tmp_path)
+    memory = service.save_research_memory(
+        user_confirmed=True,
+        memory={
+            "project": "demo",
+            "topic": "Mercury ion probe",
+            "memory_type": "material_system",
+            "title": "Mercury route",
+            "summary": "Soft-acid binding route.",
+        },
+    )
+    with service.backend._connect() as connection:
+        connection.execute(
+            "INSERT INTO memory_embeddings(memory_id, embedding, updated_at) VALUES (?, ?, ?)",
+            (memory.memory_id, "[1.0, 0.0]", memory.updated_at),
+        )
+
+    service.update_research_memory(
+        memory.memory_id,
+        {"summary": "Updated cadmium route."},
+        user_confirmed=True,
+    )
+    audit = service.audit_database_integrity()
+
+    assert audit["embedding_backfill_needed"] == [
+        {
+            "memory_id": memory.memory_id,
+            "reason": "embedding_disabled_after_update",
+            "updated_at": service.get_research_memory(memory.memory_id).updated_at,
+        }
+    ]
+
+
 def test_merge_research_memories_preserves_sources_and_supersedes_old(tmp_path) -> None:
     service = make_service(tmp_path)
     first = service.save_research_memory(
@@ -658,6 +729,66 @@ def test_schema_migrations_table_is_initialized(tmp_path) -> None:
     assert (rows[0]["version"], rows[0]["name"]) == (1, "initial_sqlite_memory_schema")
     assert (rows[1]["version"], rows[1]["name"]) == (2, "webui_memory_lifecycle_and_audit")
     assert (rows[2]["version"], rows[2]["name"]) == (3, "webui_api_keys_and_connections")
+    assert (rows[3]["version"], rows[3]["name"]) == (4, "embedding_backfill_state")
+
+
+def test_legacy_database_is_upgraded_without_losing_memories(tmp_path) -> None:
+    db_path = tmp_path / "legacy.db"
+    memory = ResearchMemory.model_validate(
+        {
+            "project": "demo",
+            "topic": "Hg",
+            "memory_type": "paper_note",
+            "title": "Legacy memory",
+            "summary": "Legacy summary.",
+        }
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE memories (
+                memory_id TEXT PRIMARY KEY,
+                project TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO memories(memory_id, project, topic, memory_type, title, summary, data, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                memory.memory_id,
+                memory.project,
+                memory.topic,
+                memory.memory_type.value,
+                memory.title,
+                memory.summary,
+                json.dumps(memory.model_dump(mode="json")),
+                memory.created_at,
+                memory.updated_at,
+            ),
+        )
+
+    backend = SQLiteMemoryBackend(str(db_path))
+
+    assert backend.get(memory.memory_id).title == "Legacy memory"
+    with backend._connect() as connection:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(memories)").fetchall()}
+        migration_versions = [
+            row["version"]
+            for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+        ]
+
+    assert {"memory_status", "status_changed_at", "status_change_reason"} <= columns
+    assert migration_versions == [1, 2, 3, 4]
 
 
 def test_integrity_audit_repairs_missing_fts_and_orphan_embeddings(tmp_path) -> None:

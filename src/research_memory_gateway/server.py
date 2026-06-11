@@ -38,6 +38,10 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if not self.token and _is_loopback_client(scope):
+            await self.app(scope, receive, send)
+            return
+
         authorization = ""
         for raw_name, raw_value in scope.get("headers", []):
             if raw_name.lower() == b"authorization":
@@ -111,6 +115,14 @@ class BearerAuthMiddleware:
                 logger.error("Database error recording active connection: %s", e)
 
         await self.app(scope, receive, send)
+
+
+def _is_loopback_client(scope: Scope) -> bool:
+    client = scope.get("client")
+    if not client:
+        return False
+    host = client[0]
+    return host in {"127.0.0.1", "::1", "localhost"}
 
 
 def build_mcp(config: AppConfig) -> FastMCP:

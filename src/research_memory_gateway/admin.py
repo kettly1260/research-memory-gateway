@@ -38,12 +38,16 @@ def inspect_sqlite_db(db_path: str) -> dict[str, Any]:
             WHERE e.memory_id IS NULL
             """
         ).fetchone()[0]
+        backfill_needed_count = connection.execute(
+            "SELECT COUNT(*) FROM embedding_backfill_needed"
+        ).fetchone()[0]
     health = backend.retrieval_health()
     return {
         "sqlite_path": str(backend.path),
         "memory_count": memory_count,
         "embedding_count": embedding_count,
         "missing_embedding_count": missing_embedding_count,
+        "backfill_needed_count": backfill_needed_count,
         "projects": {row["project"]: row["count"] for row in project_rows},
         "memory_types": {row["memory_type"]: row["count"] for row in type_rows},
         "stored_embedding_dimensions": health["stored_embedding_dimensions"],
@@ -124,6 +128,7 @@ def backfill_embeddings(
                 """,
                 (memory.memory_id, json.dumps(embedding), memory.updated_at),
             )
+            connection.execute("DELETE FROM embedding_backfill_needed WHERE memory_id = ?", (memory.memory_id,))
         result["backfilled"] += 1
     result["matched_memories"] = len(rows)
     return result

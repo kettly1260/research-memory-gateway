@@ -28,7 +28,9 @@ Use SQLite mode first. Add embedding/rerank only for better retrieval quality.
 4. Use SQLite backend for normal first deployment.
 5. Optional: set `retrieval.mode=hybrid` and provide embedding/rerank service URLs.
 6. Put the service behind Tailscale, ZeroTier, or WireGuard.
-7. Configure clients to use `http://<nas-ip>:8787/sse`.
+7. Configure clients to use `http://<nas-ip>:8787/mcp` for Streamable HTTP. Use `/sse` only when the gateway is started with `--transport sse` or `--transport both` for legacy SSE clients.
+
+The Docker image defaults to `--transport streamable-http`, so `/mcp` is the default container endpoint. If `RESEARCH_MEMORY_TOKEN` is not set, local loopback HTTP/SSE requests from `127.0.0.1` or `::1` are allowed for development, but non-loopback requests are rejected unless they present an active API key created by the WebUI. Set `RESEARCH_MEMORY_TOKEN` for NAS or reverse-proxied deployments.
 
 ## Docker Compose
 
@@ -117,7 +119,7 @@ Embedding uses OpenAI-compatible responses by default: `{"data": [{"embedding": 
 
 Rerank uses `/rerank` with `query`, `documents`, `top_n`, and optional `model` fields. Supported response shapes include `results[].index/relevance_score`, `results[].document.index/score`, and `data[].index/score`.
 
-Failure behavior is intentionally conservative. If embedding is unavailable during search, the gateway falls back to SQLite FTS. If embedding is unavailable during save, the memory is still saved and an existing vector is preserved. If rerank is unavailable, the gateway returns the un-reranked hybrid merge. Use the `retrieval_health` MCP tool to inspect recent embedding/rerank errors, HTTP status codes, vector counts, and stored vector dimensions.
+Failure behavior is intentionally conservative. If embedding is unavailable during search, the gateway falls back to SQLite FTS. If embedding is unavailable during save, the memory is still saved and the memory is marked for embedding backfill. If embedding is disabled when an existing embedded memory is updated, the old vector is treated as stale and the memory is also marked for backfill. If rerank is unavailable, the gateway returns the un-reranked hybrid merge. Use the `retrieval_health` MCP tool to inspect recent embedding/rerank errors, HTTP status codes, vector counts, and stored vector dimensions, and use `audit_database_integrity` or `research-memory-admin inspect-db` to find memories needing embedding backfill.
 
 ## VPS Reverse Proxy Pattern
 

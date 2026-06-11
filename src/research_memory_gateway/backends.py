@@ -18,7 +18,7 @@ from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
 
 
 logger = getLogger(__name__)
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ACTIVE_STATUSES = (MemoryStatus.active.value,)
 ALL_STATUSES = tuple(status.value for status in MemoryStatus)
 
@@ -81,119 +81,133 @@ class SQLiteMemoryBackend(MemoryBackend):
 
     def _init_db(self) -> None:
         with self._connect() as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    applied_at TEXT NOT NULL
+            for version, name, migration in self._migrations():
+                migration(connection)
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (version, name, datetime.now(timezone.utc).isoformat()),
                 )
-                """
+
+    def _migrations(self) -> list[tuple[int, str, Any]]:
+        return [
+            (1, "initial_sqlite_memory_schema", self._migration_initial_schema),
+            (2, "webui_memory_lifecycle_and_audit", self._migration_lifecycle_and_audit),
+            (3, "webui_api_keys_and_connections", self._migration_api_keys_and_connections),
+            (4, "embedding_backfill_state", self._migration_embedding_backfill_state),
+        ]
+
+    def _migration_initial_schema(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memories (
-                    memory_id TEXT PRIMARY KEY,
-                    project TEXT NOT NULL,
-                    topic TEXT NOT NULL,
-                    memory_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    memory_status TEXT NOT NULL DEFAULT 'active',
-                    status_changed_at TEXT,
-                    status_change_reason TEXT,
-                    data TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memories (
+                memory_id TEXT PRIMARY KEY,
+                project TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                memory_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                memory_status TEXT NOT NULL DEFAULT 'active',
+                status_changed_at TEXT,
+                status_change_reason TEXT,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             )
-            connection.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-                    memory_id UNINDEXED,
-                    project,
-                    topic,
-                    memory_type,
-                    title,
-                    summary,
-                    tags,
-                    entities,
-                    claims
-                )
-                """
+            """
+        )
+        connection.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                memory_id UNINDEXED,
+                project,
+                topic,
+                memory_type,
+                title,
+                summary,
+                tags,
+                entities,
+                claims
             )
-            self._ensure_column(connection, "memories", "memory_status", "TEXT NOT NULL DEFAULT 'active'")
-            self._ensure_column(connection, "memories", "status_changed_at", "TEXT")
-            self._ensure_column(connection, "memories", "status_change_reason", "TEXT")
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-                VALUES (?, ?, ?)
-                """,
-                (1, "initial_sqlite_memory_schema", datetime.now(timezone.utc).isoformat()),
+            """
+        )
+        self._ensure_column(connection, "memories", "memory_status", "TEXT NOT NULL DEFAULT 'active'")
+        self._ensure_column(connection, "memories", "status_changed_at", "TEXT")
+        self._ensure_column(connection, "memories", "status_change_reason", "TEXT")
+
+    def _migration_lifecycle_and_audit(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_embeddings (
+                memory_id TEXT PRIMARY KEY,
+                embedding TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memory_embeddings (
-                    memory_id TEXT PRIMARY KEY,
-                    embedding TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
-                )
-                """
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor TEXT,
+                memory_id TEXT,
+                metadata TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    event_id TEXT PRIMARY KEY,
-                    event_type TEXT NOT NULL,
-                    actor TEXT,
-                    memory_id TEXT,
-                    metadata TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
+            """
+        )
+
+    def _migration_api_keys_and_connections(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS api_keys (
+                key_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                status TEXT NOT NULL DEFAULT 'active'
             )
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-                VALUES (?, ?, ?)
-                """,
-                (2, "webui_memory_lifecycle_and_audit", datetime.now(timezone.utc).isoformat()),
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_connections (
+                key_id TEXT NOT NULL,
+                client_ip TEXT NOT NULL,
+                client_info TEXT,
+                request_count INTEGER DEFAULT 1,
+                last_request_at TEXT NOT NULL,
+                PRIMARY KEY (key_id, client_ip),
+                FOREIGN KEY(key_id) REFERENCES api_keys(key_id) ON DELETE CASCADE
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS api_keys (
-                    key_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    key_hash TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    last_used_at TEXT,
-                    status TEXT NOT NULL DEFAULT 'active'
-                )
-                """
+            """
+        )
+
+    def _migration_embedding_backfill_state(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_backfill_needed (
+                memory_id TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
             )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS active_connections (
-                    key_id TEXT NOT NULL,
-                    client_ip TEXT NOT NULL,
-                    client_info TEXT,
-                    request_count INTEGER DEFAULT 1,
-                    last_request_at TEXT NOT NULL,
-                    PRIMARY KEY (key_id, client_ip),
-                    FOREIGN KEY(key_id) REFERENCES api_keys(key_id) ON DELETE CASCADE
-                )
-                """
-            )
-            connection.execute(
-                """
-                INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-                VALUES (?, ?, ?)
-                """,
-                (3, "webui_api_keys_and_connections", datetime.now(timezone.utc).isoformat()),
-            )
+            """
+        )
 
     def save(self, memory: ResearchMemory) -> ResearchMemory:
         self._refresh_retrieval_clients()
@@ -247,12 +261,26 @@ class SQLiteMemoryBackend(MemoryBackend):
                         """,
                         (memory.memory_id, json.dumps(embedding), memory.updated_at),
                     )
+                    self._clear_backfill_needed(connection, memory.memory_id)
                 else:
+                    self._mark_backfill_needed(
+                        connection,
+                        memory.memory_id,
+                        getattr(self.embedding_client, "last_error", None) or "embedding_failed",
+                        memory.updated_at,
+                    )
                     logger.warning(
                         "Embedding generation skipped for memory_id=%s: %s",
                         memory.memory_id,
                         getattr(self.embedding_client, "last_error", None),
                     )
+            elif self._has_embedding(connection, memory.memory_id):
+                self._mark_backfill_needed(
+                    connection,
+                    memory.memory_id,
+                    "embedding_disabled_after_update",
+                    memory.updated_at,
+                )
         return memory
 
     def search(
@@ -571,6 +599,7 @@ class SQLiteMemoryBackend(MemoryBackend):
             connection.execute("DELETE FROM memories_fts WHERE memory_id = ?", (memory_id,))
             connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
             cursor = connection.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
+            connection.execute("DELETE FROM embedding_backfill_needed WHERE memory_id = ?", (memory_id,))
             return cursor.rowcount > 0
 
     def append_audit_event(
@@ -628,6 +657,7 @@ class SQLiteMemoryBackend(MemoryBackend):
             "schema_version": SCHEMA_VERSION,
             "missing_fts": [],
             "orphan_embeddings": [],
+            "embedding_backfill_needed": [],
             "invalid_memory_json": [],
             "invalid_source_refs": [],
             "repaired_fts": 0,
@@ -645,6 +675,12 @@ class SQLiteMemoryBackend(MemoryBackend):
                 for row in connection.execute("SELECT memory_id FROM memory_embeddings").fetchall()
             }
             report["orphan_embeddings"] = sorted(embedding_ids - memory_ids)
+            report["embedding_backfill_needed"] = [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT memory_id, reason, updated_at FROM embedding_backfill_needed ORDER BY memory_id"
+                ).fetchall()
+            ]
             if repair_orphans and report["orphan_embeddings"]:
                 for memory_id in report["orphan_embeddings"]:
                     connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
@@ -695,6 +731,34 @@ class SQLiteMemoryBackend(MemoryBackend):
         columns = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _has_embedding(self, connection: sqlite3.Connection, memory_id: str) -> bool:
+        row = connection.execute(
+            "SELECT 1 FROM memory_embeddings WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        return row is not None
+
+    def _mark_backfill_needed(
+        self,
+        connection: sqlite3.Connection,
+        memory_id: str,
+        reason: str,
+        updated_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO embedding_backfill_needed(memory_id, reason, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(memory_id) DO UPDATE SET
+                reason=excluded.reason,
+                updated_at=excluded.updated_at
+            """,
+            (memory_id, reason, updated_at),
+        )
+
+    def _clear_backfill_needed(self, connection: sqlite3.Connection, memory_id: str) -> None:
+        connection.execute("DELETE FROM embedding_backfill_needed WHERE memory_id = ?", (memory_id,))
 
     def _refresh_retrieval_clients(self) -> None:
         if self.runtime_resolver is None:

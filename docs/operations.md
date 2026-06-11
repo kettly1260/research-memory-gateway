@@ -4,18 +4,20 @@
 
 1. Copy `config.example.yaml` to `config.yaml`.
 2. Keep the default `backend.type: sqlite` and `retrieval.mode: keyword` for first launch.
-3. Start locally with `research-memory-gateway --config config.yaml --transport stdio` or on NAS with `--transport sse --host 0.0.0.0 --port 8787`.
+3. Start locally with `research-memory-gateway --config config.yaml --transport stdio` or on NAS with `--transport streamable-http --host 0.0.0.0 --port 8787`.
 4. Add `prompts/research-memory-system-prompt.md` to each AI client so save behavior is consistent.
 
 ## Client Matrix
 
 | Client | Preferred transport | Example config location | Notes |
 |---|---|---|---|
-| Kilo | Remote SSE when available, otherwise stdio | `.kilo/` or global Kilo MCP config | Use the bundled skill in `skills/research-memory-gateway/SKILL.md`. |
-| Cherry Studio | Remote MCP/SSE if supported, otherwise local command | Cherry Studio MCP settings | Embedding/rerank variables belong on the server, not in Cherry. |
-| Codex | Local stdio or remote proxy | Codex MCP settings | Reuse the same system prompt to avoid inconsistent save proposals. |
+| Kilo | Streamable HTTP `/mcp` when available, otherwise SSE or stdio | `.kilo/` or global Kilo MCP config | Use the bundled skill in `skills/research-memory-gateway/SKILL.md`. |
+| Cherry Studio | Remote MCP `/mcp` or legacy SSE `/sse` if supported, otherwise local command | Cherry Studio MCP settings | Embedding/rerank variables belong on the server, not in Cherry. |
+| Codex | Remote Streamable HTTP `/mcp`, otherwise local stdio | Codex MCP settings | Reuse the same system prompt to avoid inconsistent save proposals. |
 | Generic local MCP | stdio | client-specific JSON | Command: `research-memory-gateway --config <path> --transport stdio`. |
-| NAS remote MCP | SSE | client-specific remote MCP URL | URL: `http://<nas-ip>:8787/sse`; set `RESEARCH_MEMORY_TOKEN` for exposed deployments. |
+| NAS remote MCP | Streamable HTTP | client-specific remote MCP URL | URL: `http://<nas-ip>:8787/mcp`; set `RESEARCH_MEMORY_TOKEN` for exposed deployments. |
+
+Security rule: when `RESEARCH_MEMORY_TOKEN` is unset, HTTP/SSE loopback requests from `127.0.0.1` or `::1` are allowed for local development. Non-loopback requests must use a configured master token or an active WebUI-created API key.
 
 ## Retrieval Modes
 
@@ -47,6 +49,26 @@ Rerank services should accept:
 ```
 
 Accepted response shapes are documented in `README.md` and `docs/deployment.md`.
+
+Common templates:
+
+```yaml
+# OpenAI-compatible, vLLM, TEI, or Jina embedding endpoint with /v1/embeddings
+EMBEDDING_BASE_URL: "http://<host>:<port>/v1"
+EMBEDDING_MODEL: "<embedding-model>"
+
+# Root-path embedding endpoint where /embeddings is directly available
+EMBEDDING_BASE_URL: "http://<host>:<port>"
+EMBEDDING_MODEL: "<embedding-model>"
+
+# Ollama OpenAI-compatible embedding endpoint, if enabled by your deployment
+EMBEDDING_BASE_URL: "http://<ollama-host>:11434/v1"
+EMBEDDING_MODEL: "nomic-embed-text"
+
+# BGE/Jina-style reranker facade accepting query/documents/top_n
+RERANK_BASE_URL: "http://<rerank-host>:<port>/v1"
+RERANK_MODEL: "<rerank-model>"
+```
 
 ## Backfill Existing Memories
 

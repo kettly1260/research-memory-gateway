@@ -11,24 +11,7 @@ let csrfToken: string | null = null
  */
 async function getCsrfToken(): Promise<string> {
   if (csrfToken) return csrfToken
-
-  // Try to get from a session endpoint
-  try {
-    const res = await fetch('/admin/api/config/effective', {
-      credentials: 'include',
-    })
-    // If we get a 401, we need to login
-    if (res.status === 401) {
-      window.location.href = '/admin/login'
-      throw new Error('Unauthorized')
-    }
-    // CSRF token should be in the cookie session
-    // We'll use a dedicated endpoint or extract from meta tag
-  } catch {
-    // Fallback
-  }
-
-  return csrfToken || ''
+  return ''
 }
 
 export function setCsrfToken(token: string) {
@@ -70,6 +53,7 @@ function onRefreshed(token: string) {
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, params } = options
+  const isAuthRequest = path.startsWith('/auth/')
 
   let url = `/admin/api${path}`
   if (params) {
@@ -94,7 +78,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   // 2. Inject CSRF token for backward compatibility
-  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+  if (!isAuthRequest && ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
     const token = await getCsrfToken()
     if (token) {
       headers['X-CSRF-Token'] = token
@@ -113,7 +97,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   let response = await performFetch(headers)
 
   // 3. Handle auth expired & retry with refreshed token
-  if (response.status === 401 && !path.startsWith('/auth/')) {
+  if (response.status === 401 && !isAuthRequest) {
     const refreshToken = localStorage.getItem('refresh_token')
     if (refreshToken) {
       if (!isRefreshing) {
