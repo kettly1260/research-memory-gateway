@@ -165,7 +165,13 @@ class SecurityMiddleware:
             return
         request = Request(scope, receive)
         state = request.app.state.webui
-        if request.url.path.startswith("/admin/static"):
+        # Allow static assets, favicon, and login page through without auth
+        if (
+            request.url.path.startswith("/admin/assets")
+            or request.url.path.startswith("/admin/static")
+            or request.url.path == "/admin/favicon.svg"
+            or request.url.path == "/admin/login"
+        ):
             await self._send_with_headers(scope, receive, send)
             return
         if request.url.path.startswith("/admin") and request.url.path != "/admin/login":
@@ -196,7 +202,7 @@ class SecurityMiddleware:
                 headers = Headers(raw=message.setdefault("headers", []))
                 existing = list(message["headers"])
                 additions = {
-                    b"content-security-policy": b"default-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+                    b"content-security-policy": b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'",
                     b"x-content-type-options": b"nosniff",
                     b"referrer-policy": b"same-origin",
                 }
