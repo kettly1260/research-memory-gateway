@@ -45,6 +45,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useMemories, useArchiveMemory, useSoftDeleteMemory, useRestoreMemory, useProjects } from "@/lib/query"
 import type { ResearchMemory } from "@/types/api"
+import { MEMORY_TYPES, formatMemoryType } from "@/constants/memoryTypes"
 import { toast } from "sonner"
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
@@ -108,7 +109,7 @@ export function Memories() {
     {
       accessorKey: "memory_type",
       header: t("memories.col_type"),
-      cell: ({ row }) => <Badge variant="outline" className="capitalize text-[11px]">{row.getValue("memory_type")}</Badge>,
+      cell: ({ row }) => <Badge variant="outline" className="text-[11px]">{formatMemoryType(row.getValue("memory_type"))}</Badge>,
     },
     {
       accessorKey: "memory_status",
@@ -117,7 +118,7 @@ export function Memories() {
         const status = row.getValue("memory_status") as string
         return (
           <Badge variant={statusVariants[status] || 'outline'} className="capitalize text-[11px]">
-            {status}
+            {t(`common.${status}`)}
           </Badge>
         )
       },
@@ -144,14 +145,14 @@ export function Memories() {
           <DropdownMenu>
             <DropdownMenuTrigger>
               <Button variant="ghost" className="h-8 w-8 p-0">
-                <span className="sr-only">Open menu</span>
+                <span className="sr-only">{t("common.open_menu")}</span>
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>{t("common.actions")}</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => navigator.clipboard.writeText(memory.memory_id)}>
-                Copy ID
+                {t("common.copy_id")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => navigate({ to: '/memories/$id', params: { id: memory.memory_id } })}>
@@ -160,19 +161,19 @@ export function Memories() {
               {memory.memory_status === "active" && (
                 <DropdownMenuItem onClick={() => {
                   archiveMutation.mutate({ id: memory.memory_id }, {
-                    onSuccess: () => toast.success("Archived"),
+                    onSuccess: () => toast.success(t("memories.archived_success")),
                   })
                 }}>
-                  Archive
+                  {t("memories.archive")}
                 </DropdownMenuItem>
               )}
               {memory.memory_status === "archived" && (
                 <DropdownMenuItem onClick={() => {
                   restoreMutation.mutate({ id: memory.memory_id }, {
-                    onSuccess: () => toast.success("Restored"),
+                    onSuccess: () => toast.success(t("memories.restored_success")),
                   })
                 }}>
-                  Restore
+                  {t("memories.restore")}
                 </DropdownMenuItem>
               )}
               {memory.memory_status !== "deleted" && (
@@ -180,7 +181,7 @@ export function Memories() {
                   className="text-destructive focus:bg-destructive focus:text-destructive-foreground"
                   onClick={() => {
                     softDeleteMutation.mutate({ id: memory.memory_id }, {
-                      onSuccess: () => toast.success("Deleted"),
+                      onSuccess: () => toast.success(t("memories.deleted_success")),
                     })
                   }}
                 >
@@ -247,9 +248,9 @@ export function Memories() {
             <SelectValue placeholder={t("memories.filter_status")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="active">Active</SelectItem>
-            <SelectItem value="archived">Archived</SelectItem>
-            <SelectItem value="deleted">Deleted</SelectItem>
+            <SelectItem value="active">{t("common.active")}</SelectItem>
+            <SelectItem value="archived">{t("common.archived")}</SelectItem>
+            <SelectItem value="deleted">{t("common.deleted")}</SelectItem>
             <SelectItem value="all">{t("common.all")}</SelectItem>
           </SelectContent>
         </Select>
@@ -260,7 +261,7 @@ export function Memories() {
               <SelectValue placeholder={t("memories.filter_project")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="_all">{t("common.all")} Projects</SelectItem>
+              <SelectItem value="_all">{t("memories.all_projects")}</SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p} value={p}>{p}</SelectItem>
               ))}
@@ -273,13 +274,10 @@ export function Memories() {
             <SelectValue placeholder={t("memories.filter_type")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="_all">{t("common.all")} Types</SelectItem>
-            <SelectItem value="research_finding">Research Finding</SelectItem>
-            <SelectItem value="methodology">Methodology</SelectItem>
-            <SelectItem value="tool_usage">Tool Usage</SelectItem>
-            <SelectItem value="domain_knowledge">Domain Knowledge</SelectItem>
-            <SelectItem value="experimental_result">Experimental Result</SelectItem>
-            <SelectItem value="literature_note">Literature Note</SelectItem>
+            <SelectItem value="_all">{t("memories.all_types")}</SelectItem>
+            {MEMORY_TYPES.map((type) => (
+              <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -288,7 +286,7 @@ export function Memories() {
           <DropdownMenu>
             <DropdownMenuTrigger>
               <Button variant="outline" size="sm" className="h-9">
-                Columns
+                {t("memories.columns")}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -355,7 +353,7 @@ export function Memories() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-32 text-center text-muted-foreground">
-                    No results.
+                    {t("common.no_results")}
                   </TableCell>
                 </TableRow>
               )}
@@ -392,9 +390,9 @@ export function Memories() {
                   <p className="text-xs text-muted-foreground line-clamp-2 mb-3">{memory.summary}</p>
                   <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant={statusVariants[memory.memory_status] || 'outline'} className="text-[10px]">
-                      {memory.memory_status}
+                      {t(`common.${memory.memory_status}`)}
                     </Badge>
-                    <Badge variant="outline" className="text-[10px]">{memory.memory_type}</Badge>
+                    <Badge variant="outline" className="text-[10px]">{formatMemoryType(memory.memory_type)}</Badge>
                     <span className="text-[10px] text-muted-foreground ml-auto">{memory.project}</span>
                   </div>
                 </CardContent>
@@ -407,7 +405,7 @@ export function Memories() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          {memories.length} {memories.length === 1 ? 'memory' : 'memories'}
+          {memories.length} {memories.length === 1 ? t("memories.memory_singular") : t("memories.memory_plural")}
         </p>
         <div className="flex items-center gap-2">
           <Button
@@ -416,7 +414,7 @@ export function Memories() {
             onClick={() => table.previousPage()}
             disabled={!table.getCanPreviousPage()}
           >
-            <ChevronLeft className="h-4 w-4 mr-1" /> Previous
+            <ChevronLeft className="h-4 w-4 mr-1" /> {t("common.previous")}
           </Button>
           <span className="text-sm text-muted-foreground tabular-nums">
             {table.getState().pagination.pageIndex + 1} / {table.getPageCount() || 1}
@@ -427,7 +425,7 @@ export function Memories() {
             onClick={() => table.nextPage()}
             disabled={!table.getCanNextPage()}
           >
-            Next <ChevronRight className="h-4 w-4 ml-1" />
+            {t("common.next")} <ChevronRight className="h-4 w-4 ml-1" />
           </Button>
         </div>
       </div>

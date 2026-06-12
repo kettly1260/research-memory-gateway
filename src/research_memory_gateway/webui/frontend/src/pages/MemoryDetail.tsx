@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { useMemory, useArchiveMemory, useRestoreMemory, useSoftDeleteMemory, useHardDeleteMemory, useUpdateMemory } from '@/lib/query'
 import type { ResearchMemory } from '@/types/api'
+import { formatMemoryType } from '@/constants/memoryTypes'
 import { toast } from 'sonner'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
@@ -70,7 +71,7 @@ export function MemoryDetail() {
       <div className="p-6 md:p-8 max-w-5xl mx-auto">
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
-            Memory not found
+            {t('memories.not_found')}
           </CardContent>
         </Card>
       </div>
@@ -87,13 +88,13 @@ export function MemoryDetail() {
       const parsed = JSON.parse(editJson) as Partial<ResearchMemory>
       updateMutation.mutate(parsed, {
         onSuccess: () => {
-          toast.success('Memory updated')
+          toast.success(t('memories.updated_success'))
           setEditMode(false)
         },
         onError: (err) => toast.error(String(err)),
       })
     } catch {
-      toast.error('Invalid JSON')
+      toast.error(t('common.invalid_json'))
     }
   }
 
@@ -102,7 +103,7 @@ export function MemoryDetail() {
       { id: memoryId, ...hardDeleteForm },
       {
         onSuccess: () => {
-          toast.success('Memory permanently deleted')
+          toast.success(t('memories.permanently_deleted_success'))
           setHardDeleteOpen(false)
           navigate({ to: '/memories' })
         },
@@ -125,11 +126,11 @@ export function MemoryDetail() {
           <h1 className="text-2xl font-bold tracking-tight">{memory.title}</h1>
           <div className="flex items-center gap-2 flex-wrap">
             <Badge variant={statusVariants[memory.memory_status] || 'outline'} className="capitalize">
-              {memory.memory_status}
+              {t(`common.${memory.memory_status}`)}
             </Badge>
-            <Badge variant="outline">{memory.memory_type}</Badge>
+            <Badge variant="outline">{formatMemoryType(memory.memory_type)}</Badge>
             <button
-              onClick={() => { navigator.clipboard.writeText(memory.memory_id); toast.success('Copied!') }}
+              onClick={() => { navigator.clipboard.writeText(memory.memory_id); toast.success(t('common.copied')) }}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
             >
               <Copy className="w-3 h-3" /> {memory.memory_id.slice(0, 12)}...
@@ -152,7 +153,7 @@ export function MemoryDetail() {
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 <FileText className="w-4 h-4" />
-                Summary
+                {t('memories.summary')}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -214,14 +215,14 @@ export function MemoryDetail() {
               <div className="flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-muted-foreground" />
                 <div>
-                  <Label className="text-xs text-muted-foreground">Created</Label>
+                  <Label className="text-xs text-muted-foreground">{t('memories.created')}</Label>
                   <p className="text-xs">{new Date(memory.created_at).toLocaleString()}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-muted-foreground" />
                 <div>
-                  <Label className="text-xs text-muted-foreground">Updated</Label>
+                  <Label className="text-xs text-muted-foreground">{t('memories.updated')}</Label>
                   <p className="text-xs">{new Date(memory.updated_at).toLocaleString()}</p>
                 </div>
               </div>
@@ -230,7 +231,7 @@ export function MemoryDetail() {
                   <Separator />
                   <div>
                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Tag className="w-3 h-3" /> Tags
+                      <Tag className="w-3 h-3" /> {t('memories.tags')}
                     </Label>
                     <div className="flex flex-wrap gap-1 mt-1.5">
                       {memory.tags.map((tag) => (
@@ -254,9 +255,9 @@ export function MemoryDetail() {
                   variant="outline"
                   size="sm"
                   className="w-full justify-start"
-                  onClick={() => archiveMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success('Archived') })}
+                  onClick={() => archiveMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success(t('memories.archived_success')) })}
                 >
-                  <Archive className="w-4 h-4 mr-2" /> Archive
+                  <Archive className="w-4 h-4 mr-2" /> {t('memories.archive')}
                 </Button>
               )}
               {memory.memory_status === 'archived' && (
@@ -264,9 +265,9 @@ export function MemoryDetail() {
                   variant="outline"
                   size="sm"
                   className="w-full justify-start"
-                  onClick={() => restoreMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success('Restored') })}
+                  onClick={() => restoreMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success(t('memories.restored_success')) })}
                 >
-                  <Undo2 className="w-4 h-4 mr-2" /> Restore
+                  <Undo2 className="w-4 h-4 mr-2" /> {t('memories.restore')}
                 </Button>
               )}
               {memory.memory_status !== 'deleted' && (
@@ -274,9 +275,9 @@ export function MemoryDetail() {
                   variant="outline"
                   size="sm"
                   className="w-full justify-start text-destructive hover:bg-destructive/10"
-                  onClick={() => softDeleteMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success('Soft deleted') })}
+                  onClick={() => softDeleteMutation.mutate({ id: memoryId }, { onSuccess: () => toast.success(t('memories.soft_deleted_success')) })}
                 >
-                  <Trash2 className="w-4 h-4 mr-2" /> Soft Delete
+                  <Trash2 className="w-4 h-4 mr-2" /> {t('memories.soft_delete')}
                 </Button>
               )}
               {memory.memory_status === 'deleted' && (
@@ -286,7 +287,7 @@ export function MemoryDetail() {
                   className="w-full justify-start"
                   onClick={() => setHardDeleteOpen(true)}
                 >
-                  <AlertTriangle className="w-4 h-4 mr-2" /> Hard Delete
+                  <AlertTriangle className="w-4 h-4 mr-2" /> {t('memories.hard_delete')}
                 </Button>
               )}
             </CardContent>
@@ -298,8 +299,8 @@ export function MemoryDetail() {
       <Dialog open={editMode} onOpenChange={setEditMode}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-auto">
           <DialogHeader>
-            <DialogTitle>{t('common.edit')} Memory</DialogTitle>
-            <DialogDescription>Edit the raw JSON representation of this memory.</DialogDescription>
+            <DialogTitle>{t('memories.edit_memory')}</DialogTitle>
+            <DialogDescription>{t('memories.edit_json_desc')}</DialogDescription>
           </DialogHeader>
           <Textarea
             value={editJson}
@@ -320,23 +321,23 @@ export function MemoryDetail() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="text-destructive flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5" /> Permanent Delete
+              <AlertTriangle className="w-5 h-5" /> {t('memories.permanent_delete')}
             </DialogTitle>
             <DialogDescription>
-              This action is irreversible. Enter the memory ID, your password, and a reason.
+              {t('memories.hard_delete_desc')}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div>
-              <Label className="text-xs">Memory ID: <code className="text-[10px]">{memory.memory_id}</code></Label>
+              <Label className="text-xs">{t('audit.memory_label')} <code className="text-[10px]">{memory.memory_id}</code></Label>
               <Input
-                placeholder="Confirm memory ID"
+                placeholder={t('memories.confirm_memory_id')}
                 value={hardDeleteForm.confirmId}
                 onChange={(e) => setHardDeleteForm((f) => ({ ...f, confirmId: e.target.value }))}
               />
             </div>
             <div>
-              <Label className="text-xs">Password</Label>
+              <Label className="text-xs">{t('auth.password')}</Label>
               <Input
                 type="password"
                 value={hardDeleteForm.password}
@@ -344,7 +345,7 @@ export function MemoryDetail() {
               />
             </div>
             <div>
-              <Label className="text-xs">Reason</Label>
+              <Label className="text-xs">{t('memories.reason')}</Label>
               <Input
                 value={hardDeleteForm.reason}
                 onChange={(e) => setHardDeleteForm((f) => ({ ...f, reason: e.target.value }))}
@@ -354,7 +355,7 @@ export function MemoryDetail() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setHardDeleteOpen(false)}>{t('common.cancel')}</Button>
             <Button variant="destructive" onClick={handleHardDelete} disabled={hardDeleteMutation.isPending}>
-              Permanently Delete
+              {t('memories.permanently_delete')}
             </Button>
           </DialogFooter>
         </DialogContent>

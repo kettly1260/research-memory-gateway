@@ -1,8 +1,8 @@
 // ─── Memory Types ───
 
 export type MemoryStatus = 'active' | 'archived' | 'deleted'
-export type MemoryType = 'research_finding' | 'methodology' | 'tool_usage' | 'domain_knowledge' | 'experimental_result' | 'literature_note'
-export type VerificationStatus = 'unverified' | 'verified' | 'disputed' | 'retracted'
+export type MemoryType = 'literature_review' | 'paper_note' | 'synthesis_route' | 'experiment_plan' | 'mechanism_hypothesis' | 'material_system' | 'presentation_outline' | 'research_decision'
+export type VerificationStatus = 'evidence_backed' | 'inferred' | 'unverified' | 'conflicting' | 'superseded' | 'retracted'
 
 export interface Claim {
   claim: string
@@ -167,10 +167,12 @@ export interface DashboardStats {
 // ─── Audit ───
 
 export interface AuditEvent {
+  event_id: string
   event_type: string
-  timestamp: string
+  actor?: string | null
   memory_id?: string
   metadata?: Record<string, unknown>
+  created_at: string
 }
 
 // ─── Stats API Response ───

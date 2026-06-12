@@ -667,7 +667,7 @@ async def api_import_execute(request: Request) -> Response:
         if exists and policy == "skip_existing":
             skipped += 1
             continue
-        data = memory.model_dump(mode="json")
+        data = dict(item)
         if policy == "import_as_new":
             data.pop("memory_id", None)
             data.setdefault("metadata", {})["imported_original_memory_id"] = memory.memory_id

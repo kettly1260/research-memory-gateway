@@ -183,6 +183,7 @@ class WebConfigStore:
 
     def patch(self, updates: dict[str, Any]) -> WebRuntimeConfig:
         data = self.load().model_dump(mode="json")
+        updates = _expand_dotted_keys(updates)
         _deep_update(data, updates)
         updated = WebRuntimeConfig.model_validate(data)
         self.save(updated)
@@ -426,6 +427,30 @@ def _deep_update(target: dict[str, Any], updates: dict[str, Any]) -> None:
             _deep_update(target[key], value)
         else:
             target[key] = deepcopy(value)
+
+
+def _expand_dotted_keys(updates: dict[str, Any]) -> dict[str, Any]:
+    expanded: dict[str, Any] = {}
+    for key, value in updates.items():
+        if "." not in key:
+            if isinstance(value, dict):
+                value = _expand_dotted_keys(value)
+            if isinstance(value, dict) and isinstance(expanded.get(key), dict):
+                _deep_update(expanded[key], value)
+            else:
+                expanded[key] = deepcopy(value)
+            continue
+
+        cursor = expanded
+        parts = key.split(".")
+        for part in parts[:-1]:
+            next_value = cursor.setdefault(part, {})
+            if not isinstance(next_value, dict):
+                next_value = {}
+                cursor[part] = next_value
+            cursor = next_value
+        cursor[parts[-1]] = deepcopy(value)
+    return expanded
 
 
 def _coerce(value: Any, value_type: str | None) -> Any:

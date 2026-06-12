@@ -17,16 +17,8 @@ import {
 import { ArrowLeft, Plus, AlertCircle } from 'lucide-react'
 import { useCreateMemory } from '@/lib/query'
 import { ApiError } from '@/lib/api'
+import { MEMORY_TYPES, formatMemoryType } from '@/constants/memoryTypes'
 import { toast } from 'sonner'
-
-const memoryTypes = [
-  'research_finding',
-  'methodology',
-  'tool_usage',
-  'domain_knowledge',
-  'experimental_result',
-  'literature_note',
-]
 
 export function MemoryNew() {
   const { t } = useTranslation()
@@ -36,7 +28,7 @@ export function MemoryNew() {
   const [form, setForm] = useState({
     project: '',
     topic: '',
-    memory_type: 'research_finding',
+    memory_type: 'paper_note',
     title: '',
     summary: '',
     tags: '',
@@ -55,7 +47,7 @@ export function MemoryNew() {
       try {
         data = JSON.parse(jsonContent)
       } catch {
-        toast.error('Invalid JSON')
+        toast.error(t('common.invalid_json'))
         return
       }
     } else {
@@ -69,7 +61,7 @@ export function MemoryNew() {
 
     createMutation.mutate(data as Parameters<typeof createMutation.mutate>[0], {
       onSuccess: (memory) => {
-        toast.success('Memory created')
+        toast.success(t('memories.created_success'))
         navigate({ to: `/memories/${memory.memory_id}` as string })
       },
       onError: (err) => {
@@ -94,7 +86,7 @@ export function MemoryNew() {
       {/* Mode toggle */}
       <div className="flex gap-2">
         <Button variant={jsonMode ? 'outline' : 'default'} size="sm" onClick={() => setJsonMode(false)}>
-          Form
+          {t('memories.form')}
         </Button>
         <Button variant={jsonMode ? 'default' : 'outline'} size="sm" onClick={() => setJsonMode(true)}>
           JSON
@@ -107,7 +99,7 @@ export function MemoryNew() {
           <CardContent className="py-4 space-y-3">
             <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
               <AlertCircle className="w-4 h-4" />
-              <span className="text-sm font-medium">Potential overlaps detected</span>
+              <span className="text-sm font-medium">{t('memories.overlaps_detected')}</span>
             </div>
             {overlaps.map((o) => (
               <div key={o.memory_id} className="flex items-center justify-between text-sm">
@@ -116,7 +108,7 @@ export function MemoryNew() {
               </div>
             ))}
             <Button size="sm" onClick={() => handleSubmit(true)} disabled={createMutation.isPending}>
-              Confirm & Save Anyway
+              {t('memories.confirm_save_anyway')}
             </Button>
           </CardContent>
         </Card>
@@ -125,14 +117,14 @@ export function MemoryNew() {
       {jsonMode ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">JSON Editor</CardTitle>
+            <CardTitle className="text-base">{t('memories.json_editor')}</CardTitle>
           </CardHeader>
           <CardContent>
             <Textarea
               value={jsonContent}
               onChange={(e) => setJsonContent(e.target.value)}
               className="font-mono text-xs min-h-[400px]"
-              placeholder='{"project":"demo","topic":"...","memory_type":"research_finding","title":"...","summary":"..."}'
+              placeholder='{"project":"demo","topic":"...","memory_type":"paper_note","title":"...","summary":"..."}'
             />
           </CardContent>
         </Card>
@@ -145,7 +137,7 @@ export function MemoryNew() {
                 <Input
                   value={form.project}
                   onChange={(e) => handleChange('project', e.target.value)}
-                  placeholder="e.g. GenomicsAI"
+                  placeholder={t('memories.placeholder_project')}
                   required
                 />
               </div>
@@ -154,7 +146,7 @@ export function MemoryNew() {
                 <Input
                   value={form.topic}
                   onChange={(e) => handleChange('topic', e.target.value)}
-                  placeholder="e.g. Variant Calling"
+                  placeholder={t('memories.placeholder_topic')}
                   required
                 />
               </div>
@@ -167,18 +159,18 @@ export function MemoryNew() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {memoryTypes.map((type) => (
-                      <SelectItem key={type} value={type}>{type}</SelectItem>
+                    {MEMORY_TYPES.map((type) => (
+                      <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>Tags (comma-separated)</Label>
+                <Label>{t('memories.tags_comma')}</Label>
                 <Input
                   value={form.tags}
                   onChange={(e) => handleChange('tags', e.target.value)}
-                  placeholder="e.g. AI, genomics, CRISPR"
+                  placeholder={t('memories.placeholder_tags')}
                 />
               </div>
             </div>
@@ -187,16 +179,16 @@ export function MemoryNew() {
               <Input
                 value={form.title}
                 onChange={(e) => handleChange('title', e.target.value)}
-                placeholder="Memory title"
+                placeholder={t('memories.placeholder_title')}
                 required
               />
             </div>
             <div className="space-y-2">
-              <Label>Summary</Label>
+              <Label>{t('memories.summary')}</Label>
               <Textarea
                 value={form.summary}
                 onChange={(e) => handleChange('summary', e.target.value)}
-                placeholder="Describe this memory..."
+                placeholder={t('memories.placeholder_summary')}
                 className="min-h-[120px]"
                 required
               />

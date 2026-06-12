@@ -32,7 +32,7 @@ export function ImportPage() {
       const parsed = JSON.parse(jsonContent)
       return Array.isArray(parsed) ? parsed : [parsed]
     } catch {
-      toast.error('Invalid JSON')
+      toast.error(t('common.invalid_json'))
       return null
     }
   }, [jsonContent])
@@ -43,7 +43,7 @@ export function ImportPage() {
     validateMutation.mutate({ memories, policy }, {
       onSuccess: (data) => {
         setValidationResult(data)
-        toast.success(`Validated: ${data.valid} valid, ${data.invalid} invalid`)
+        toast.success(t('import.validated_toast', { valid: data.valid, invalid: data.invalid }))
       },
     })
   }
@@ -53,7 +53,7 @@ export function ImportPage() {
     if (!memories) return
     executeMutation.mutate({ memories, policy, confirmed }, {
       onSuccess: (data) => {
-        toast.success(`Imported: ${data.imported}, Skipped: ${data.skipped}`)
+        toast.success(t('import.imported_toast', { imported: data.imported, skipped: data.skipped }))
         setJsonContent('')
         setValidationResult(null)
       },
@@ -83,10 +83,10 @@ export function ImportPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Upload className="w-4 h-4" />
-            JSON Import
+            {t('import.json_import')}
           </CardTitle>
           <CardDescription>
-            Drag & drop a JSON file or paste JSON content. Supports single objects or arrays.
+            {t('import.json_import_desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -113,25 +113,25 @@ export function ImportPage() {
             }}
           >
             <FileJson className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
-            <p className="text-sm text-muted-foreground">Drop JSON file here or click to upload</p>
+            <p className="text-sm text-muted-foreground">{t('import.drop_hint')}</p>
           </div>
 
           <Textarea
             value={jsonContent}
             onChange={(e) => setJsonContent(e.target.value)}
             className="font-mono text-xs min-h-[200px]"
-            placeholder='[{"project":"demo","topic":"...","memory_type":"research_finding","title":"...","summary":"..."}]'
+            placeholder='[{"project":"demo","topic":"...","memory_type":"paper_note","title":"...","summary":"..."}]'
           />
 
           <div className="flex items-center gap-4">
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">Policy</label>
+              <label className="text-xs text-muted-foreground font-medium">{t('import.policy')}</label>
               <Select value={policy} onValueChange={(v) => { if (v !== null) setPolicy(v) }}>
                 <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="skip_existing">Skip Existing</SelectItem>
-                  <SelectItem value="overwrite_existing">Overwrite Existing</SelectItem>
-                  <SelectItem value="import_as_new">Import as New</SelectItem>
+                  <SelectItem value="skip_existing">{t('import.skip_existing')}</SelectItem>
+                  <SelectItem value="overwrite_existing">{t('import.overwrite_existing')}</SelectItem>
+                  <SelectItem value="import_as_new">{t('import.import_as_new')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -140,11 +140,11 @@ export function ImportPage() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={handleValidate} disabled={!jsonContent || validateMutation.isPending}>
               {validateMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />}
-              Validate
+              {t('import.validate')}
             </Button>
             <Button onClick={() => handleExecute(false)} disabled={!jsonContent || executeMutation.isPending}>
               {executeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Upload className="w-4 h-4 mr-2" />}
-              Execute Import
+              {t('import.execute')}
             </Button>
           </div>
         </CardContent>
@@ -154,21 +154,21 @@ export function ImportPage() {
       {validationResult && (
         <Card className="animate-fade-in">
           <CardHeader>
-            <CardTitle className="text-base">Validation Results</CardTitle>
+            <CardTitle className="text-base">{t('import.validation_results')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-4">
               <div className="flex items-center gap-2">
-                <Badge variant="default" className="text-xs">{validationResult.valid} valid</Badge>
+                  <Badge variant="default" className="text-xs">{validationResult.valid} {t('import.valid')}</Badge>
               </div>
               {validationResult.invalid > 0 && (
                 <div className="flex items-center gap-2">
-                  <Badge variant="destructive" className="text-xs">{validationResult.invalid} invalid</Badge>
+                  <Badge variant="destructive" className="text-xs">{validationResult.invalid} {t('import.invalid')}</Badge>
                 </div>
               )}
               {validationResult.duplicates > 0 && (
                 <div className="flex items-center gap-2">
-                  <Badge variant="secondary" className="text-xs">{validationResult.duplicates} duplicates</Badge>
+                  <Badge variant="secondary" className="text-xs">{validationResult.duplicates} {t('import.duplicates')}</Badge>
                 </div>
               )}
             </div>
@@ -177,7 +177,7 @@ export function ImportPage() {
                 {validationResult.errors.map((err, i) => (
                   <div key={i} className="flex items-center gap-2 text-sm text-destructive">
                     <AlertCircle className="w-3 h-3" />
-                    <span>Item {err.index}: {err.error}</span>
+                    <span>{t('common.item')} {err.index}: {err.error}</span>
                   </div>
                 ))}
               </div>

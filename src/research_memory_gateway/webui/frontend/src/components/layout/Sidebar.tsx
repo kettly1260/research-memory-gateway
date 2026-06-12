@@ -33,7 +33,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <Database className="w-5 h-5 text-sidebar-primary shrink-0" />
         {!collapsed && (
           <span className="ml-2 font-semibold tracking-tight text-sidebar-foreground animate-fade-in whitespace-nowrap">
-            Memory Gateway
+            {t('common.app_name')}
           </span>
         )}
       </div>
@@ -115,7 +115,7 @@ export function MobileSidebarContent({ onClose }: { onClose: () => void }) {
     <div className="flex flex-col h-full">
       <div className="h-14 flex items-center px-4 border-b">
         <Database className="w-5 h-5 text-primary" />
-        <span className="ml-2 font-semibold tracking-tight">Memory Gateway</span>
+        <span className="ml-2 font-semibold tracking-tight">{t('common.app_name')}</span>
       </div>
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
         {navItems.map((item) => {

@@ -1,0 +1,1 @@
+var e=[`literature_review`,`paper_note`,`synthesis_route`,`experiment_plan`,`mechanism_hypothesis`,`material_system`,`presentation_outline`,`research_decision`];function t(e){return e.split(`_`).map(e=>e.charAt(0).toUpperCase()+e.slice(1)).join(` `)}export{t as n,e as t};

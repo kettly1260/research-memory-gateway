@@ -7,6 +7,7 @@ import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, 
 import { useMemories, useVectorCoverage, useStats } from "@/lib/query"
 import { Link } from "@tanstack/react-router"
 import type { ResearchMemory } from "@/types/api"
+import { formatMemoryType } from "@/constants/memoryTypes"
 
 const CHART_COLORS = [
   'var(--chart-1)',
@@ -215,7 +216,7 @@ export function Dashboard() {
                     className="w-2.5 h-2.5 rounded-full"
                     style={{ background: CHART_COLORS[index % CHART_COLORS.length] }}
                   />
-                  <span className="text-muted-foreground">{item.name}</span>
+                  <span className="text-muted-foreground">{formatMemoryType(item.name)}</span>
                   <span className="font-medium">{item.value}</span>
                 </div>
               ))}
@@ -288,7 +289,7 @@ export function Dashboard() {
                     </p>
                   </div>
                   <Badge variant="outline" className="shrink-0 text-[10px]">
-                    {memory.memory_type}
+                    {formatMemoryType(memory.memory_type)}
                   </Badge>
                 </Link>
               ))}

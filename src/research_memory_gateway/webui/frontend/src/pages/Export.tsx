@@ -29,7 +29,7 @@ export function ExportsPage() {
       {
         onSuccess: (data) => {
           setResult(data)
-          toast.success(`Exported ${data.count} memories`)
+          toast.success(t('export.exported_toast', { count: data.count }))
         },
         onError: (err) => toast.error(String(err)),
       },
@@ -44,42 +44,42 @@ export function ExportsPage() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Download className="w-4 h-4" />
-            Export Memories
+            {t('export.title')}
           </CardTitle>
           <CardDescription>
-            Export memories as Markdown, JSON, or both. Only active memories are exported by default.
+            {t('export.desc')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
-              <Label>Format</Label>
+              <Label>{t('export.format')}</Label>
               <Select value={format} onValueChange={(v) => { if (v !== null) setFormat(v) }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="both">Both (JSON + Markdown)</SelectItem>
+                  <SelectItem value="both">{t('export.both')}</SelectItem>
                   <SelectItem value="json">JSON</SelectItem>
                   <SelectItem value="markdown">Markdown</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Include Archived</Label>
+              <Label>{t('export.include_archived')}</Label>
               <Select value={String(includeArchived)} onValueChange={(v) => setIncludeArchived(v === 'true')}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="false">No</SelectItem>
-                  <SelectItem value="true">Yes</SelectItem>
+                  <SelectItem value="false">{t('common.no')}</SelectItem>
+                  <SelectItem value="true">{t('common.yes')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Include Deleted</Label>
+              <Label>{t('export.include_deleted')}</Label>
               <Select value={String(includeDeleted)} onValueChange={(v) => setIncludeDeleted(v === 'true')}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="false">No</SelectItem>
-                  <SelectItem value="true">Yes</SelectItem>
+                  <SelectItem value="false">{t('common.no')}</SelectItem>
+                  <SelectItem value="true">{t('common.yes')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -91,7 +91,7 @@ export function ExportsPage() {
             ) : (
               <Download className="w-4 h-4 mr-2" />
             )}
-            Export
+            {t('nav.export')}
           </Button>
         </CardContent>
       </Card>
@@ -102,7 +102,7 @@ export function ExportsPage() {
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
               <Check className="w-4 h-4 text-emerald-500" />
-              Export Complete
+              {t('export.complete')}
             </CardTitle>
           </CardHeader>
           <CardContent>

@@ -347,6 +347,8 @@ class ResearchMemoryService:
                 continue
             if any(evidence_id not in evidence_ids for evidence_id in claim.evidence_ids):
                 raise ValueError("claim references evidence_id that does not exist")
+            if claim.verification_status == VerificationStatus.unverified and "verification_status" not in claim.model_fields_set:
+                claim.verification_status = VerificationStatus.evidence_backed
 
     def _overlap_summary(self, result: SearchResult) -> dict[str, Any]:
         memory = result.memory

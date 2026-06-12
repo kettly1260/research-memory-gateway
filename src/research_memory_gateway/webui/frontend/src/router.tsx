@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ComponentType } from 'react'
 import { createRootRoute, createRoute, createRouter, Outlet } from '@tanstack/react-router'
 import { AppShell } from './components/layout/AppShell'
+import { useTranslation } from 'react-i18next'
 
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })))
 const Memories = lazy(() => import('./pages/Memories').then((module) => ({ default: module.Memories })))
@@ -15,8 +16,9 @@ const Audit = lazy(() => import('./pages/Audit').then((module) => ({ default: mo
 
 function lazyRoute(Component: ComponentType) {
   return function LazyRouteComponent() {
+    const { t } = useTranslation()
     return (
-      <Suspense fallback={<div className="p-6 md:p-8 animate-fade-in text-sm text-muted-foreground">Loading...</div>}>
+      <Suspense fallback={<div className="p-6 md:p-8 animate-fade-in text-sm text-muted-foreground">{t('common.loading')}</div>}>
         <Component />
       </Suspense>
     )

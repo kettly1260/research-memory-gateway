@@ -51,6 +51,21 @@ const eventColors: Record<string, string> = {
   'retrieval.backfill_dry_run': 'bg-slate-500/10 text-slate-600 dark:text-slate-400',
 }
 
+const eventLabels: Record<string, string> = {
+  'memory.created': 'audit.event_memory_created',
+  'memory.updated': 'audit.event_memory_updated',
+  'memory.archived': 'audit.event_memory_archived',
+  'memory.restored': 'audit.event_memory_restored',
+  'memory.soft_deleted': 'audit.event_memory_soft_deleted',
+  'memory.hard_deleted': 'audit.event_memory_hard_deleted',
+  'security.password_changed': 'audit.event_security_password_changed',
+  'import.json_completed': 'audit.event_import_json_completed',
+  'export.created': 'audit.event_export_created',
+  'retrieval.backfill_started': 'audit.event_retrieval_backfill_started',
+  'retrieval.backfill_completed': 'audit.event_retrieval_backfill_completed',
+  'retrieval.backfill_failed': 'audit.event_retrieval_backfill_failed',
+}
+
 const PAGE_SIZE = 50
 
 export function Audit() {
@@ -74,7 +89,7 @@ export function Audit() {
         <h1 className="text-2xl font-bold tracking-tight">{t('nav.audit')}</h1>
         <Badge variant="outline" className="text-xs">
           <Clock className="w-3 h-3 mr-1" />
-          {total} events
+          {t('audit.event_count', { count: total })}
         </Badge>
       </div>
 
@@ -83,31 +98,22 @@ export function Audit() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Filter className="w-4 h-4" />
-            Filters
+            {t('audit.filters')}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 flex-wrap">
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">Event Type</label>
+              <label className="text-xs text-muted-foreground font-medium">{t('audit.event_type')}</label>
               <Select value={eventType ?? '_all'} onValueChange={(v) => { if (v !== null) { setEventType(v === '_all' ? undefined : v); setPage(0) } }}>
                 <SelectTrigger className="w-[240px]">
-                  <SelectValue placeholder="All Events" />
+                  <SelectValue placeholder={t('audit.all_events')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="_all">All Events</SelectItem>
-                  <SelectItem value="memory.created">Memory Created</SelectItem>
-                  <SelectItem value="memory.updated">Memory Updated</SelectItem>
-                  <SelectItem value="memory.archived">Memory Archived</SelectItem>
-                  <SelectItem value="memory.restored">Memory Restored</SelectItem>
-                  <SelectItem value="memory.soft_deleted">Memory Soft Deleted</SelectItem>
-                  <SelectItem value="memory.hard_deleted">Memory Hard Deleted</SelectItem>
-                  <SelectItem value="security.password_changed">Password Changed</SelectItem>
-                  <SelectItem value="import.json_completed">Import Completed</SelectItem>
-                  <SelectItem value="export.created">Export Created</SelectItem>
-                  <SelectItem value="retrieval.backfill_started">Backfill Started</SelectItem>
-                  <SelectItem value="retrieval.backfill_completed">Backfill Completed</SelectItem>
-                  <SelectItem value="retrieval.backfill_failed">Backfill Failed</SelectItem>
+                  <SelectItem value="_all">{t('audit.all_events')}</SelectItem>
+                  {Object.entries(eventLabels).map(([value, labelKey]) => (
+                    <SelectItem key={value} value={value}>{t(labelKey)}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -120,7 +126,7 @@ export function Audit() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Activity className="w-4 h-4" />
-            Event Timeline
+            {t('audit.timeline')}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -139,8 +145,8 @@ export function Audit() {
           ) : events.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <Clock className="w-8 h-8 mx-auto mb-3 opacity-50" />
-              <p className="text-sm">No audit events recorded yet.</p>
-              <p className="text-xs mt-1">Events will appear here as you interact with the system.</p>
+              <p className="text-sm">{t('audit.empty_title')}</p>
+              <p className="text-xs mt-1">{t('audit.empty_desc')}</p>
             </div>
           ) : (
             <div className="relative">
@@ -148,12 +154,12 @@ export function Audit() {
               <div className="absolute left-5 top-0 bottom-0 w-px bg-border" />
 
               <div className="space-y-6">
-                {events.map((event, i) => {
+                {events.map((event) => {
                   const Icon = eventIcons[event.event_type] || Activity
                   const colorClass = eventColors[event.event_type] || 'bg-muted text-muted-foreground'
 
                   return (
-                    <div key={`${event.timestamp}-${i}`} className="flex gap-4 relative stagger-item">
+                    <div key={event.event_id} className="flex gap-4 relative stagger-item">
                       <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 z-10 ${colorClass}`}>
                         <Icon className="w-4 h-4" />
                       </div>
@@ -161,12 +167,12 @@ export function Audit() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <Badge variant="outline" className="text-[10px]">{event.event_type}</Badge>
                           <span className="text-xs text-muted-foreground">
-                            {new Date(event.timestamp).toLocaleString()}
+                            {new Date(event.created_at).toLocaleString()}
                           </span>
                         </div>
                         {event.memory_id && (
                           <p className="text-xs text-muted-foreground mt-1">
-                            Memory: <code className="text-[10px]">{event.memory_id}</code>
+                            {t('audit.memory_label')} <code className="text-[10px]">{event.memory_id}</code>
                           </p>
                         )}
                         {event.metadata && Object.keys(event.metadata).length > 0 && (
@@ -186,7 +192,7 @@ export function Audit() {
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-6 pt-4 border-t">
               <p className="text-xs text-muted-foreground">
-                Page {page + 1} of {totalPages} · {total} total events
+                {t('audit.page_summary', { page: page + 1, totalPages, total })}
               </p>
               <div className="flex items-center gap-2">
                 <Button

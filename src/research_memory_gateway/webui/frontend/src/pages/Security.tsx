@@ -70,7 +70,7 @@ function PasswordTab() {
       { currentPassword, newPassword },
       {
         onSuccess: () => {
-          toast.success('Password changed. Please log in again.')
+          toast.success(t('security.password_changed'))
           setCurrentPassword('')
           setNewPassword('')
           // Clear JWT tokens
@@ -91,12 +91,12 @@ function PasswordTab() {
           <Lock className="w-4 h-4 text-primary" />
           {t('security.tab_password')}
         </CardTitle>
-        <CardDescription>Change the administrator password. You will be logged out after changing.</CardDescription>
+        <CardDescription>{t('security.password_desc')}</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4 max-w-md">
           <div className="space-y-2">
-            <Label>Current Password</Label>
+            <Label>{t('security.current_password')}</Label>
             <div className="relative">
               <Input
                 type={showCurrent ? 'text' : 'password'}
@@ -114,7 +114,7 @@ function PasswordTab() {
             </div>
           </div>
           <div className="space-y-2">
-            <Label>New Password</Label>
+            <Label>{t('security.new_password')}</Label>
             <div className="relative">
               <Input
                 type={showNew ? 'text' : 'password'}
@@ -147,6 +147,7 @@ function PasswordTab() {
 }
 
 function ApiKeysTab() {
+  const { t } = useTranslation()
   const { data: keysRes, isLoading, refetch } = useApiKeys()
   const createMutation = useCreateApiKey()
   const deleteMutation = useDeleteApiKey()
@@ -175,10 +176,10 @@ function ApiKeysTab() {
   }
 
   const handleDelete = (id: string) => {
-    if (!confirm('Are you sure you want to revoke this API Key? Any clients using it will lose access immediately.')) return
+    if (!confirm(t('security.revoke_confirm'))) return
     deleteMutation.mutate(id, {
       onSuccess: () => {
-        toast.success('API Key revoked')
+        toast.success(t('security.apikey_revoked'))
         refetch()
       },
       onError: (err: any) => toast.error(err?.message || String(err))
@@ -188,7 +189,7 @@ function ApiKeysTab() {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     setCopied(true)
-    toast.success('API Key copied to clipboard')
+    toast.success(t('security.apikey_copied'))
     setTimeout(() => setCopied(false), 2000)
   }
 
@@ -200,46 +201,46 @@ function ApiKeysTab() {
         <div>
           <CardTitle className="text-base flex items-center gap-2">
             <KeyRound className="w-4 h-4 text-primary" />
-            API Key Management
+            {t('security.apikey_management')}
           </CardTitle>
           <CardDescription>
-            Generate credentials for external clients (like Cline or Antigravity) to access the gateway.
+            {t('security.apikey_management_desc')}
           </CardDescription>
         </div>
         <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
           <Button onClick={() => { setCreatedKeyData(null); setCreateDialogOpen(true) }} size="sm">
             <Plus className="w-4 h-4 mr-2" />
-            New API Key
+            {t('security.new_api_key')}
           </Button>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Create API Key</DialogTitle>
+              <DialogTitle>{t('security.create_api_key')}</DialogTitle>
               <DialogDescription>
-                Provide a name and an optional custom API key. If left blank, a secure random key will be generated.
+                {t('security.create_api_key_desc')}
               </DialogDescription>
             </DialogHeader>
             {!createdKeyData ? (
               <form onSubmit={handleCreate} className="space-y-4 pt-2">
                 <div className="space-y-2">
-                  <Label>Key Name</Label>
+                  <Label>{t('security.apikey_name')}</Label>
                   <Input 
                     value={newKeyName} 
                     onChange={(e) => setNewKeyName(e.target.value)} 
-                    placeholder="e.g. Claude Desktop Client" 
+                    placeholder={t('security.placeholder_key_name')}
                     required 
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Custom API Key (Optional)</Label>
+                  <Label>{t('security.custom_api_key')}</Label>
                   <Input 
                     value={customKey} 
                     onChange={(e) => setCustomKey(e.target.value)} 
-                    placeholder="Leave blank to auto-generate" 
+                    placeholder={t('security.placeholder_custom_key')}
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                   {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Generate Key
+                  {t('security.generate_key')}
                 </Button>
               </form>
             ) : (
@@ -247,27 +248,27 @@ function ApiKeysTab() {
                 <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-lg text-sm flex gap-2">
                   <ShieldCheck className="w-5 h-5 shrink-0 text-emerald-500" />
                   <div>
-                    <span className="font-semibold">Key created successfully!</span>
+                    <span className="font-semibold">{t('security.key_created')}</span>
                     <p className="text-xs mt-1 text-emerald-700/80 dark:text-emerald-400/80">
-                      Copy the key now. For your security, this key will not be shown again.
+                      {t('security.copy_key_now')}
                     </p>
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Key Name</Label>
+                  <Label>{t('security.apikey_name')}</Label>
                   <Input value={createdKeyData.name} readOnly className="bg-muted" />
                 </div>
                 <div className="space-y-2">
-                  <Label>API Key Secret</Label>
+                  <Label>{t('security.apikey_secret')}</Label>
                   <div className="flex gap-2">
                     <Input value={createdKeyData.api_key} readOnly className="font-mono text-sm" />
                     <Button onClick={() => copyToClipboard(createdKeyData.api_key)} variant="outline">
-                      {copied ? 'Copied' : <Copy className="w-4 h-4" />}
+                      {copied ? t('common.copied') : <Copy className="w-4 h-4" />}
                     </Button>
                   </div>
                 </div>
                 <Button onClick={() => setCreateDialogOpen(false)} className="w-full">
-                  Close
+                  {t('common.close')}
                 </Button>
               </div>
             )}
@@ -284,18 +285,18 @@ function ApiKeysTab() {
         ) : keys.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <KeyRound className="w-8 h-8 text-muted-foreground/30 mb-2 animate-pulse" />
-            <p className="text-sm">No API Keys created yet</p>
+            <p className="text-sm">{t('security.no_api_keys')}</p>
           </div>
         ) : (
           <div className="border rounded-lg overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Key ID</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Last Used</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{t('security.apikey_name')}</TableHead>
+                  <TableHead>{t('security.key_id')}</TableHead>
+                  <TableHead>{t('security.apikey_created')}</TableHead>
+                  <TableHead>{t('security.apikey_last_used')}</TableHead>
+                  <TableHead>{t('common.status')}</TableHead>
                   <TableHead className="w-[100px]"></TableHead>
                 </TableRow>
               </TableHeader>
@@ -308,7 +309,7 @@ function ApiKeysTab() {
                       {new Date(key.created_at).toLocaleString()}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {key.last_used_at ? new Date(key.last_used_at).toLocaleString() : 'Never'}
+                      {key.last_used_at ? new Date(key.last_used_at).toLocaleString() : t('common.never')}
                     </TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400 border border-emerald-200/50 dark:border-emerald-800/30">
@@ -337,6 +338,7 @@ function ApiKeysTab() {
 }
 
 function ConnectionsTab() {
+  const { t } = useTranslation()
   const { data: connRes, isLoading } = useConnections()
   const conns = connRes?.items || []
 
@@ -345,10 +347,10 @@ function ConnectionsTab() {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <RefreshCw className="w-4 h-4 text-primary" />
-          Active Connection Monitoring
+          {t('security.active_connections_title')}
         </CardTitle>
         <CardDescription>
-          Real-time view of external clients accessing the Gateway API (auto-refreshing every 5 seconds).
+          {t('security.active_connections_desc')}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -360,18 +362,18 @@ function ConnectionsTab() {
         ) : conns.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
             <RefreshCw className="w-8 h-8 text-muted-foreground/30 mb-2 animate-pulse" />
-            <p className="text-sm">No active client connections detected</p>
+            <p className="text-sm">{t('security.no_connections')}</p>
           </div>
         ) : (
           <div className="border rounded-lg overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Client IP</TableHead>
-                  <TableHead>API Key Name</TableHead>
-                  <TableHead>Client UA Info</TableHead>
-                  <TableHead>Request Count</TableHead>
-                  <TableHead>Last Active</TableHead>
+                  <TableHead>{t('security.client_ip')}</TableHead>
+                  <TableHead>{t('security.apikey_name')}</TableHead>
+                  <TableHead>{t('security.client_ua')}</TableHead>
+                  <TableHead>{t('security.request_count')}</TableHead>
+                  <TableHead>{t('security.last_active')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -380,11 +382,11 @@ function ConnectionsTab() {
                     <TableCell className="font-mono text-sm font-semibold">{conn.client_ip}</TableCell>
                     <TableCell>
                       <span className="inline-flex items-center px-2 py-0.5 rounded font-medium text-xs bg-primary/10 text-primary border border-primary/20">
-                        {conn.key_name || 'Legacy/Default'}
+                        {conn.key_name || t('security.legacy_default')}
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground" title={conn.client_info || 'N/A'}>
-                      {conn.client_info || 'N/A'}
+                    <TableCell className="max-w-[240px] truncate text-xs text-muted-foreground" title={conn.client_info || t('security.not_available')}>
+                      {conn.client_info || t('security.not_available')}
                     </TableCell>
                     <TableCell className="text-sm font-semibold">{conn.request_count}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">

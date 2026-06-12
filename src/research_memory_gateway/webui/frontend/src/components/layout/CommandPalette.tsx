@@ -39,10 +39,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   }, [onOpenChange])
 
   return (
-    <CommandDialog open={open} onOpenChange={onOpenChange}>
+    <CommandDialog open={open} onOpenChange={onOpenChange} title={t("command.title")} description={t("command.description")}>
       <CommandInput placeholder={t("common.search")} />
       <CommandList>
-        <CommandEmpty>{t("common.no_results") || "No results found."}</CommandEmpty>
+        <CommandEmpty>{t("common.no_results")}</CommandEmpty>
         <CommandGroup heading={t("nav.dashboard")}>
           <CommandItem onSelect={() => runCommand(() => navigate({ to: "/" }))}>
             <LayoutDashboard className="mr-2 h-4 w-4" />

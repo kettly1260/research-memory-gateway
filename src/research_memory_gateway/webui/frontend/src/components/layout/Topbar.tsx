@@ -59,7 +59,7 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
         <div className="hidden md:flex items-center gap-2 mr-4">
           <Database className="w-5 h-5 text-primary shrink-0" />
           <span className="font-semibold tracking-tight text-foreground whitespace-nowrap">
-            Memory Gateway
+            {t('common.app_name')}
           </span>
         </div>
 
@@ -115,18 +115,18 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuLabel>{t('common.theme') || 'Theme'}</DropdownMenuLabel>
+            <DropdownMenuLabel>{t('common.theme')}</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => setTheme('light')}>
-              <Sun className="mr-2 h-4 w-4" /> Light
+              <Sun className="mr-2 h-4 w-4" /> {t('theme.light')}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setTheme('dark')}>
-              <Moon className="mr-2 h-4 w-4" /> Dark
+              <Moon className="mr-2 h-4 w-4" /> {t('theme.dark')}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setTheme('system')}>
-              <Monitor className="mr-2 h-4 w-4" /> System
+              <Monitor className="mr-2 h-4 w-4" /> {t('theme.system')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel>Accent</DropdownMenuLabel>
+            <DropdownMenuLabel>{t('theme.accent')}</DropdownMenuLabel>
             <div className="grid grid-cols-5 gap-1.5 px-2 py-1.5">
               {Object.entries(presets).map(([name, hue]) => (
                 <button
@@ -166,7 +166,7 @@ export function Topbar({ onMenuClick, onSearchClick }: TopbarProps) {
             })
           }}
           className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-          title={t('nav.logout') || 'Logout'}
+          title={t('nav.logout')}
         >
           <LogOut className="h-4 w-4" />
         </Button>

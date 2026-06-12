@@ -618,6 +618,48 @@ def test_delete_research_memory_requires_confirmation(tmp_path) -> None:
     assert service.get_research_memory(memory.memory_id).memory_id == memory.memory_id
 
 
+def test_service_marks_default_claim_with_evidence_as_evidence_backed(tmp_path) -> None:
+    service = make_service(tmp_path)
+    memory = service.save_research_memory(
+        user_confirmed=True,
+        memory={
+            "project": "demo",
+            "topic": "Mercury ion probe",
+            "memory_type": "paper_note",
+            "title": "Mercury paper",
+            "summary": "A paper reports sulfur-doped probes for mercury ions.",
+            "evidence": [{"evidence_id": "ev_1", "quote": "Sulfur doping improves Hg2+ affinity."}],
+            "claims": [{"claim": "Sulfur doping improves Hg2+ affinity.", "evidence_ids": ["ev_1"]}],
+        },
+    )
+
+    assert memory.claims[0].verification_status == "evidence_backed"
+
+
+def test_service_preserves_explicit_unverified_claim_with_evidence(tmp_path) -> None:
+    service = make_service(tmp_path)
+    memory = service.save_research_memory(
+        user_confirmed=True,
+        memory={
+            "project": "demo",
+            "topic": "Mercury ion probe",
+            "memory_type": "paper_note",
+            "title": "Mercury paper",
+            "summary": "A paper reports sulfur-doped probes for mercury ions.",
+            "evidence": [{"evidence_id": "ev_1", "quote": "Sulfur doping improves Hg2+ affinity."}],
+            "claims": [
+                {
+                    "claim": "Sulfur doping improves Hg2+ affinity.",
+                    "verification_status": "unverified",
+                    "evidence_ids": ["ev_1"],
+                }
+            ],
+        },
+    )
+
+    assert memory.claims[0].verification_status == "unverified"
+
+
 def test_update_research_memory_refreshes_search_index(tmp_path) -> None:
     service = make_service(tmp_path)
     memory = service.save_research_memory(
@@ -1000,6 +1042,22 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
     assert "value" not in effective["embedding"]["api_key"]
 
 
+def test_webui_config_accepts_dotted_provider_fields(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+
+    patched = client.patch(
+        "/admin/api/config/web-config",
+        headers={"x-csrf-token": token},
+        json={"rerank.enabled": True, "rerank.base_url": "http://rerank.local"},
+    )
+    effective = client.get("/admin/api/config/effective").json()
+
+    assert patched.status_code == 200
+    assert effective["rerank"]["enabled"] == {"value": True, "source": "web_config"}
+    assert effective["rerank"]["base_url"] == {"value": "http://rerank.local", "source": "web_config"}
+
+
 def test_webui_config_models_fetches_openai_compatible_list(tmp_path, monkeypatch) -> None:
     calls = []
 
@@ -1038,14 +1096,26 @@ def test_webui_config_models_fetches_openai_compatible_list(tmp_path, monkeypatc
 def test_webui_json_import_export_and_lifecycle(tmp_path, monkeypatch) -> None:
     client, _app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)
-    memory = {"memory_id": "mem_imported", "project": "demo", "topic": "Hg", "memory_type": "paper_note", "title": "Imported", "summary": "Imported summary."}
+    memory = {
+        "memory_id": "mem_imported",
+        "project": "demo",
+        "topic": "Hg",
+        "memory_type": "paper_note",
+        "title": "Imported",
+        "summary": "Imported summary.",
+        "evidence": [{"evidence_id": "ev_1", "quote": "Sulfur doping improves Hg2+ affinity."}],
+        "claims": [{"claim": "Sulfur doping improves Hg2+ affinity.", "evidence_ids": ["ev_1"]}],
+    }
     validate = client.post("/admin/api/import/json/validate", headers={"x-csrf-token": token}, json={"memories": [memory]})
     execute = client.post("/admin/api/import/json/execute", headers={"x-csrf-token": token}, json={"memories": [memory], "policy": "skip_existing"})
+    imported = client.get("/admin/api/memories/mem_imported", headers={"x-csrf-token": token})
     archived = client.post("/admin/api/memories/mem_imported/archive", headers={"x-csrf-token": token}, json={"reason": "old"})
     exported = client.post("/admin/api/export", headers={"x-csrf-token": token}, json={"format": "json", "include_archived": True})
 
     assert validate.json()["valid"] == 1
     assert execute.json()["imported"] == 1
+    assert imported.json()["memory_type"] == "paper_note"
+    assert imported.json()["claims"][0]["verification_status"] == "evidence_backed"
     assert archived.json()["memory_status"] == MemoryStatus.archived.value
     assert exported.json()["count"] == 1
 

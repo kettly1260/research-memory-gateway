@@ -40,6 +40,7 @@ import {
   useProjects
 } from '@/lib/query'
 import { api } from '@/lib/api'
+import { MEMORY_TYPES, formatMemoryType } from '@/constants/memoryTypes'
 import { toast } from 'sonner'
 
 function ConnectionStatus({ result }: { result: { ok: boolean; status: string; latency_ms?: number; error?: string } | null }) {
@@ -96,7 +97,7 @@ function ProviderForm({ provider, effective }: {
     }
     if (Object.keys(secretFields).length > 0) {
       patchSecrets.mutate(secretFields, {
-        onSuccess: () => toast.success('Secrets saved'),
+        onSuccess: () => toast.success(t('config.secrets_saved')),
         onError: (err) => toast.error(String(err)),
       })
     }
@@ -111,9 +112,9 @@ function ProviderForm({ provider, effective }: {
       onSuccess: (data) => {
         if (data.ok) {
           setModels(data.models)
-          toast.success(`Found ${data.models.length} models`)
+          toast.success(t('config.models_found', { count: data.models.length }))
         } else {
-          toast.error(data.status || 'Failed')
+          toast.error(data.status || t('config.failed'))
         }
       },
     })
@@ -123,24 +124,24 @@ function ProviderForm({ provider, effective }: {
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
-          <Label>Enabled</Label>
+          <Label>{t('config.enabled')}</Label>
           <Select value={get('enabled')} onValueChange={(v) => { if (v !== null) set('enabled', v) }}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="true">Enabled</SelectItem>
-              <SelectItem value="false">Disabled</SelectItem>
+              <SelectItem value="true">{t('config.enabled')}</SelectItem>
+              <SelectItem value="false">{t('config.disabled')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-2">
-          <Label>Base URL</Label>
+          <Label>{t('config.base_url')}</Label>
           <Input value={get('base_url')} onChange={(e) => set('base_url', e.target.value)} placeholder="http://localhost:11434" />
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-2">
-          <Label>Model</Label>
+          <Label>{t('config.model')}</Label>
           <div className="flex gap-2">
             {models.length > 0 ? (
               <Select value={get('model')} onValueChange={(v) => { if (v !== null) set('model', v) }}>
@@ -158,25 +159,25 @@ function ProviderForm({ provider, effective }: {
           </div>
         </div>
         <div className="space-y-2">
-          <Label>Endpoint Path</Label>
+          <Label>{t('config.endpoint_path')}</Label>
           <Input value={get('endpoint_path')} onChange={(e) => set('endpoint_path', e.target.value)} placeholder={`/${provider === 'embedding' ? 'embeddings' : 'rerank'}`} />
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <div className="space-y-2">
-          <Label>Timeout (s)</Label>
+          <Label>{t('config.timeout_seconds')}</Label>
           <Input type="number" value={get('timeout_seconds')} onChange={(e) => set('timeout_seconds', e.target.value)} />
         </div>
         <div className="space-y-2">
-          <Label>Max Retries</Label>
+          <Label>{t('config.max_retries')}</Label>
           <Input type="number" value={get('max_retries')} onChange={(e) => set('max_retries', e.target.value)} />
         </div>
         <div className="space-y-2">
-          <Label>API Key</Label>
+          <Label>{t('config.api_key')}</Label>
           <Input type="password" value={get('api_key')} onChange={(e) => set('api_key', e.target.value)} placeholder="••••••••" autoComplete="off" />
           <Badge variant="outline" className="text-[10px]">
-            {effective.api_key?.source || 'default'}
+            {effective.api_key?.source || t('config.source_default')}
           </Badge>
         </div>
       </div>
@@ -195,15 +196,6 @@ function ProviderForm({ provider, effective }: {
     </div>
   )
 }
-
-const MEMORY_TYPES = [
-  'research_finding',
-  'methodology',
-  'tool_usage',
-  'domain_knowledge',
-  'experimental_result',
-  'literature_note'
-]
 
 function VectorBackfillSection() {
   const { t } = useTranslation()
@@ -269,7 +261,7 @@ function VectorBackfillSection() {
       setDryRunResult(res)
       toast.success(t('config.dry_run_results', { total: res.total }))
     } catch (err) {
-      toast.error(`Dry run failed: ${String(err)}`)
+      toast.error(t('config.dry_run_failed', { error: String(err) }))
     } finally {
       setIsDryRunning(false)
     }
@@ -280,10 +272,10 @@ function VectorBackfillSection() {
     backfillStart.mutate(getParams(), {
       onSuccess: (data) => {
         setActiveJobId(data.job_id)
-        toast.success('Vector backfill job started')
+        toast.success(t('config.backfill_started'))
       },
       onError: (err) => {
-        toast.error(`Failed to start job: ${String(err)}`)
+        toast.error(t('config.start_job_failed', { error: String(err) }))
       },
     })
   }
@@ -292,10 +284,10 @@ function VectorBackfillSection() {
     if (!activeJobId) return
     backfillCancel.mutate(activeJobId, {
       onSuccess: () => {
-        toast.info('Cancellation request sent')
+        toast.info(t('config.cancellation_sent'))
       },
       onError: (err) => {
-        toast.error(`Failed to cancel job: ${String(err)}`)
+        toast.error(t('config.cancel_job_failed', { error: String(err) }))
       },
     })
   }
@@ -411,8 +403,8 @@ function VectorBackfillSection() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t('config.backfill_type_all')}</SelectItem>
-                  {MEMORY_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  {MEMORY_TYPES.map((type) => (
+                    <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -486,7 +478,7 @@ function VectorBackfillSection() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="1">1</SelectItem>
-                      <SelectItem value="2">2 (Default)</SelectItem>
+                      <SelectItem value="2">2 ({t('config.default_option')})</SelectItem>
                       <SelectItem value="3">3</SelectItem>
                       <SelectItem value="4">4</SelectItem>
                     </SelectContent>
@@ -706,16 +698,16 @@ export function Config() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t('config.tab_retrieval')}</CardTitle>
-              <CardDescription>Choose between keyword-only or hybrid (keyword + vector) retrieval.</CardDescription>
+              <CardDescription>{t('config.retrieval_desc')}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Retrieval Mode</Label>
+                <Label>{t('config.retrieval_mode')}</Label>
                 <Select value={effectiveMode} onValueChange={(v: any) => { if (v !== null) setRetrievalMode(v) }}>
                   <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="keyword">Keyword</SelectItem>
-                    <SelectItem value="hybrid">Hybrid</SelectItem>
+                    <SelectItem value="keyword">{t('config.keyword')}</SelectItem>
+                    <SelectItem value="hybrid">{t('config.hybrid')}</SelectItem>
                   </SelectContent>
                 </Select>
                 <Badge variant="outline" className="text-[10px]">{config.retrieval.mode.source}</Badge>
@@ -739,7 +731,7 @@ export function Config() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t('config.tab_embedding')}</CardTitle>
-              <CardDescription>Configure the embedding model for vector search.</CardDescription>
+              <CardDescription>{t('config.embedding_desc')}</CardDescription>
             </CardHeader>
             <CardContent>
               <ProviderForm provider="embedding" effective={config.embedding} />
@@ -751,7 +743,7 @@ export function Config() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t('config.tab_rerank')}</CardTitle>
-              <CardDescription>Configure the reranking model for improved search quality.</CardDescription>
+              <CardDescription>{t('config.rerank_desc')}</CardDescription>
             </CardHeader>
             <CardContent>
               <ProviderForm provider="rerank" effective={config.rerank} />
@@ -763,16 +755,16 @@ export function Config() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{t('config.tab_nocturne')}</CardTitle>
-              <CardDescription>Nocturne v1 reserved configuration. Sync/import APIs return not_implemented.</CardDescription>
+              <CardDescription>{t('config.nocturne_desc')}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Transport</Label>
+                  <Label>{t('config.transport')}</Label>
                   <Select defaultValue={String(config.nocturne.transport.value)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="unknown">Unknown</SelectItem>
+                      <SelectItem value="unknown">{t('config.unknown')}</SelectItem>
                       <SelectItem value="rest">REST</SelectItem>
                       <SelectItem value="sse">SSE</SelectItem>
                       <SelectItem value="streamable_http">Streamable HTTP</SelectItem>
