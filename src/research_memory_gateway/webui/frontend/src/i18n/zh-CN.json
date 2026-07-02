@@ -299,7 +299,10 @@
     "invalid": "无效",
     "duplicates": "重复",
     "validated_toast": "验证完成：{{valid}} 个有效，{{invalid}} 个无效",
-    "imported_toast": "导入完成：{{imported}} 个导入，{{skipped}} 个跳过"
+    "imported_toast": "导入完成：{{imported}} 个导入，{{skipped}} 个跳过",
+    "confirmation_required": "已存在的记忆将被覆盖。确认前请先审阅差异。",
+    "overwrite_diffs": "覆盖差异",
+    "confirm_overwrite": "确认覆盖"
   },
   "export": {
     "title": "导出记忆",

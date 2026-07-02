@@ -29,6 +29,7 @@ from .runtime import (
     BackfillManager,
     ImportConfirmationRequired,
     ImportValidationError,
+    UnsupportedImportPolicy,
     bounded_int,
     diff_json,
     import_execute,
@@ -466,6 +467,8 @@ async def api_import_execute(request: Request) -> Response:
         result = import_execute(state.service, payload, policy=policy, confirmed=confirmed)
     except ImportValidationError as exc:
         return JSONResponse({"error": "invalid_import_payload", **exc.validation}, status_code=400)
+    except UnsupportedImportPolicy:
+        return JSONResponse({"error": "unsupported_import_policy"}, status_code=400)
     except ImportConfirmationRequired as exc:
         return JSONResponse({"error": "confirmation_required", "diffs": exc.diffs}, status_code=409)
     return JSONResponse(result)

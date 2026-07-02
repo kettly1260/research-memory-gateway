@@ -299,7 +299,10 @@
     "invalid": "invalid",
     "duplicates": "duplicates",
     "validated_toast": "Validated: {{valid}} valid, {{invalid}} invalid",
-    "imported_toast": "Imported: {{imported}}, Skipped: {{skipped}}"
+    "imported_toast": "Imported: {{imported}}, Skipped: {{skipped}}",
+    "confirmation_required": "Existing memories will be overwritten. Review the diff before confirming.",
+    "overwrite_diffs": "Overwrite Diff",
+    "confirm_overwrite": "Confirm Overwrite"
   },
   "export": {
     "title": "Export Memories",

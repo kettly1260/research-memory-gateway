@@ -13,15 +13,20 @@ import {
 } from '@/components/ui/select'
 import { Upload, FileJson, Check, AlertCircle, Loader2 } from 'lucide-react'
 import { useImportValidate, useImportExecute } from '@/lib/query'
+import { ApiError } from '@/lib/api'
 import { toast } from 'sonner'
+
+const importPolicies = ['skip_existing', 'overwrite_existing', 'import_as_new'] as const
+type ImportPolicy = (typeof importPolicies)[number]
 
 export function ImportPage() {
   const { t } = useTranslation()
   const [jsonContent, setJsonContent] = useState('')
-  const [policy, setPolicy] = useState('skip_existing')
+  const [policy, setPolicy] = useState<ImportPolicy>('skip_existing')
   const [validationResult, setValidationResult] = useState<{
     valid: number; invalid: number; duplicates: number; errors: Array<{ index: number; error: string }>
   } | null>(null)
+  const [confirmationDiffs, setConfirmationDiffs] = useState<Record<string, string> | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
 
   const validateMutation = useImportValidate()
@@ -40,6 +45,7 @@ export function ImportPage() {
   const handleValidate = () => {
     const memories = parseMemories()
     if (!memories) return
+    setConfirmationDiffs(null)
     validateMutation.mutate({ memories, policy }, {
       onSuccess: (data) => {
         setValidationResult(data)
@@ -51,13 +57,27 @@ export function ImportPage() {
   const handleExecute = (confirmed: boolean = false) => {
     const memories = parseMemories()
     if (!memories) return
+    if (!confirmed) {
+      setConfirmationDiffs(null)
+    }
     executeMutation.mutate({ memories, policy, confirmed }, {
       onSuccess: (data) => {
         toast.success(t('import.imported_toast', { imported: data.imported, skipped: data.skipped }))
         setJsonContent('')
         setValidationResult(null)
+        setConfirmationDiffs(null)
       },
-      onError: (err) => toast.error(String(err)),
+      onError: (err) => {
+        if (err instanceof ApiError && err.body.error === 'confirmation_required') {
+          const diffs = err.body.diffs
+          if (diffs && typeof diffs === 'object' && !Array.isArray(diffs)) {
+            setConfirmationDiffs(diffs as Record<string, string>)
+          }
+          toast.error(t('import.confirmation_required'))
+          return
+        }
+        toast.error(err instanceof Error ? err.message : String(err))
+      },
     })
   }
 
@@ -126,7 +146,9 @@ export function ImportPage() {
           <div className="flex items-center gap-4">
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground font-medium">{t('import.policy')}</label>
-              <Select value={policy} onValueChange={(v) => { if (v !== null) setPolicy(v) }}>
+              <Select value={policy} onValueChange={(v) => {
+                if (importPolicies.includes(v as ImportPolicy)) setPolicy(v as ImportPolicy)
+              }}>
                 <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="skip_existing">{t('import.skip_existing')}</SelectItem>
@@ -182,6 +204,34 @@ export function ImportPage() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {confirmationDiffs && (
+        <Card className="animate-fade-in border-amber-200 dark:border-amber-900/60">
+          <CardHeader>
+            <CardTitle className="text-base">{t('import.overwrite_diffs')}</CardTitle>
+            <CardDescription>{t('import.confirmation_required')}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="max-h-80 overflow-auto rounded-lg border bg-muted/30 p-3">
+              {Object.entries(confirmationDiffs).map(([memoryId, diff]) => (
+                <div key={memoryId} className="space-y-2">
+                  <div className="font-mono text-xs font-semibold">{memoryId}</div>
+                  <pre className="whitespace-pre-wrap text-xs leading-relaxed">{diff}</pre>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setConfirmationDiffs(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button onClick={() => handleExecute(true)} disabled={executeMutation.isPending}>
+                {executeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                {t('import.confirm_overwrite')}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}

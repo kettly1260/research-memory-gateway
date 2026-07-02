@@ -1506,6 +1506,78 @@ def test_webui_overwrite_import_requires_confirmation_and_returns_diff(tmp_path,
     assert "Changed" in response.json()["diffs"]["mem_overwrite"]
 
 
+def test_webui_overwrite_import_without_existing_item_imports_normally(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    memory = {
+        "memory_id": "mem_new_overwrite_policy",
+        "project": "demo",
+        "topic": "Hg",
+        "memory_type": "paper_note",
+        "title": "New item",
+        "summary": "No existing item should mean no overwrite confirmation is needed.",
+    }
+
+    response = client.post(
+        "/admin/api/import/json/execute",
+        headers={"x-csrf-token": token},
+        json={"memories": [memory], "policy": "overwrite_existing"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+    assert client.get("/admin/api/memories/mem_new_overwrite_policy").json()["title"] == "New item"
+
+
+def test_webui_overwrite_import_confirmed_updates_existing_item(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    original = {
+        "memory_id": "mem_confirmed_overwrite",
+        "project": "demo",
+        "topic": "Hg",
+        "memory_type": "paper_note",
+        "title": "Original",
+        "summary": "Original summary.",
+    }
+    replacement = {**original, "title": "Replacement", "summary": "Replacement summary."}
+    client.post("/admin/api/import/json/execute", headers={"x-csrf-token": token}, json={"memories": [original]})
+
+    response = client.post(
+        "/admin/api/import/json/execute",
+        headers={"x-csrf-token": token},
+        json={"memories": [replacement], "policy": "overwrite_existing", "confirmed": True},
+    )
+    updated = client.get("/admin/api/memories/mem_confirmed_overwrite").json()
+
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+    assert updated["title"] == "Replacement"
+    assert updated["summary"] == "Replacement summary."
+
+
+def test_webui_import_rejects_unsupported_policy(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    memory = {
+        "memory_id": "mem_bad_policy",
+        "project": "demo",
+        "topic": "Hg",
+        "memory_type": "paper_note",
+        "title": "Bad policy",
+        "summary": "Unsupported policies should not fall through to save.",
+    }
+
+    response = client.post(
+        "/admin/api/import/json/execute",
+        headers={"x-csrf-token": token},
+        json={"memories": [memory], "policy": "overwrite_everything"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "unsupported_import_policy"
+
+
 def test_webui_backfill_dry_run_and_single_job_lock(tmp_path, monkeypatch) -> None:
     client, app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)

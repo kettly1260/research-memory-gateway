@@ -14,6 +14,9 @@ from ..models import MemoryStatus, ResearchMemory
 from ..service import ResearchMemoryService
 
 
+IMPORT_POLICIES = {"skip_existing", "overwrite_existing", "import_as_new"}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -51,6 +54,12 @@ class ImportConfirmationRequired(PermissionError):
     def __init__(self, diffs: dict[str, str]) -> None:
         super().__init__("confirmation_required")
         self.diffs = diffs
+
+
+class UnsupportedImportPolicy(ValueError):
+    def __init__(self, policy: str) -> None:
+        super().__init__("unsupported_import_policy")
+        self.policy = policy
 
 
 def import_items(payload: Any) -> list[Any]:
@@ -104,6 +113,9 @@ def import_execute(
     policy: str = "skip_existing",
     confirmed: bool = False,
 ) -> dict[str, Any]:
+    if policy not in IMPORT_POLICIES:
+        raise UnsupportedImportPolicy(policy)
+
     items = import_items(payload)
     validation = import_validate(service, payload)
     if validation["invalid"]:
@@ -119,7 +131,8 @@ def import_execute(
                 existing.model_dump(mode="json"),
                 incoming.model_dump(mode="json"),
             )
-        raise ImportConfirmationRequired(diffs)
+        if diffs:
+            raise ImportConfirmationRequired(diffs)
 
     imported = 0
     skipped = 0
