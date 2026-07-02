@@ -1374,6 +1374,35 @@ def test_webui_config_accepts_dotted_provider_fields(tmp_path, monkeypatch) -> N
     assert effective["rerank"]["base_url"] == {"value": "http://rerank.local", "source": "web_config"}
 
 
+def test_webui_security_api_key_routes(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    headers = {"x-csrf-token": token}
+
+    missing_name = client.post("/admin/api/security/api-keys", headers=headers, json={"name": ""})
+    created = client.post(
+        "/admin/api/security/api-keys",
+        headers=headers,
+        json={"name": "Notebook", "custom_key": "rmg_test_key"},
+    )
+    key_id = created.json()["key_id"]
+    listed = client.get("/admin/api/security/api-keys")
+    usage = client.get(f"/admin/api/security/api-keys/{key_id}/usage")
+    connections = client.get("/admin/api/security/connections")
+    deleted = client.delete(f"/admin/api/security/api-keys/{key_id}", headers=headers)
+    listed_after_delete = client.get("/admin/api/security/api-keys")
+
+    assert missing_name.status_code == 400
+    assert created.status_code == 201
+    assert created.json()["api_key"] == "rmg_test_key"
+    assert listed.json()["items"][0]["key_id"] == key_id
+    assert "api_key" not in listed.json()["items"][0]
+    assert usage.json() == {"connections": []}
+    assert connections.json() == {"items": []}
+    assert deleted.json() == {"deleted": True}
+    assert listed_after_delete.json()["items"] == []
+
+
 def test_webui_config_models_fetches_openai_compatible_list(tmp_path, monkeypatch) -> None:
     calls = []
 
