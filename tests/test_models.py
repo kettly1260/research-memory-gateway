@@ -21,11 +21,24 @@ from research_memory_gateway.config import (
     WebConfigStore,
     WebRuntimeConfig,
 )
-from research_memory_gateway.models import ExportFormat, MemoryStatus, ResearchMemory
+from research_memory_gateway.models import (
+    ExportFormat,
+    MemoryStatus,
+    MemoryType,
+    ProposalStatus,
+    ResearchMemory,
+)
 from research_memory_gateway.nocturne import NocturneReservedConnector
 from research_memory_gateway.retrieval import EmbeddingClient, RerankClient
 from research_memory_gateway.server import BearerAuthMiddleware, build_mcp
 from research_memory_gateway.service import ResearchMemoryService
+from research_memory_gateway.taxonomy import (
+    ACTIONABLE_PLAN_STATUSES,
+    MEMORY_TYPES,
+    PLAN_REQUIRED_MEMORY_TYPES,
+    PLAN_STATUSES,
+    PROPOSAL_STATUSES,
+)
 from research_memory_gateway.webui.app import build_webui_app
 
 
@@ -673,6 +686,15 @@ def test_taxonomy_includes_chinese_labels(tmp_path) -> None:
     assert accepted["label_zh"] == "已确认"
     assert accepted["actionable"] is True
     assert pending["label_zh"] == "待审"
+
+
+def test_taxonomy_keys_match_model_enums_and_rules() -> None:
+    assert {item["key"] for item in MEMORY_TYPES} == {item.value for item in MemoryType}
+    assert {item["key"] for item in PROPOSAL_STATUSES} == {item.value for item in ProposalStatus}
+    assert PLAN_REQUIRED_MEMORY_TYPES == {
+        item["key"] for item in MEMORY_TYPES if item.get("requires_plan_status")
+    }
+    assert ACTIONABLE_PLAN_STATUSES == {item["key"] for item in PLAN_STATUSES if item.get("actionable")}
 
 
 def test_plan_memories_require_plan_status(tmp_path) -> None:

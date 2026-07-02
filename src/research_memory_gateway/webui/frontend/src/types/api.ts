@@ -1,10 +1,17 @@
 // ─── Memory Types ───
 
-export type MemoryStatus = 'active' | 'archived' | 'deleted'
-export type MemoryType = 'literature_review' | 'paper_note' | 'synthesis_route' | 'experiment_plan' | 'mechanism_hypothesis' | 'material_system' | 'presentation_outline' | 'research_decision' | 'workflow_plan'
+import type {
+  MemoryStatusValue,
+  MemoryTypeValue,
+  PlanStatusValue,
+  ProposalStatusValue,
+} from '@/constants/memoryTypes'
+
+export type MemoryStatus = MemoryStatusValue
+export type MemoryType = MemoryTypeValue
 export type VerificationStatus = 'evidence_backed' | 'inferred' | 'unverified' | 'conflicting' | 'superseded' | 'retracted'
-export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'needs_edit' | 'saved' | 'expired'
-export type PlanStatus = 'draft' | 'accepted' | 'active' | 'superseded'
+export type ProposalStatus = ProposalStatusValue
+export type PlanStatus = PlanStatusValue
 
 export interface Claim {
   claim: string

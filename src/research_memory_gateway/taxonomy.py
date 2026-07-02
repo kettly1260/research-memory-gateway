@@ -3,19 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 
-PLAN_REQUIRED_MEMORY_TYPES = {"experiment_plan", "workflow_plan"}
-PLAN_STATUS_KEYS = {"draft", "accepted", "active", "superseded"}
-ACTIONABLE_PLAN_STATUSES = {"accepted", "active"}
-PLAN_TYPE_KEYS = {
-    "agent_memory_policy",
-    "mcp_setup",
-    "research_workflow",
-    "writing_workflow",
-    "deployment_workflow",
-    "project_governance",
-}
-
-
 MEMORY_TYPES = [
     {
         "key": "literature_review",
@@ -139,6 +126,16 @@ PROPOSAL_STATUSES = [
     {"key": "saved", "label_en": "Saved", "label_zh": "已保存"},
     {"key": "expired", "label_en": "Expired", "label_zh": "已过期"},
 ]
+
+
+MEMORY_TYPE_KEYS = {str(item["key"]) for item in MEMORY_TYPES}
+PLAN_REQUIRED_MEMORY_TYPES = {
+    str(item["key"]) for item in MEMORY_TYPES if item.get("requires_plan_status")
+}
+PLAN_STATUS_KEYS = {str(item["key"]) for item in PLAN_STATUSES}
+ACTIONABLE_PLAN_STATUSES = {str(item["key"]) for item in PLAN_STATUSES if item.get("actionable")}
+PLAN_TYPE_KEYS = {str(item["key"]) for item in PLAN_TYPES}
+PROPOSAL_STATUS_KEYS = {str(item["key"]) for item in PROPOSAL_STATUSES}
 
 
 def get_memory_taxonomy() -> dict[str, Any]:
