@@ -9,13 +9,12 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { navItems } from './navigation'
 
 interface SidebarProps {
   collapsed: boolean
   onToggle: () => void
 }
-
-import { navItems } from './Topbar'
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const { t } = useTranslation()

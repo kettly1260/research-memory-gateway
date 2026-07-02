@@ -231,16 +231,15 @@ function VectorBackfillSection() {
   const backfillStart = useBackfillStart()
   const backfillCancel = useBackfillCancel()
   const { data: job } = useBackfillJob(activeJobId)
+  const jobStatus = job?.status
 
   // Effect to handle job completion/cancellation
   useEffect(() => {
-    if (job) {
-      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-        queryClient.invalidateQueries({ queryKey: ['retrieval', 'vector-coverage'] })
-        queryClient.invalidateQueries({ queryKey: ['stats'] })
-      }
+    if (jobStatus === 'completed' || jobStatus === 'failed' || jobStatus === 'cancelled') {
+      queryClient.invalidateQueries({ queryKey: ['retrieval', 'vector-coverage'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
     }
-  }, [job?.status, queryClient])
+  }, [jobStatus, queryClient])
 
   const getParams = () => {
     return {
@@ -369,7 +368,9 @@ function VectorBackfillSection() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="backfill-scope" className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('config.backfill_scope')}</Label>
-              <Select value={scope} onValueChange={(v: any) => { if (v !== null) setScope(v) }}>
+              <Select value={scope} onValueChange={(v: string | null) => {
+                if (v === 'active' || v === 'active_archived' || v === 'all') setScope(v)
+              }}>
                 <SelectTrigger id="backfill-scope" className="h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -383,7 +384,7 @@ function VectorBackfillSection() {
 
             <div className="space-y-1.5">
               <Label htmlFor="backfill-project" className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('config.backfill_project')}</Label>
-              <Select value={project} onValueChange={(v: any) => { if (v !== null) setProject(v) }}>
+              <Select value={project} onValueChange={(v: string | null) => { if (v !== null) setProject(v) }}>
                 <SelectTrigger id="backfill-project" className="h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -400,7 +401,7 @@ function VectorBackfillSection() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="backfill-type" className="text-xs font-semibold text-slate-500 dark:text-slate-400">{t('config.backfill_type')}</Label>
-              <Select value={memoryType} onValueChange={(v: any) => { if (v !== null) setMemoryType(v) }}>
+              <Select value={memoryType} onValueChange={(v: string | null) => { if (v !== null) setMemoryType(v) }}>
                 <SelectTrigger id="backfill-type" className="h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -418,8 +419,8 @@ function VectorBackfillSection() {
               <div className="flex gap-4 items-center h-9">
                 <Select
                   value={limitType}
-                  onValueChange={(v: any) => {
-                    if (v !== null) setLimitType(v)
+                  onValueChange={(v: string | null) => {
+                    if (v === 'all' || v === 'custom') setLimitType(v)
                   }}
                 >
                   <SelectTrigger className="w-1/2 h-9">
@@ -475,7 +476,7 @@ function VectorBackfillSection() {
               <div className="p-4 bg-white dark:bg-slate-900/20 border-t border-slate-100 dark:border-slate-800/60 grid gap-4 sm:grid-cols-2 animate-fade-in">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-medium">{t('config.concurrency')}</Label>
-                  <Select value={String(concurrency)} onValueChange={(v: any) => { if (v !== null) setConcurrency(parseInt(v, 10)) }}>
+                  <Select value={String(concurrency)} onValueChange={(v: string | null) => { if (v !== null) setConcurrency(parseInt(v, 10)) }}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
@@ -706,7 +707,7 @@ export function Config() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label>{t('config.retrieval_mode')}</Label>
-                <Select value={effectiveMode} onValueChange={(v: any) => { if (v !== null) setRetrievalMode(v) }}>
+                <Select value={effectiveMode} onValueChange={(v: string | null) => { if (v !== null) setRetrievalMode(v) }}>
                   <SelectTrigger className="w-[200px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="keyword">{t('config.keyword')}</SelectItem>

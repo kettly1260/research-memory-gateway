@@ -94,7 +94,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     })
   }
 
-  let response = await performFetch(headers)
+  const response = await performFetch(headers)
 
   // 3. Handle auth expired & retry with refreshed token
   if (response.status === 401 && !isAuthRequest) {

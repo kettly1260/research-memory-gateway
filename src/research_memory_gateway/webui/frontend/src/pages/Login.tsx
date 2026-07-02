@@ -23,8 +23,8 @@ export function Login() {
       localStorage.setItem('access_token', data.access_token)
       localStorage.setItem('refresh_token', data.refresh_token)
       window.location.href = '/admin'
-    } catch (err: any) {
-      setError(err?.message || t('auth.invalid_password'))
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : t('auth.invalid_password'))
     } finally {
       setLoading(false)
     }

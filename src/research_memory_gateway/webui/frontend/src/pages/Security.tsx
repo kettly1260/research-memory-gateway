@@ -170,7 +170,7 @@ function ApiKeysTab() {
           setCustomKey('')
           refetch()
         },
-        onError: (err: any) => toast.error(err?.message || String(err))
+        onError: (err: unknown) => toast.error(err instanceof Error ? err.message : String(err))
       }
     )
   }
@@ -182,7 +182,7 @@ function ApiKeysTab() {
         toast.success(t('security.apikey_revoked'))
         refetch()
       },
-      onError: (err: any) => toast.error(err?.message || String(err))
+      onError: (err: unknown) => toast.error(err instanceof Error ? err.message : String(err))
     })
   }
 

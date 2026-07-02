@@ -199,7 +199,7 @@ export function Memories() {
         )
       },
     },
-  ], [t, i18n.language, taxonomy?.memory_types, archiveMutation, softDeleteMutation, restoreMutation])
+  ], [t, i18n.language, taxonomy?.memory_types, archiveMutation, softDeleteMutation, restoreMutation, navigate])
 
   const table = useReactTable({
     data: memories,

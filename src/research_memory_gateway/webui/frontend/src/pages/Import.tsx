@@ -35,7 +35,7 @@ export function ImportPage() {
       toast.error(t('common.invalid_json'))
       return null
     }
-  }, [jsonContent])
+  }, [jsonContent, t])
 
   const handleValidate = () => {
     const memories = parseMemories()
