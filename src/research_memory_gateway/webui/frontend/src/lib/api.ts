@@ -181,6 +181,10 @@ import type {
   ExportResult,
   AuditEvent,
   StatsResponse,
+  MemoryTaxonomyResponse,
+  ProposalDetail,
+  ProposalsListResponse,
+  SaveProposal,
 } from '@/types/api'
 
 export const api = {
@@ -228,6 +232,35 @@ export const api = {
   projects: {
     list() {
       return request<ProjectsResponse>('/projects')
+    },
+  },
+
+  // ─── Taxonomy ───
+  taxonomy: {
+    get() {
+      return request<MemoryTaxonomyResponse>('/taxonomy')
+    },
+  },
+
+  // ─── Memory Proposals ───
+  proposals: {
+    list(params?: { status?: string; limit?: string }) {
+      return request<ProposalsListResponse>('/proposals', { params: params as Record<string, string | undefined> })
+    },
+    get(id: string) {
+      return request<ProposalDetail>(`/proposals/${id}`)
+    },
+    save(id: string, text?: string) {
+      return request<ResearchMemory>(`/proposals/${id}/save`, {
+        method: 'POST',
+        body: { text },
+      })
+    },
+    updateStatus(id: string, proposalStatus: string, reason?: string) {
+      return request<SaveProposal>(`/proposals/${id}`, {
+        method: 'PATCH',
+        body: { proposal_status: proposalStatus, reason },
+      })
     },
   },
 

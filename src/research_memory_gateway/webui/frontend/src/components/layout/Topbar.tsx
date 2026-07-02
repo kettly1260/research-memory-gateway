@@ -1,4 +1,4 @@
-import { Search, Sun, Moon, Monitor, Menu, Palette, Database, LayoutDashboard, Settings, Shield, Import, Download, History, LogOut } from 'lucide-react'
+import { Search, Sun, Moon, Monitor, Menu, Palette, Database, LayoutDashboard, Settings, Shield, Import, Download, History, LogOut, FileClock } from 'lucide-react'
 import { Link, useMatchRoute } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import {
@@ -17,6 +17,7 @@ import { api } from '@/lib/api'
 export const navItems = [
   { to: '/' as const, icon: LayoutDashboard, labelKey: 'nav.dashboard' },
   { to: '/memories' as const, icon: Database, labelKey: 'nav.memories' },
+  { to: '/proposals' as const, icon: FileClock, labelKey: 'nav.proposals' },
   { to: '/config' as const, icon: Settings, labelKey: 'nav.config' },
   { to: '/security' as const, icon: Shield, labelKey: 'nav.security' },
   { to: '/import' as const, icon: Import, labelKey: 'nav.import' },

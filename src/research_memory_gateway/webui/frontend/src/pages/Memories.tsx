@@ -43,7 +43,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useMemories, useArchiveMemory, useSoftDeleteMemory, useRestoreMemory, useProjects } from "@/lib/query"
+import { useMemories, useArchiveMemory, useSoftDeleteMemory, useRestoreMemory, useProjects, useTaxonomy } from "@/lib/query"
 import type { ResearchMemory } from "@/types/api"
 import { MEMORY_TYPES, formatMemoryType } from "@/constants/memoryTypes"
 import { toast } from "sonner"
@@ -55,7 +55,7 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | '
 }
 
 export function Memories() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [sorting, setSorting] = React.useState<SortingState>([{ id: 'updatedAt', desc: true }])
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
@@ -74,6 +74,8 @@ export function Memories() {
     memory_type: typeFilter,
   })
   const { data: projects = [] } = useProjects()
+  const { data: taxonomy } = useTaxonomy()
+  const memoryTypeKeys = taxonomy?.memory_types.map((item) => item.key) || [...MEMORY_TYPES]
 
   const archiveMutation = useArchiveMemory()
   const softDeleteMutation = useSoftDeleteMemory()
@@ -109,7 +111,11 @@ export function Memories() {
     {
       accessorKey: "memory_type",
       header: t("memories.col_type"),
-      cell: ({ row }) => <Badge variant="outline" className="text-[11px]">{formatMemoryType(row.getValue("memory_type"))}</Badge>,
+      cell: ({ row }) => (
+        <Badge variant="outline" className="text-[11px]">
+          {formatMemoryType(String(row.getValue("memory_type")), taxonomy?.memory_types, i18n.language)}
+        </Badge>
+      ),
     },
     {
       accessorKey: "memory_status",
@@ -193,7 +199,7 @@ export function Memories() {
         )
       },
     },
-  ], [t, archiveMutation, softDeleteMutation, restoreMutation])
+  ], [t, i18n.language, taxonomy?.memory_types, archiveMutation, softDeleteMutation, restoreMutation])
 
   const table = useReactTable({
     data: memories,
@@ -275,8 +281,8 @@ export function Memories() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="_all">{t("memories.all_types")}</SelectItem>
-            {MEMORY_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
+            {memoryTypeKeys.map((type) => (
+              <SelectItem key={type} value={type}>{formatMemoryType(type, taxonomy?.memory_types, i18n.language)}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -392,7 +398,9 @@ export function Memories() {
                     <Badge variant={statusVariants[memory.memory_status] || 'outline'} className="text-[10px]">
                       {t(`common.${memory.memory_status}`)}
                     </Badge>
-                    <Badge variant="outline" className="text-[10px]">{formatMemoryType(memory.memory_type)}</Badge>
+                    <Badge variant="outline" className="text-[10px]">
+                      {formatMemoryType(memory.memory_type, taxonomy?.memory_types, i18n.language)}
+                    </Badge>
                     <span className="text-[10px] text-muted-foreground ml-auto">{memory.project}</span>
                   </div>
                 </CardContent>

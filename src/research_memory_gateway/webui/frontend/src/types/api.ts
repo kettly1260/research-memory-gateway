@@ -1,8 +1,10 @@
 // ─── Memory Types ───
 
 export type MemoryStatus = 'active' | 'archived' | 'deleted'
-export type MemoryType = 'literature_review' | 'paper_note' | 'synthesis_route' | 'experiment_plan' | 'mechanism_hypothesis' | 'material_system' | 'presentation_outline' | 'research_decision'
+export type MemoryType = 'literature_review' | 'paper_note' | 'synthesis_route' | 'experiment_plan' | 'mechanism_hypothesis' | 'material_system' | 'presentation_outline' | 'research_decision' | 'workflow_plan'
 export type VerificationStatus = 'evidence_backed' | 'inferred' | 'unverified' | 'conflicting' | 'superseded' | 'retracted'
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'needs_edit' | 'saved' | 'expired'
+export type PlanStatus = 'draft' | 'accepted' | 'active' | 'superseded'
 
 export interface Claim {
   claim: string
@@ -54,6 +56,63 @@ export interface OverlapCheckResponse {
 
 export interface DiffResponse {
   diff: string
+}
+
+// ─── Taxonomy / Proposals ───
+
+export interface TaxonomyItem {
+  key: string
+  label_en: string
+  label_zh: string
+  description_en?: string
+  description_zh?: string
+  actionable?: boolean
+  requires_plan_status?: boolean
+}
+
+export interface MemoryTaxonomyResponse {
+  memory_types: TaxonomyItem[]
+  plan_statuses: TaxonomyItem[]
+  plan_types: TaxonomyItem[]
+  proposal_statuses: TaxonomyItem[]
+  rules: {
+    plan_required_memory_types: string[]
+    actionable_plan_statuses: string[]
+  }
+}
+
+export interface SaveProposal {
+  proposal_id: string
+  reason: string
+  suggested_memory: ResearchMemory
+  overlap_candidates: Array<Record<string, unknown>>
+  requires_confirmation: boolean
+  proposal_status: ProposalStatus
+  current_version: number
+  saved_memory_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProposalVersion {
+  proposal_id: string
+  version: number
+  author: string
+  change_reason: string
+  memory: ResearchMemory
+  overlap_candidates: Array<Record<string, unknown>>
+  confirmation?: Record<string, unknown> | null
+  blocked: boolean
+  redacted: boolean
+  created_at: string
+}
+
+export interface ProposalDetail extends SaveProposal {
+  versions: ProposalVersion[]
+}
+
+export interface ProposalsListResponse {
+  items: SaveProposal[]
 }
 
 // ─── Config Types ───
@@ -125,6 +184,9 @@ export interface ImportValidationResult {
   valid: number
   invalid: number
   duplicates: number
+  duplicate_memory_id?: string[]
+  conflicts?: string[]
+  overlap_candidates?: Array<Record<string, unknown>>
   errors: Array<{ index: number; error: string }>
 }
 

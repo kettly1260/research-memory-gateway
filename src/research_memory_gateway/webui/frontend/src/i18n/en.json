@@ -44,6 +44,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "memories": "Memories",
+    "proposals": "Memory Proposals",
     "config": "Configuration",
     "security": "Security",
     "import": "Import",
@@ -120,6 +121,20 @@
     "detail_title": "Memory Details",
     "claims": "Claims",
     "evidence": "Evidence (JSON)"
+  },
+  "taxonomy": {
+    "plan_status": "Plan Status",
+    "plan_type": "Plan Type"
+  },
+  "proposals": {
+    "title": "Memory Proposals",
+    "memory": "Candidate Memory",
+    "reason": "Save Reason",
+    "detail": "Proposal Detail",
+    "versions": "Version History",
+    "save": "Confirm Save",
+    "saved_toast": "Saved: {{title}}",
+    "status_updated": "Proposal status updated"
   },
   "config": {
     "title": "Configuration",

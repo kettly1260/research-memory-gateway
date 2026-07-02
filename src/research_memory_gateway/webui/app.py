@@ -31,7 +31,7 @@ from ..config import (
     WebConfigStore,
     utc_now,
 )
-from ..models import ExportFormat, MemoryStatus, MemoryType, ResearchMemory
+from ..models import ExportFormat, MemoryStatus, ResearchMemory
 from ..nocturne import NocturneReservedConnector
 from ..service import ResearchMemoryService
 
@@ -105,6 +105,10 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/memories/{memory_id:str}/restore", api_restore, methods=["POST"]),
         Route("/admin/api/memories/{memory_id:str}/soft-delete", api_soft_delete, methods=["POST"]),
         Route("/admin/api/memories/{memory_id:str}/hard-delete", api_hard_delete, methods=["DELETE"]),
+        Route("/admin/api/taxonomy", api_taxonomy, methods=["GET"]),
+        Route("/admin/api/proposals", api_proposals, methods=["GET"]),
+        Route("/admin/api/proposals/{proposal_id:str}", api_proposal_detail, methods=["GET", "PATCH"]),
+        Route("/admin/api/proposals/{proposal_id:str}/save", api_proposal_save, methods=["POST"]),
         Route("/admin/api/projects", api_projects, methods=["GET"]),
         Route("/admin/api/config/effective", api_config_effective, methods=["GET"]),
         Route("/admin/api/config/web-config", api_config_web_patch, methods=["PATCH"]),
@@ -447,11 +451,25 @@ async def api_memories(request: Request) -> Response:
         memories = await _memory_list(request)
         return JSONResponse({"items": [m.model_dump(mode="json") for m in memories]})
     payload = await request.json()
-    memory = ResearchMemory.model_validate(payload)
+    try:
+        memory = state.service.validate_research_memory_for_write(payload)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     overlaps = state.service.check_overlap(query=f"{memory.title} {memory.summary}", project=memory.project)
     if overlaps and not payload.get("confirmed"):
         return JSONResponse({"error": "overlap_confirmation_required", "overlap_candidates": overlaps}, status_code=409)
-    saved = state.service.save_research_memory(user_confirmed=True, memory=payload)
+    try:
+        saved = state.service.save_research_memory(
+            user_confirmed=True,
+            memory=payload,
+            confirmation={
+                "source": "webui",
+                "text": "WebUI memory create",
+                "confirmed_by": "webui_user",
+            },
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     state.service.append_audit_event("memory.created", memory_id=saved.memory_id, metadata={"project": saved.project})
     return JSONResponse(saved.model_dump(mode="json"), status_code=201)
 
@@ -460,9 +478,18 @@ async def api_memory_detail(request: Request) -> Response:
     state = request.app.state.webui
     memory_id = request.path_params["memory_id"]
     if request.method == "GET":
-        return JSONResponse(state.service.get_research_memory(memory_id).model_dump(mode="json"))
+        try:
+            memory = state.service.get_research_memory(memory_id)
+        except KeyError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(memory.model_dump(mode="json"))
     payload = await request.json()
-    updated = state.service.update_research_memory(memory_id, payload, user_confirmed=True)
+    try:
+        updated = state.service.update_research_memory(memory_id, payload, user_confirmed=True)
+    except KeyError:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    except (PermissionError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     state.service.append_audit_event("memory.updated", memory_id=memory_id, metadata={"fields": sorted(payload)})
     return JSONResponse(updated.model_dump(mode="json"))
 
@@ -502,6 +529,72 @@ async def api_hard_delete(request: Request) -> Response:
 async def api_projects(request: Request) -> Response:
     memories = request.app.state.webui.service.backend.list_all(statuses=[s.value for s in MemoryStatus])
     return JSONResponse({"projects": sorted({m.project for m in memories})})
+
+
+async def api_taxonomy(request: Request) -> Response:
+    return JSONResponse(request.app.state.webui.service.get_memory_taxonomy())
+
+
+async def api_proposals(request: Request) -> Response:
+    state = request.app.state.webui
+    status = request.query_params.get("status") or None
+    limit = _bounded_int(request.query_params.get("limit"), 1, 200, 50)
+    try:
+        proposals = state.service.list_memory_proposals(status=status, limit=limit)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse({"items": [item.model_dump(mode="json") for item in proposals]})
+
+
+async def api_proposal_detail(request: Request) -> Response:
+    state = request.app.state.webui
+    proposal_id = request.path_params["proposal_id"]
+    if request.method == "PATCH":
+        payload = await request.json()
+        try:
+            proposal = state.service.update_memory_proposal_status(
+                proposal_id,
+                str(payload.get("proposal_status", "")),
+                reason=str(payload.get("reason", "")),
+                user_confirmed=True,
+            )
+        except KeyError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except (PermissionError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(proposal.model_dump(mode="json"))
+    try:
+        proposal = state.service.get_memory_proposal(proposal_id).model_dump(mode="json")
+    except KeyError:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    proposal["versions"] = state.service.get_memory_proposal_versions(proposal_id)
+    return JSONResponse(proposal)
+
+
+async def api_proposal_save(request: Request) -> Response:
+    state = request.app.state.webui
+    payload = await _json_or_empty(request)
+    proposal_id = request.path_params["proposal_id"]
+    try:
+        saved = state.service.save_research_memory(
+            user_confirmed=True,
+            proposal_id=proposal_id,
+            confirmation={
+                "source": "webui",
+                "text": str(payload.get("text") or payload.get("reason") or "WebUI proposal save"),
+                "confirmed_by": "webui_user",
+            },
+        )
+    except KeyError:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    except (PermissionError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    state.service.append_audit_event(
+        "memory_proposal.saved",
+        memory_id=saved.memory_id,
+        metadata={"proposal_id": proposal_id},
+    )
+    return JSONResponse(saved.model_dump(mode="json"), status_code=201)
 
 
 async def api_overlap(request: Request) -> Response:
@@ -647,10 +740,13 @@ async def api_import_execute(request: Request) -> Response:
     payload = await request.json()
     policy = payload.get("policy", "skip_existing")
     confirmed = bool(payload.get("confirmed"))
+    validation = _validate_import_payload(state.service, payload.get("memories", []))
+    if validation["invalid"]:
+        return JSONResponse({"error": "invalid_import_payload", **validation}, status_code=400)
     if policy == "overwrite_existing" and not confirmed:
         diffs: dict[str, str] = {}
         for item in payload.get("memories", []):
-            incoming = ResearchMemory.model_validate(item)
+            incoming = state.service.validate_research_memory_for_write(item)
             existing = state.service.backend.get(incoming.memory_id)
             if existing is None:
                 continue
@@ -662,7 +758,7 @@ async def api_import_execute(request: Request) -> Response:
     imported = 0
     skipped = 0
     for item in memories:
-        memory = ResearchMemory.model_validate(item)
+        memory = state.service.validate_research_memory_for_write(item)
         exists = state.service.backend.get(memory.memory_id) is not None
         if exists and policy == "skip_existing":
             skipped += 1
@@ -671,7 +767,15 @@ async def api_import_execute(request: Request) -> Response:
         if policy == "import_as_new":
             data.pop("memory_id", None)
             data.setdefault("metadata", {})["imported_original_memory_id"] = memory.memory_id
-        state.service.save_research_memory(user_confirmed=True, memory=data)
+        state.service.save_research_memory(
+            user_confirmed=True,
+            memory=data,
+            confirmation={
+                "source": "webui_import",
+                "text": f"JSON import policy={policy}",
+                "confirmed_by": "webui_user",
+            },
+        )
         imported += 1
     state.service.append_audit_event("import.json_completed", metadata={"imported": imported, "skipped": skipped, "policy": policy})
     return JSONResponse({"imported": imported, "skipped": skipped})
@@ -798,7 +902,7 @@ def _validate_import_payload(service: ResearchMemoryService, raw: Any) -> dict[s
     overlaps: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         try:
-            memory = ResearchMemory.model_validate(item)
+            memory = service.validate_research_memory_for_write(item)
             valid += 1
             if memory.memory_id in seen or service.backend.get(memory.memory_id) is not None:
                 duplicate_ids.append(memory.memory_id)
@@ -807,7 +911,15 @@ def _validate_import_payload(service: ResearchMemoryService, raw: Any) -> dict[s
         except ValueError as exc:
             invalid += 1
             errors.append({"index": index, "error": str(exc)})
-    return {"valid": valid, "invalid": invalid, "duplicate_memory_id": duplicate_ids, "overlap_candidates": overlaps, "conflicts": duplicate_ids, "errors": errors}
+    return {
+        "valid": valid,
+        "invalid": invalid,
+        "duplicates": len(duplicate_ids),
+        "duplicate_memory_id": duplicate_ids,
+        "overlap_candidates": overlaps,
+        "conflicts": duplicate_ids,
+        "errors": errors,
+    }
 
 
 async def _safe_probe(url: str, token: str | None, *, reserved: bool = False) -> JSONResponse:

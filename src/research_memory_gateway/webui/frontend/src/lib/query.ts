@@ -14,6 +14,12 @@ export const queryKeys = {
     detail: (id: string) => ['memories', 'detail', id] as const,
   },
   projects: ['projects'] as const,
+  taxonomy: ['taxonomy'] as const,
+  proposals: {
+    all: ['proposals'] as const,
+    list: (params?: Record<string, string | undefined>) => ['proposals', 'list', params] as const,
+    detail: (id: string) => ['proposals', 'detail', id] as const,
+  },
   config: {
     effective: ['config', 'effective'] as const,
     models: (provider: string) => ['config', 'models', provider] as const,
@@ -112,6 +118,55 @@ export function useProjects() {
     queryKey: queryKeys.projects,
     queryFn: () => api.projects.list(),
     select: (data) => data.projects,
+  })
+}
+
+// ─── Taxonomy / Proposals ───
+
+export function useTaxonomy() {
+  return useQuery({
+    queryKey: queryKeys.taxonomy,
+    queryFn: () => api.taxonomy.get(),
+  })
+}
+
+export function useProposals(params?: { status?: string; limit?: string }) {
+  return useQuery({
+    queryKey: queryKeys.proposals.list(params as Record<string, string | undefined>),
+    queryFn: () => api.proposals.list(params),
+    select: (data) => data.items,
+  })
+}
+
+export function useProposal(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.proposals.detail(id || ''),
+    queryFn: () => api.proposals.get(id!),
+    enabled: !!id,
+  })
+}
+
+export function useSaveProposal() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, text }: { id: string; text?: string }) => api.proposals.save(id, text),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.memories.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals.detail(variables.id) })
+    },
+  })
+}
+
+export function useUpdateProposalStatus() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, proposalStatus, reason }: { id: string; proposalStatus: string; reason?: string }) =>
+      api.proposals.updateStatus(id, proposalStatus, reason),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals.detail(variables.id) })
+    },
   })
 }
 

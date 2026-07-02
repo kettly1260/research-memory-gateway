@@ -37,7 +37,8 @@ import {
   useBackfillJob,
   useBackfillStart,
   useBackfillCancel,
-  useProjects
+  useProjects,
+  useTaxonomy
 } from '@/lib/query'
 import { api } from '@/lib/api'
 import { MEMORY_TYPES, formatMemoryType } from '@/constants/memoryTypes'
@@ -198,10 +199,12 @@ function ProviderForm({ provider, effective }: {
 }
 
 function VectorBackfillSection() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const { data: coverage, isLoading: isCoverageLoading, refetch: refetchCoverage } = useVectorCoverage()
   const { data: projects } = useProjects()
+  const { data: taxonomy } = useTaxonomy()
+  const memoryTypeKeys = taxonomy?.memory_types.map((item) => item.key) || [...MEMORY_TYPES]
 
   // Form states
   const [scope, setScope] = useState<'active' | 'active_archived' | 'all'>('active')
@@ -403,8 +406,8 @@ function VectorBackfillSection() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">{t('config.backfill_type_all')}</SelectItem>
-                  {MEMORY_TYPES.map((type) => (
-                    <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
+                  {memoryTypeKeys.map((type) => (
+                    <SelectItem key={type} value={type}>{formatMemoryType(type, taxonomy?.memory_types, i18n.language)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>

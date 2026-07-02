@@ -68,7 +68,11 @@ SQLite 默认后端
 | 工具 | 作用 |
 |---|---|
 | `propose_save` | 生成保存建议，不直接写入长期记忆。 |
-| `save_research_memory` | 用户确认后保存记忆，要求 `user_confirmed=true`。 |
+| `save_research_memory` | 用户确认后保存记忆，要求 `user_confirmed=true`；聊天中已确认时传入 `confirmation` 审计载荷，避免 WebUI 二次确认。 |
+| `get_memory_taxonomy` | 返回机器可读分类体系，包含英文/中文标签、规划状态和提案状态。 |
+| `list_memory_proposals` | 列出待审、已保存、已驳回等记忆提案。 |
+| `get_memory_proposal` | 读取单个记忆提案及 append-only 历史版本。 |
+| `update_memory_proposal_status` | 用户确认后更新提案状态，如 `rejected`、`needs_edit` 或 `expired`。 |
 | `search_research_memory` | 按关键词、项目、记忆类型检索科研记忆。 |
 | `check_overlap` | 检查当前内容是否和已有记忆重复、相似或冲突。 |
 | `get_research_memory` | 按 `memory_id` 读取单条记忆。 |
@@ -85,16 +89,22 @@ SQLite 默认后端
 
 ## 记忆类型
 
-第一版固定 8 类，避免标签漂移：
+固定类型由 `get_memory_taxonomy` 暴露为机器可读单一来源，并提供英文/中文标签，避免标签漂移：
 
-- `literature_review`：文献综述、方向调研、技术路线比较。
-- `paper_note`：单篇或少量论文的结构化笔记。
-- `synthesis_route`：合成路线、反应条件、试剂、风险和替代路线。
-- `experiment_plan`：实验设计、对照组、表征方案和预期结果。
-- `mechanism_hypothesis`：机理假设、证伪条件、支持或冲突证据。
-- `material_system`：材料体系、组成、结构、性能和适用场景。
-- `presentation_outline`：PPT、报告、组会、答辩结构。
-- `research_decision`：影响后续工作的关键研究决策。
+- `literature_review / 文献综述`：文献综述、方向调研、技术路线比较。
+- `paper_note / 论文笔记`：单篇或少量论文的结构化笔记。
+- `synthesis_route / 合成路线`：合成路线、反应条件、试剂、风险和替代路线。
+- `experiment_plan / 实验规划`：实验设计、对照组、表征方案和预期结果。必须包含 `metadata.plan_status`。
+- `mechanism_hypothesis / 机制假设`：机理假设、证伪条件、支持或冲突证据。
+- `material_system / 材料体系`：材料体系、组成、结构、性能和适用场景。
+- `presentation_outline / 汇报提纲`：PPT、报告、组会、答辩结构。
+- `research_decision / 研究决策`：影响后续工作的关键研究决策。
+- `workflow_plan / 工作流规划`：agent 规则、MCP 配置、部署、写作流程或项目治理规划。必须包含 `metadata.plan_status`。
+
+规划状态与提案状态是两套不同概念：
+
+- `metadata.plan_status / 规划状态` 描述规划本身能否作为行动依据：`draft / 草案`、`accepted / 已确认`、`active / 执行中`、`superseded / 已被取代`。默认只有 `accepted` 和 `active` 可作为行动依据。
+- `proposal_status / 提案状态` 描述保存提案在审核队列中的生命周期：`pending / 待审`、`approved / 已批准`、`rejected / 已驳回`、`needs_edit / 需修改`、`saved / 已保存`、`expired / 已过期`。
 
 ## 防幻觉规则
 

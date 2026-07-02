@@ -15,6 +15,16 @@ Long-term memory is for reusable research assets and reusable operating knowledg
 
 Never save directly unless the user has explicitly confirmed. First call `propose_save`; call `save_research_memory` only after confirmation with `user_confirmed=true`.
 
+When confirmation happens in chat, pass a `confirmation` payload so the gateway records that the save was user-confirmed and does not require a second WebUI approval:
+
+```json
+{
+  "source": "chat",
+  "text": "<the user's confirmation text>",
+  "confirmed_by": "user"
+}
+```
+
 Be proactive about proposing saves. Loading the MCP tools or enabling a client's local memory does not make this gateway a memory backend; the agent must explicitly call the gateway tools when durable knowledge is produced.
 
 ## When To Propose Saving
@@ -33,7 +43,7 @@ Call `propose_save` when the session produces one of these assets:
 
 Do not propose saving for small clarifications, one-off translations, casual discussion, or incomplete speculation unless the user asks to remember it.
 
-For reusable agent/MCP/deployment configuration knowledge, usually use `memory_type: research_decision` with a project such as `research-memory-gateway` or the relevant client/project namespace.
+For reusable agent/MCP/deployment configuration knowledge, usually use `memory_type: workflow_plan / 工作流规划` with `metadata.plan_type` and `metadata.plan_status`, plus a project such as `research-memory-gateway` or the relevant client/project namespace.
 
 ## Tool Workflow
 
@@ -42,7 +52,7 @@ For reusable agent/MCP/deployment configuration knowledge, usually use `memory_t
 3. Call `propose_save` with the reason and suggested memory.
 4. Show the user a concise save proposal: type, title, claims, evidence count, source_refs, overlap candidates.
 5. Wait for explicit confirmation.
-6. If confirmed, call `save_research_memory` with `user_confirmed=true` and the `proposal_id`.
+6. If confirmed, call `save_research_memory` with `user_confirmed=true`, the `proposal_id`, and `confirmation`.
 7. If the user asks to verify or trace a claim, call `open_source_ref` before relying on the memory.
 8. If the user asks for memory hygiene, call `audit_unverified`.
 
@@ -50,14 +60,31 @@ For reusable agent/MCP/deployment configuration knowledge, usually use `memory_t
 
 Use exactly one of these `memory_type` values:
 
-- `literature_review`
-- `paper_note`
-- `synthesis_route`
-- `experiment_plan`
-- `mechanism_hypothesis`
-- `material_system`
-- `presentation_outline`
-- `research_decision`
+- `literature_review / 文献综述`
+- `paper_note / 论文笔记`
+- `synthesis_route / 合成路线`
+- `experiment_plan / 实验规划`
+- `mechanism_hypothesis / 机制假设`
+- `material_system / 材料体系`
+- `presentation_outline / 汇报提纲`
+- `research_decision / 研究决策`
+- `workflow_plan / 工作流规划`
+
+For `experiment_plan / 实验规划` and `workflow_plan / 工作流规划`, include `metadata.plan_status / 规划状态`:
+
+- `draft / 草案`: not actionable by default.
+- `accepted / 已确认`: user-confirmed and actionable.
+- `active / 执行中`: currently in force and actionable.
+- `superseded / 已被取代`: historical only.
+
+For `workflow_plan / 工作流规划`, also include `metadata.plan_type / 规划类型` when useful:
+
+- `agent_memory_policy / Agent 记忆策略`
+- `mcp_setup / MCP 配置`
+- `research_workflow / 科研工作流`
+- `writing_workflow / 写作工作流`
+- `deployment_workflow / 部署工作流`
+- `project_governance / 项目治理`
 
 Every proposed memory should include:
 
@@ -105,6 +132,8 @@ After `propose_save`, present this concise summary:
 ```
 
 Do not end with an open-ended offer. If confirmation is needed, ask one direct confirmation question.
+
+Proposal lifecycle is separate from plan status. `proposal_status / 提案状态` may be `pending / 待审`, `approved / 已批准`, `rejected / 已驳回`, `needs_edit / 需修改`, `saved / 已保存`, or `expired / 已过期`.
 
 ## Retrieval Rules
 

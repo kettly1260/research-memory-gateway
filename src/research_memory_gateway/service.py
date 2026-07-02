@@ -10,6 +10,7 @@ from .exporters import export_memories
 from .models import (
     ExportFormat,
     MemoryStatus,
+    ProposalStatus,
     ResearchMemory,
     SaveProposal,
     SearchResult,
@@ -17,6 +18,35 @@ from .models import (
     VerificationStatus,
 )
 from .source_refs import SourceResolver
+from .taxonomy import get_memory_taxonomy, validate_plan_metadata
+
+
+SAVEABLE_PROPOSAL_STATUSES = {ProposalStatus.pending, ProposalStatus.approved}
+TERMINAL_PROPOSAL_STATUSES = {
+    ProposalStatus.saved,
+    ProposalStatus.rejected,
+    ProposalStatus.expired,
+}
+PROPOSAL_STATUS_TRANSITIONS = {
+    ProposalStatus.pending: {
+        ProposalStatus.approved,
+        ProposalStatus.rejected,
+        ProposalStatus.needs_edit,
+        ProposalStatus.expired,
+    },
+    ProposalStatus.approved: {
+        ProposalStatus.pending,
+        ProposalStatus.rejected,
+        ProposalStatus.needs_edit,
+        ProposalStatus.expired,
+    },
+    ProposalStatus.needs_edit: {
+        ProposalStatus.pending,
+        ProposalStatus.approved,
+        ProposalStatus.rejected,
+        ProposalStatus.expired,
+    },
+}
 
 
 class ResearchMemoryService:
@@ -48,6 +78,12 @@ class ResearchMemoryService:
             overlap_candidates=overlaps,
             requires_confirmation=self.config.memory.require_user_confirmation,
         )
+        self._validate_memory_for_write(memory)
+        proposal = self._persist_proposal(
+            proposal,
+            author="agent",
+            change_reason="initial proposal",
+        )
         self.proposals[proposal.proposal_id] = proposal
         return proposal
 
@@ -57,22 +93,61 @@ class ResearchMemoryService:
         user_confirmed: bool,
         proposal_id: str | None = None,
         memory: dict[str, Any] | None = None,
+        confirmation: dict[str, Any] | None = None,
     ) -> ResearchMemory:
         if self.config.memory.require_user_confirmation and not user_confirmed:
             raise PermissionError("Saving long-term research memory requires user_confirmed=true")
 
+        proposal: SaveProposal | None = None
         if proposal_id:
-            proposal = self.proposals.get(proposal_id)
+            proposal = self._get_proposal(proposal_id)
             if proposal is None:
                 raise KeyError(f"Unknown proposal_id: {proposal_id}")
+            self._ensure_proposal_can_be_saved(proposal)
             research_memory = proposal.suggested_memory
         elif memory is not None:
             research_memory = ResearchMemory.model_validate(memory)
         else:
             raise ValueError("Provide either proposal_id or memory")
 
+        self._validate_memory_for_write(research_memory)
         self._apply_evidence_policy(research_memory)
+        confirmation_payload = self._confirmation_payload(confirmation) if user_confirmed else None
+        if user_confirmed and proposal is None:
+            proposal = SaveProposal(
+                reason="direct user-confirmed save",
+                suggested_memory=research_memory,
+                overlap_candidates=[],
+                requires_confirmation=self.config.memory.require_user_confirmation,
+                proposal_status=ProposalStatus.saved,
+                saved_memory_id=research_memory.memory_id,
+            )
+            proposal = self._persist_proposal(
+                proposal,
+                author=confirmation_payload.get("confirmed_by", "user") if confirmation_payload else "user",
+                change_reason="user-confirmed direct save snapshot",
+                confirmation=confirmation_payload,
+            )
+        if proposal is not None:
+            metadata = dict(research_memory.metadata)
+            metadata.setdefault("saved_from_proposal_id", proposal.proposal_id)
+            metadata.setdefault("saved_from_proposal_version", proposal.current_version)
+            if confirmation_payload is not None:
+                metadata.setdefault("save_confirmation", confirmation_payload)
+            research_memory.metadata = metadata
+
         saved = self.backend.save(research_memory)
+        if proposal is not None:
+            self._mark_proposal_saved(proposal.proposal_id, saved.memory_id, confirmation_payload)
+            self.append_audit_event(
+                "memory.saved_with_confirmation",
+                memory_id=saved.memory_id,
+                metadata={
+                    "proposal_id": proposal.proposal_id,
+                    "proposal_version": proposal.current_version,
+                    "confirmation": confirmation_payload,
+                },
+            )
         if proposal_id:
             self.proposals.pop(proposal_id, None)
         return saved
@@ -175,6 +250,70 @@ class ResearchMemoryService:
     def retrieval_health(self) -> dict[str, Any]:
         return self.backend.retrieval_health()
 
+    def get_memory_taxonomy(self) -> dict[str, Any]:
+        return get_memory_taxonomy()
+
+    def validate_research_memory_for_write(
+        self, memory: dict[str, Any] | ResearchMemory
+    ) -> ResearchMemory:
+        parsed = memory if isinstance(memory, ResearchMemory) else ResearchMemory.model_validate(memory)
+        self._validate_memory_for_write(parsed)
+        return parsed
+
+    def list_memory_proposals(self, status: str | None = None, limit: int = 50) -> list[SaveProposal]:
+        if not self._backend_overrides("list_proposals"):
+            proposals = list(self.proposals.values())
+            if status:
+                proposals = [item for item in proposals if item.proposal_status.value == status]
+            return proposals[:limit]
+        return self.backend.list_proposals(status=status, limit=limit)
+
+    def get_memory_proposal(self, proposal_id: str) -> SaveProposal:
+        proposal = self._get_proposal(proposal_id)
+        if proposal is None:
+            raise KeyError(f"Unknown proposal_id: {proposal_id}")
+        return proposal
+
+    def get_memory_proposal_versions(self, proposal_id: str) -> list[dict[str, Any]]:
+        if not self._backend_overrides("get_proposal_versions"):
+            return []
+        return self.backend.get_proposal_versions(proposal_id)
+
+    def update_memory_proposal_status(
+        self,
+        proposal_id: str,
+        proposal_status: str,
+        *,
+        reason: str = "",
+        user_confirmed: bool,
+    ) -> SaveProposal:
+        if self.config.memory.require_user_confirmation and not user_confirmed:
+            raise PermissionError("Changing memory proposal status requires user_confirmed=true")
+        parsed_status = ProposalStatus(proposal_status)
+        proposal = self._get_proposal(proposal_id)
+        if proposal is None:
+            raise KeyError(f"Unknown proposal_id: {proposal_id}")
+        self._ensure_proposal_status_transition(proposal, parsed_status)
+        if self._backend_overrides("update_proposal_status"):
+            updated_proposal = self.backend.update_proposal_status(
+                proposal_id,
+                status=parsed_status.value,
+                reason=reason,
+            )
+            if updated_proposal is None:
+                raise KeyError(f"Unknown proposal_id: {proposal_id}")
+            proposal = updated_proposal
+            self.proposals[proposal_id] = proposal
+        else:
+            proposal.proposal_status = parsed_status
+            proposal.updated_at = _utc_now()
+            self.proposals[proposal_id] = proposal
+        self.append_audit_event(
+            "memory_proposal.status_changed",
+            metadata={"proposal_id": proposal_id, "proposal_status": parsed_status.value, "reason": reason},
+        )
+        return proposal
+
     def health(self) -> dict[str, Any]:
         return {
             "status": "ok",
@@ -211,6 +350,7 @@ class ResearchMemoryService:
         data["memory_id"] = memory_id
         data["updated_at"] = _utc_now()
         updated = ResearchMemory.model_validate(data)
+        self._validate_memory_for_write(updated)
         self._apply_evidence_policy(updated)
         return self.backend.save(updated)
 
@@ -349,6 +489,92 @@ class ResearchMemoryService:
                 raise ValueError("claim references evidence_id that does not exist")
             if claim.verification_status == VerificationStatus.unverified and "verification_status" not in claim.model_fields_set:
                 claim.verification_status = VerificationStatus.evidence_backed
+
+    def _validate_memory_for_write(self, memory: ResearchMemory) -> None:
+        validate_plan_metadata(memory.memory_type.value, memory.metadata)
+
+    def _ensure_proposal_can_be_saved(self, proposal: SaveProposal) -> None:
+        if proposal.proposal_status not in SAVEABLE_PROPOSAL_STATUSES:
+            allowed = ", ".join(sorted(status.value for status in SAVEABLE_PROPOSAL_STATUSES))
+            raise ValueError(
+                f"Only {allowed} memory proposals can be saved; "
+                f"current proposal_status={proposal.proposal_status.value}"
+            )
+
+    def _ensure_proposal_status_transition(
+        self,
+        proposal: SaveProposal,
+        proposal_status: ProposalStatus,
+    ) -> None:
+        if proposal_status == ProposalStatus.saved:
+            raise ValueError("Use save_research_memory to mark a proposal as saved")
+        if proposal.proposal_status in TERMINAL_PROPOSAL_STATUSES:
+            raise ValueError(
+                f"{proposal.proposal_status.value} memory proposals are terminal "
+                "and cannot be changed"
+            )
+        allowed = PROPOSAL_STATUS_TRANSITIONS.get(proposal.proposal_status, set())
+        if proposal_status not in allowed:
+            allowed_values = ", ".join(sorted(status.value for status in allowed))
+            raise ValueError(
+                f"Cannot change memory proposal from {proposal.proposal_status.value} "
+                f"to {proposal_status.value}; allowed values: {allowed_values}"
+            )
+
+    def _confirmation_payload(self, confirmation: dict[str, Any] | None) -> dict[str, Any]:
+        payload = dict(confirmation or {})
+        payload.setdefault("source", "legacy")
+        payload.setdefault("text", "")
+        payload.setdefault("confirmed_by", "caller")
+        payload.setdefault("confirmed_at", _utc_now())
+        return payload
+
+    def _persist_proposal(
+        self,
+        proposal: SaveProposal,
+        *,
+        author: str,
+        change_reason: str,
+        confirmation: dict[str, Any] | None = None,
+    ) -> SaveProposal:
+        if self._backend_overrides("save_proposal"):
+            proposal = self.backend.save_proposal(
+                proposal,
+                author=author,
+                change_reason=change_reason,
+                confirmation=confirmation,
+            )
+        self.proposals[proposal.proposal_id] = proposal
+        return proposal
+
+    def _get_proposal(self, proposal_id: str) -> SaveProposal | None:
+        proposal = self.proposals.get(proposal_id)
+        if proposal is not None:
+            return proposal
+        if self._backend_overrides("get_proposal"):
+            return self.backend.get_proposal(proposal_id)
+        return None
+
+    def _mark_proposal_saved(
+        self,
+        proposal_id: str,
+        memory_id: str,
+        confirmation: dict[str, Any] | None,
+    ) -> None:
+        proposal = self.proposals.get(proposal_id)
+        if proposal is not None:
+            proposal.proposal_status = ProposalStatus.saved
+            proposal.saved_memory_id = memory_id
+            proposal.updated_at = _utc_now()
+        if self._backend_overrides("mark_proposal_saved"):
+            self.backend.mark_proposal_saved(proposal_id, memory_id=memory_id, confirmation=confirmation)
+
+    def _backend_overrides(self, method_name: str) -> bool:
+        return getattr(type(self.backend), method_name, None) is not getattr(
+            MemoryBackend,
+            method_name,
+            None,
+        )
 
     def _overlap_summary(self, result: SearchResult) -> dict[str, Any]:
         memory = result.memory

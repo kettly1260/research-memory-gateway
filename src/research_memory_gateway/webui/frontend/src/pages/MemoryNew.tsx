@@ -15,20 +15,23 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { ArrowLeft, Plus, AlertCircle } from 'lucide-react'
-import { useCreateMemory } from '@/lib/query'
+import { useCreateMemory, useTaxonomy } from '@/lib/query'
 import { ApiError } from '@/lib/api'
 import { MEMORY_TYPES, formatMemoryType } from '@/constants/memoryTypes'
 import { toast } from 'sonner'
 
 export function MemoryNew() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const createMutation = useCreateMemory()
+  const { data: taxonomy } = useTaxonomy()
 
   const [form, setForm] = useState({
     project: '',
     topic: '',
     memory_type: 'paper_note',
+    plan_status: 'draft',
+    plan_type: '',
     title: '',
     summary: '',
     tags: '',
@@ -51,10 +54,21 @@ export function MemoryNew() {
         return
       }
     } else {
+      const selectedType = taxonomy?.memory_types.find((item) => item.key === form.memory_type)
+      const metadata: Record<string, string> = {}
+      if (selectedType?.requires_plan_status) {
+        metadata.plan_status = form.plan_status
+      }
+      if (form.plan_type) {
+        metadata.plan_type = form.plan_type
+      }
       data = {
         ...form,
+        metadata,
         tags: form.tags.split(',').map((t) => t.trim()).filter(Boolean),
       }
+      delete data.plan_status
+      delete data.plan_type
     }
 
     if (confirmed) data.confirmed = true
@@ -73,6 +87,10 @@ export function MemoryNew() {
       },
     })
   }
+
+  const memoryTypeKeys = taxonomy?.memory_types.map((item) => item.key) || [...MEMORY_TYPES]
+  const selectedMemoryType = taxonomy?.memory_types.find((item) => item.key === form.memory_type)
+  const requiresPlanStatus = !!selectedMemoryType?.requires_plan_status
 
   return (
     <div className="p-6 md:p-8 max-w-3xl mx-auto space-y-6 animate-fade-in">
@@ -159,8 +177,8 @@ export function MemoryNew() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {MEMORY_TYPES.map((type) => (
-                      <SelectItem key={type} value={type}>{formatMemoryType(type)}</SelectItem>
+                    {memoryTypeKeys.map((type) => (
+                      <SelectItem key={type} value={type}>{formatMemoryType(type, taxonomy?.memory_types, i18n.language)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -174,6 +192,41 @@ export function MemoryNew() {
                 />
               </div>
             </div>
+            {(requiresPlanStatus || form.plan_type) && (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>{t('taxonomy.plan_status')}</Label>
+                  <Select value={form.plan_status} onValueChange={(v) => { if (v !== null) handleChange('plan_status', v) }}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(taxonomy?.plan_statuses || []).map((status) => (
+                        <SelectItem key={status.key} value={status.key}>
+                          {i18n.language.startsWith('zh') ? status.label_zh : status.label_en}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>{t('taxonomy.plan_type')}</Label>
+                  <Select value={form.plan_type || '_none'} onValueChange={(v) => { if (v !== null) handleChange('plan_type', v === '_none' ? '' : v) }}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">{t('common.no')}</SelectItem>
+                      {(taxonomy?.plan_types || []).map((planType) => (
+                        <SelectItem key={planType.key} value={planType.key}>
+                          {i18n.language.startsWith('zh') ? planType.label_zh : planType.label_en}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
               <Label>{t('memories.col_title')}</Label>
               <Input

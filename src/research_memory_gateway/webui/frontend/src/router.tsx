@@ -7,6 +7,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ def
 const Memories = lazy(() => import('./pages/Memories').then((module) => ({ default: module.Memories })))
 const MemoryDetail = lazy(() => import('./pages/MemoryDetail').then((module) => ({ default: module.MemoryDetail })))
 const MemoryNew = lazy(() => import('./pages/MemoryNew').then((module) => ({ default: module.MemoryNew })))
+const Proposals = lazy(() => import('./pages/Proposals').then((module) => ({ default: module.Proposals })))
 const Login = lazy(() => import('./pages/Login').then((module) => ({ default: module.Login })))
 const Config = lazy(() => import('./pages/Config').then((module) => ({ default: module.Config })))
 const Security = lazy(() => import('./pages/Security').then((module) => ({ default: module.Security })))
@@ -59,6 +60,12 @@ const memoryDetailRoute = createRoute({
   component: lazyRoute(MemoryDetail),
 })
 
+const proposalsRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/proposals',
+  component: lazyRoute(Proposals),
+})
+
 const configRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/config',
@@ -101,6 +108,7 @@ const routeTree = rootRoute.addChildren([
     memoryNewRoute,
     memoryDetailRoute,
     memoriesRoute,
+    proposalsRoute,
     configRoute,
     securityRoute,
     importRoute,

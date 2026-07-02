@@ -131,6 +131,11 @@ def build_mcp(config: AppConfig) -> FastMCP:
     mcp = FastMCP(config.server.name, host=config.server.host, port=config.server.port)
 
     @mcp.tool()
+    def get_memory_taxonomy() -> dict[str, Any]:
+        """Return canonical memory taxonomy with stable keys and Chinese/English labels."""
+        return service.get_memory_taxonomy()
+
+    @mcp.tool()
     def propose_save(
         reason: str,
         suggested_memory: dict[str, Any],
@@ -153,18 +158,52 @@ def build_mcp(config: AppConfig) -> FastMCP:
         user_confirmed: bool,
         proposal_id: str | None = None,
         memory: dict[str, Any] | None = None,
+        confirmation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Save a research memory after explicit user confirmation.
 
         Provide either a proposal_id returned by propose_save or a full memory object.
+        When confirmation happened in chat, pass confirmation with source/text/confirmed_by.
         """
         saved = service.save_research_memory(
             user_confirmed=user_confirmed,
             proposal_id=proposal_id,
             memory=memory,
+            confirmation=confirmation,
         )
         logger.info("Saved research memory memory_id=%s project=%s", saved.memory_id, saved.project)
         return saved.model_dump(mode="json")
+
+    @mcp.tool()
+    def list_memory_proposals(
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """List durable memory proposals awaiting review or already saved."""
+        return [item.model_dump(mode="json") for item in service.list_memory_proposals(status=status, limit=limit)]
+
+    @mcp.tool()
+    def get_memory_proposal(proposal_id: str) -> dict[str, Any]:
+        """Get one memory proposal and its append-only version history."""
+        proposal = service.get_memory_proposal(proposal_id).model_dump(mode="json")
+        proposal["versions"] = service.get_memory_proposal_versions(proposal_id)
+        return proposal
+
+    @mcp.tool()
+    def update_memory_proposal_status(
+        proposal_id: str,
+        proposal_status: str,
+        reason: str = "",
+        user_confirmed: bool = False,
+    ) -> dict[str, Any]:
+        """Reject, mark needs_edit, expire, or otherwise update a proposal after user action."""
+        proposal = service.update_memory_proposal_status(
+            proposal_id,
+            proposal_status,
+            reason=reason,
+            user_confirmed=user_confirmed,
+        )
+        return proposal.model_dump(mode="json")
 
     @mcp.tool()
     def search_research_memory(

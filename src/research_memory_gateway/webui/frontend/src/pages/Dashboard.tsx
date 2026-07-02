@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Database, Activity, Clock, BrainCircuit, Plus, ArrowRight } from "lucide-react"
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell, BarChart, Bar } from "recharts"
-import { useMemories, useVectorCoverage, useStats } from "@/lib/query"
+import { useMemories, useVectorCoverage, useStats, useTaxonomy } from "@/lib/query"
 import { Link } from "@tanstack/react-router"
 import type { ResearchMemory } from "@/types/api"
 import { formatMemoryType } from "@/constants/memoryTypes"
@@ -68,11 +68,12 @@ function computeMonthlyTrend(memories: ResearchMemory[]) {
 }
 
 export function Dashboard() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { data: activeMemories, isLoading: loadingActive } = useMemories({ status: 'active' })
   const { data: allMemories } = useMemories({ status: 'all' })
   const { data: vectorCoverage } = useVectorCoverage()
   const { data: stats } = useStats()
+  const { data: taxonomy } = useTaxonomy()
 
   const activeCount = stats?.active ?? activeMemories?.length ?? 0
   const archivedCount = stats?.archived ?? 0
@@ -216,7 +217,7 @@ export function Dashboard() {
                     className="w-2.5 h-2.5 rounded-full"
                     style={{ background: CHART_COLORS[index % CHART_COLORS.length] }}
                   />
-                  <span className="text-muted-foreground">{formatMemoryType(item.name)}</span>
+                  <span className="text-muted-foreground">{formatMemoryType(item.name, taxonomy?.memory_types, i18n.language)}</span>
                   <span className="font-medium">{item.value}</span>
                 </div>
               ))}
@@ -289,7 +290,7 @@ export function Dashboard() {
                     </p>
                   </div>
                   <Badge variant="outline" className="shrink-0 text-[10px]">
-                    {formatMemoryType(memory.memory_type)}
+                    {formatMemoryType(memory.memory_type, taxonomy?.memory_types, i18n.language)}
                   </Badge>
                 </Link>
               ))}

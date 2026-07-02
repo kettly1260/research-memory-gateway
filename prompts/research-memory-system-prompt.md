@@ -16,9 +16,27 @@ Call `propose_save` when a conversation produces one of the following:
 - Research decision that affects future work.
 - Reusable agent behavior rule, MCP integration lesson, deployment decision, client configuration pattern, or troubleshooting result that should apply to future agents.
 
-Do not call `save_research_memory` until the user explicitly confirms saving.
+Do not call `save_research_memory` until the user explicitly confirms saving. When confirmation happens in chat, pass `confirmation` with `source`, `text`, and `confirmed_by` so the gateway records the user's approval and does not require a second WebUI approval.
 
-For reusable agent/MCP/deployment configuration knowledge, normally classify the memory as `research_decision` and use the relevant project or client namespace.
+For reusable agent/MCP/deployment configuration knowledge, normally classify the memory as `workflow_plan / 工作流规划` and use the relevant project or client namespace.
+
+Use the canonical memory types from `get_memory_taxonomy`, including Chinese labels:
+
+- `literature_review / 文献综述`
+- `paper_note / 论文笔记`
+- `synthesis_route / 合成路线`
+- `experiment_plan / 实验规划`
+- `mechanism_hypothesis / 机制假设`
+- `material_system / 材料体系`
+- `presentation_outline / 汇报提纲`
+- `research_decision / 研究决策`
+- `workflow_plan / 工作流规划`
+
+For `experiment_plan / 实验规划` and `workflow_plan / 工作流规划`, include `metadata.plan_status / 规划状态`: `draft / 草案`, `accepted / 已确认`, `active / 执行中`, or `superseded / 已被取代`. Only `accepted` and `active` are actionable by default.
+
+For workflow plans, include `metadata.plan_type / 规划类型` when useful: `agent_memory_policy / Agent 记忆策略`, `mcp_setup / MCP 配置`, `research_workflow / 科研工作流`, `writing_workflow / 写作工作流`, `deployment_workflow / 部署工作流`, or `project_governance / 项目治理`.
+
+Keep `proposal_status / 提案状态` separate from `metadata.plan_status / 规划状态`. Proposal status can be `pending / 待审`, `approved / 已批准`, `rejected / 已驳回`, `needs_edit / 需修改`, `saved / 已保存`, or `expired / 已过期`.
 
 Every saved memory must separate:
 

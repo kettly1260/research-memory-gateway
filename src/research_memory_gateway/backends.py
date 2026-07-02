@@ -13,12 +13,12 @@ from typing import Any
 import httpx
 
 from .config import AppConfig, RetrievalConfig, RuntimeConfigResolver
-from .models import MemoryStatus, ResearchMemory, SearchResult
+from .models import MemoryStatus, ProposalStatus, ResearchMemory, SaveProposal, SearchResult
 from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
 
 
 logger = getLogger(__name__)
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ACTIVE_STATUSES = (MemoryStatus.active.value,)
 ALL_STATUSES = tuple(status.value for status in MemoryStatus)
 
@@ -56,6 +56,48 @@ class MemoryBackend(ABC):
 
     def delete(self, memory_id: str) -> bool:
         raise NotImplementedError
+
+    def save_proposal(
+        self,
+        proposal: SaveProposal,
+        *,
+        author: str,
+        change_reason: str,
+        confirmation: dict[str, Any] | None = None,
+    ) -> SaveProposal:
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> SaveProposal | None:
+        return None
+
+    def mark_proposal_saved(
+        self,
+        proposal_id: str,
+        *,
+        memory_id: str,
+        confirmation: dict[str, Any] | None = None,
+    ) -> None:
+        return None
+
+    def list_proposals(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[SaveProposal]:
+        return []
+
+    def get_proposal_versions(self, proposal_id: str) -> list[dict[str, Any]]:
+        return []
+
+    def update_proposal_status(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> SaveProposal | None:
+        return None
 
 
 class SQLiteMemoryBackend(MemoryBackend):
@@ -97,6 +139,7 @@ class SQLiteMemoryBackend(MemoryBackend):
             (2, "webui_memory_lifecycle_and_audit", self._migration_lifecycle_and_audit),
             (3, "webui_api_keys_and_connections", self._migration_api_keys_and_connections),
             (4, "embedding_backfill_state", self._migration_embedding_backfill_state),
+            (5, "memory_proposals_and_versions", self._migration_memory_proposals),
         ]
 
     def _migration_initial_schema(self, connection: sqlite3.Connection) -> None:
@@ -205,6 +248,41 @@ class SQLiteMemoryBackend(MemoryBackend):
                 reason TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    def _migration_memory_proposals(self, connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_proposals (
+                proposal_id TEXT PRIMARY KEY,
+                proposal_status TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                requires_confirmation INTEGER NOT NULL DEFAULT 1,
+                current_version INTEGER NOT NULL DEFAULT 1,
+                saved_memory_id TEXT,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_proposal_versions (
+                proposal_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                author TEXT NOT NULL,
+                change_reason TEXT NOT NULL,
+                memory_data TEXT NOT NULL,
+                overlap_candidates TEXT NOT NULL DEFAULT '[]',
+                confirmation TEXT,
+                blocked INTEGER NOT NULL DEFAULT 0,
+                redacted INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (proposal_id, version),
+                FOREIGN KEY(proposal_id) REFERENCES memory_proposals(proposal_id) ON DELETE CASCADE
             )
             """
         )
@@ -601,6 +679,225 @@ class SQLiteMemoryBackend(MemoryBackend):
             cursor = connection.execute("DELETE FROM memories WHERE memory_id = ?", (memory_id,))
             connection.execute("DELETE FROM embedding_backfill_needed WHERE memory_id = ?", (memory_id,))
             return cursor.rowcount > 0
+
+    def save_proposal(
+        self,
+        proposal: SaveProposal,
+        *,
+        author: str,
+        change_reason: str,
+        confirmation: dict[str, Any] | None = None,
+    ) -> SaveProposal:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(version) AS version FROM memory_proposal_versions WHERE proposal_id = ?",
+                (proposal.proposal_id,),
+            ).fetchone()
+            next_version = int(row["version"] or 0) + 1
+            proposal.current_version = next_version
+            proposal.updated_at = now
+            connection.execute(
+                """
+                INSERT INTO memory_proposals(
+                    proposal_id, proposal_status, reason, requires_confirmation,
+                    current_version, saved_memory_id, metadata, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(proposal_id) DO UPDATE SET
+                    proposal_status=excluded.proposal_status,
+                    reason=excluded.reason,
+                    requires_confirmation=excluded.requires_confirmation,
+                    current_version=excluded.current_version,
+                    saved_memory_id=excluded.saved_memory_id,
+                    metadata=excluded.metadata,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    proposal.proposal_id,
+                    proposal.proposal_status.value,
+                    proposal.reason,
+                    1 if proposal.requires_confirmation else 0,
+                    proposal.current_version,
+                    proposal.saved_memory_id,
+                    json.dumps({}, ensure_ascii=False),
+                    proposal.created_at,
+                    proposal.updated_at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO memory_proposal_versions(
+                    proposal_id, version, author, change_reason, memory_data,
+                    overlap_candidates, confirmation, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.proposal_id,
+                    proposal.current_version,
+                    author,
+                    change_reason,
+                    proposal.suggested_memory.model_dump_json(),
+                    json.dumps(proposal.overlap_candidates, ensure_ascii=False),
+                    json.dumps(_sanitize_metadata(confirmation), ensure_ascii=False)
+                    if confirmation is not None
+                    else None,
+                    now,
+                ),
+            )
+        return proposal
+
+    def get_proposal(self, proposal_id: str) -> SaveProposal | None:
+        with self._connect() as connection:
+            proposal_row = connection.execute(
+                "SELECT * FROM memory_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if proposal_row is None:
+                return None
+            version_row = connection.execute(
+                """
+                SELECT * FROM memory_proposal_versions
+                WHERE proposal_id = ? AND version = ?
+                """,
+                (proposal_id, proposal_row["current_version"]),
+            ).fetchone()
+        if version_row is None:
+            return None
+        return SaveProposal(
+            proposal_id=proposal_row["proposal_id"],
+            reason=proposal_row["reason"],
+            suggested_memory=ResearchMemory.model_validate_json(version_row["memory_data"]),
+            overlap_candidates=json.loads(version_row["overlap_candidates"]),
+            requires_confirmation=bool(proposal_row["requires_confirmation"]),
+            proposal_status=ProposalStatus(proposal_row["proposal_status"]),
+            current_version=proposal_row["current_version"],
+            saved_memory_id=proposal_row["saved_memory_id"],
+            created_at=proposal_row["created_at"],
+            updated_at=proposal_row["updated_at"],
+        )
+
+    def mark_proposal_saved(
+        self,
+        proposal_id: str,
+        *,
+        memory_id: str,
+        confirmation: dict[str, Any] | None = None,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT metadata FROM memory_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            metadata = json.loads(row["metadata"]) if row is not None else {}
+            if confirmation is not None:
+                metadata["save_confirmation"] = _sanitize_metadata(confirmation)
+            connection.execute(
+                """
+                UPDATE memory_proposals
+                SET proposal_status = ?, saved_memory_id = ?, metadata = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (
+                    ProposalStatus.saved.value,
+                    memory_id,
+                    json.dumps(metadata, ensure_ascii=False),
+                    now,
+                    proposal_id,
+                ),
+            )
+
+    def list_proposals(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[SaveProposal]:
+        params: list[Any] = []
+        where = ""
+        if status:
+            ProposalStatus(status)
+            where = "WHERE proposal_status = ?"
+            params.append(status)
+        params.append(max(1, min(limit, 200)))
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT proposal_id FROM memory_proposals {where} ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [
+            proposal
+            for row in rows
+            if (proposal := self.get_proposal(row["proposal_id"])) is not None
+        ]
+
+    def get_proposal_versions(self, proposal_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM memory_proposal_versions
+                WHERE proposal_id = ?
+                ORDER BY version
+                """,
+                (proposal_id,),
+            ).fetchall()
+        return [
+            {
+                "proposal_id": row["proposal_id"],
+                "version": row["version"],
+                "author": row["author"],
+                "change_reason": row["change_reason"],
+                "memory": json.loads(row["memory_data"]),
+                "overlap_candidates": json.loads(row["overlap_candidates"]),
+                "confirmation": json.loads(row["confirmation"]) if row["confirmation"] else None,
+                "blocked": bool(row["blocked"]),
+                "redacted": bool(row["redacted"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def update_proposal_status(
+        self,
+        proposal_id: str,
+        *,
+        status: str,
+        reason: str = "",
+    ) -> SaveProposal | None:
+        parsed_status = ProposalStatus(status)
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT metadata FROM memory_proposals WHERE proposal_id = ?",
+                (proposal_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            metadata = json.loads(row["metadata"] or "{}")
+            history = metadata.setdefault("status_history", [])
+            history.append(
+                {
+                    "proposal_status": parsed_status.value,
+                    "reason": reason,
+                    "changed_at": now,
+                }
+            )
+            connection.execute(
+                """
+                UPDATE memory_proposals
+                SET proposal_status = ?, metadata = ?, updated_at = ?
+                WHERE proposal_id = ?
+                """,
+                (
+                    parsed_status.value,
+                    json.dumps(_sanitize_metadata(metadata), ensure_ascii=False),
+                    now,
+                    proposal_id,
+                ),
+            )
+        return self.get_proposal(proposal_id)
 
     def append_audit_event(
         self,

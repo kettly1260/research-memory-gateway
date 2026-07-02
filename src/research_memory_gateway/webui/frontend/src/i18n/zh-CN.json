@@ -44,6 +44,7 @@
   "nav": {
     "dashboard": "控制台",
     "memories": "记忆管理",
+    "proposals": "待审记忆",
     "config": "参数配置",
     "security": "安全与授权",
     "import": "导入数据",
@@ -120,6 +121,20 @@
     "detail_title": "记忆详情",
     "claims": "断言列表",
     "evidence": "证据 (JSON)"
+  },
+  "taxonomy": {
+    "plan_status": "规划状态",
+    "plan_type": "规划类型"
+  },
+  "proposals": {
+    "title": "待审记忆",
+    "memory": "候选记忆",
+    "reason": "保存理由",
+    "detail": "提案详情",
+    "versions": "历史版本",
+    "save": "确认保存",
+    "saved_toast": "已保存：{{title}}",
+    "status_updated": "提案状态已更新"
   },
   "config": {
     "title": "参数配置",

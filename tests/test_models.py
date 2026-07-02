@@ -660,6 +660,205 @@ def test_service_preserves_explicit_unverified_claim_with_evidence(tmp_path) -> 
     assert memory.claims[0].verification_status == "unverified"
 
 
+def test_taxonomy_includes_chinese_labels(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    taxonomy = service.get_memory_taxonomy()
+
+    workflow_plan = next(item for item in taxonomy["memory_types"] if item["key"] == "workflow_plan")
+    accepted = next(item for item in taxonomy["plan_statuses"] if item["key"] == "accepted")
+    pending = next(item for item in taxonomy["proposal_statuses"] if item["key"] == "pending")
+    assert workflow_plan["label_zh"] == "工作流规划"
+    assert workflow_plan["requires_plan_status"] is True
+    assert accepted["label_zh"] == "已确认"
+    assert accepted["actionable"] is True
+    assert pending["label_zh"] == "待审"
+
+
+def test_plan_memories_require_plan_status(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    with pytest.raises(ValueError, match="workflow_plan requires metadata.plan_status"):
+        service.save_research_memory(
+            user_confirmed=True,
+            memory={
+                "project": "research-memory-gateway",
+                "topic": "Agent memory policy",
+                "memory_type": "workflow_plan",
+                "title": "Chat confirmation memory flow",
+                "summary": "Agents propose memory candidates and save only after user confirmation.",
+            },
+        )
+
+    with pytest.raises(ValueError, match="experiment_plan requires metadata.plan_status"):
+        service.save_research_memory(
+            user_confirmed=True,
+            memory={
+                "project": "demo",
+                "topic": "Hg experiment",
+                "memory_type": "experiment_plan",
+                "title": "Probe validation plan",
+                "summary": "Validate selectivity against competing ions.",
+            },
+        )
+
+
+def test_workflow_plan_accepts_valid_plan_status_and_type(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    saved = service.save_research_memory(
+        user_confirmed=True,
+        memory={
+            "project": "research-memory-gateway",
+            "topic": "Agent memory policy",
+            "memory_type": "workflow_plan",
+            "title": "Confirmed memory proposal flow",
+            "summary": "Agents should save memories only after explicit user confirmation.",
+            "metadata": {"plan_status": "accepted", "plan_type": "agent_memory_policy"},
+        },
+    )
+
+    assert saved.memory_type.value == "workflow_plan"
+    assert saved.metadata["plan_status"] == "accepted"
+
+
+def test_invalid_plan_type_is_rejected(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    with pytest.raises(ValueError, match="metadata.plan_type must be one of"):
+        service.save_research_memory(
+            user_confirmed=True,
+            memory={
+                "project": "research-memory-gateway",
+                "topic": "Agent memory policy",
+                "memory_type": "workflow_plan",
+                "title": "Invalid plan type",
+                "summary": "Invalid plan type should fail.",
+                "metadata": {"plan_status": "accepted", "plan_type": "misc"},
+            },
+        )
+
+
+def test_direct_confirmed_save_records_proposal_snapshot(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    saved = service.save_research_memory(
+        user_confirmed=True,
+        memory={
+            "project": "research-memory-gateway",
+            "topic": "Agent memory policy",
+            "memory_type": "workflow_plan",
+            "title": "User-confirmed save audit",
+            "summary": "A chat-confirmed save records confirmation metadata.",
+            "metadata": {"plan_status": "accepted", "plan_type": "agent_memory_policy"},
+        },
+        confirmation={"source": "chat", "text": "可以，保存", "confirmed_by": "user"},
+    )
+
+    proposals = service.list_memory_proposals(status="saved")
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    versions = service.get_memory_proposal_versions(proposal.proposal_id)
+    assert proposal.saved_memory_id == saved.memory_id
+    assert versions[0]["confirmation"]["source"] == "chat"
+    assert versions[0]["confirmation"]["text"] == "可以，保存"
+    assert saved.metadata["saved_from_proposal_id"] == proposal.proposal_id
+    assert saved.metadata["saved_from_proposal_version"] == 1
+    assert saved.metadata["save_confirmation"]["confirmed_by"] == "user"
+
+
+def test_only_pending_or_approved_proposals_can_be_saved(tmp_path) -> None:
+    service = make_service(tmp_path)
+    disallowed_statuses = [
+        "needs_edit",
+        "rejected",
+        "expired",
+    ]
+
+    for proposal_status in disallowed_statuses:
+        proposal = service.propose_save(
+            reason=f"{proposal_status} candidate",
+            suggested_memory={
+                "project": "research-memory-gateway",
+                "topic": "Agent memory policy",
+                "memory_type": "workflow_plan",
+                "title": f"{proposal_status} proposal",
+                "summary": "Only pending or approved proposals should be saveable.",
+                "metadata": {"plan_status": "draft", "plan_type": "agent_memory_policy"},
+            },
+            check_overlap=False,
+        )
+        service.update_memory_proposal_status(
+            proposal.proposal_id,
+            proposal_status,
+            reason="test transition",
+            user_confirmed=True,
+        )
+
+        with pytest.raises(ValueError, match="Only .* memory proposals can be saved"):
+            service.save_research_memory(user_confirmed=True, proposal_id=proposal.proposal_id)
+
+
+def test_saved_proposals_are_terminal(tmp_path) -> None:
+    service = make_service(tmp_path)
+    proposal = service.propose_save(
+        reason="saveable candidate",
+        suggested_memory={
+            "project": "research-memory-gateway",
+            "topic": "Agent memory policy",
+            "memory_type": "workflow_plan",
+            "title": "Terminal saved proposal",
+            "summary": "Saved proposals cannot later become rejected or expired.",
+            "metadata": {"plan_status": "accepted", "plan_type": "agent_memory_policy"},
+        },
+        check_overlap=False,
+    )
+    service.save_research_memory(
+        user_confirmed=True,
+        proposal_id=proposal.proposal_id,
+        confirmation={"source": "chat", "text": "save", "confirmed_by": "user"},
+    )
+
+    with pytest.raises(ValueError, match="terminal"):
+        service.update_memory_proposal_status(
+            proposal.proposal_id,
+            "rejected",
+            reason="should not be allowed",
+            user_confirmed=True,
+        )
+
+
+def test_rejected_and_expired_proposals_are_terminal(tmp_path) -> None:
+    service = make_service(tmp_path)
+    for initial_status, next_status in [("rejected", "pending"), ("expired", "approved")]:
+        proposal = service.propose_save(
+            reason=f"{initial_status} candidate",
+            suggested_memory={
+                "project": "research-memory-gateway",
+                "topic": "Agent memory policy",
+                "memory_type": "workflow_plan",
+                "title": f"{initial_status} terminal proposal",
+                "summary": "Rejected and expired proposals are terminal.",
+                "metadata": {"plan_status": "draft", "plan_type": "agent_memory_policy"},
+            },
+            check_overlap=False,
+        )
+        service.update_memory_proposal_status(
+            proposal.proposal_id,
+            initial_status,
+            reason="terminal transition",
+            user_confirmed=True,
+        )
+
+        with pytest.raises(ValueError, match="terminal"):
+            service.update_memory_proposal_status(
+                proposal.proposal_id,
+                next_status,
+                reason="should not be allowed",
+                user_confirmed=True,
+            )
+
+
 def test_update_research_memory_refreshes_search_index(tmp_path) -> None:
     service = make_service(tmp_path)
     memory = service.save_research_memory(
@@ -772,6 +971,7 @@ def test_schema_migrations_table_is_initialized(tmp_path) -> None:
     assert (rows[1]["version"], rows[1]["name"]) == (2, "webui_memory_lifecycle_and_audit")
     assert (rows[2]["version"], rows[2]["name"]) == (3, "webui_api_keys_and_connections")
     assert (rows[3]["version"], rows[3]["name"]) == (4, "embedding_backfill_state")
+    assert (rows[4]["version"], rows[4]["name"]) == (5, "memory_proposals_and_versions")
 
 
 def test_legacy_database_is_upgraded_without_losing_memories(tmp_path) -> None:
@@ -830,7 +1030,7 @@ def test_legacy_database_is_upgraded_without_losing_memories(tmp_path) -> None:
         ]
 
     assert {"memory_status", "status_changed_at", "status_change_reason"} <= columns
-    assert migration_versions == [1, 2, 3, 4]
+    assert migration_versions == [1, 2, 3, 4, 5]
 
 
 def test_integrity_audit_repairs_missing_fts_and_orphan_embeddings(tmp_path) -> None:
@@ -1005,7 +1205,7 @@ def login_webui(client: TestClient) -> str:
 
 
 def test_webui_login_session_csrf_and_memory_api(tmp_path, monkeypatch) -> None:
-    client, _app = make_webui_client(tmp_path, monkeypatch)
+    client, app = make_webui_client(tmp_path, monkeypatch)
     # The SPA doesn't redirect unauthenticated /admin to /admin/login anymore
     # because routing is handled client-side. The API returns 401.
     token = login_webui(client)
@@ -1020,6 +1220,72 @@ def test_webui_login_session_csrf_and_memory_api(tmp_path, monkeypatch) -> None:
 
     assert created.status_code == 201
     assert client.get("/admin/api/memories").json()["items"][0]["title"] == "Web memory"
+    saved = created.json()
+    proposals = app.state.webui.service.list_memory_proposals(status="saved")
+    assert len(proposals) == 1
+    assert proposals[0].saved_memory_id == saved["memory_id"]
+    assert saved["metadata"]["save_confirmation"]["source"] == "webui"
+
+
+def test_webui_memory_patch_returns_400_for_invalid_plan_metadata(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    created = client.post(
+        "/admin/api/memories",
+        headers={"x-csrf-token": token},
+        json={
+            "project": "demo",
+            "topic": "Agent memory policy",
+            "memory_type": "workflow_plan",
+            "title": "WebUI patch validation",
+            "summary": "Plan memories must keep valid plan metadata.",
+            "metadata": {"plan_status": "accepted", "plan_type": "agent_memory_policy"},
+            "confirmed": True,
+        },
+    )
+
+    assert created.status_code == 201
+    patched = client.patch(
+        f"/admin/api/memories/{created.json()['memory_id']}",
+        headers={"x-csrf-token": token},
+        json={"metadata": {"plan_type": "agent_memory_policy"}},
+    )
+
+    assert patched.status_code == 400
+    assert "plan_status" in patched.json()["error"]
+
+
+def test_webui_taxonomy_and_proposal_api(tmp_path, monkeypatch) -> None:
+    client, app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    proposal = app.state.webui.service.propose_save(
+        reason="agent prepared candidate",
+        suggested_memory={
+            "project": "research-memory-gateway",
+            "topic": "Agent memory policy",
+            "memory_type": "workflow_plan",
+            "title": "Review queue flow",
+            "summary": "Agent proposals can be reviewed in WebUI before saving.",
+            "metadata": {"plan_status": "draft", "plan_type": "agent_memory_policy"},
+        },
+        check_overlap=False,
+    )
+
+    taxonomy = client.get("/admin/api/taxonomy")
+    proposals = client.get("/admin/api/proposals?status=pending")
+    detail = client.get(f"/admin/api/proposals/{proposal.proposal_id}")
+    saved = client.post(
+        f"/admin/api/proposals/{proposal.proposal_id}/save",
+        headers={"x-csrf-token": token},
+        json={"text": "WebUI confirmed"},
+    )
+
+    assert taxonomy.status_code == 200
+    assert any(item["label_zh"] == "工作流规划" for item in taxonomy.json()["memory_types"])
+    assert proposals.json()["items"][0]["proposal_id"] == proposal.proposal_id
+    assert detail.json()["versions"][0]["version"] == 1
+    assert saved.status_code == 201
+    assert saved.json()["metadata"]["save_confirmation"]["text"] == "WebUI confirmed"
 
 
 def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> None:
@@ -1094,7 +1360,7 @@ def test_webui_config_models_fetches_openai_compatible_list(tmp_path, monkeypatc
 
 
 def test_webui_json_import_export_and_lifecycle(tmp_path, monkeypatch) -> None:
-    client, _app = make_webui_client(tmp_path, monkeypatch)
+    client, app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)
     memory = {
         "memory_id": "mem_imported",
@@ -1116,8 +1382,31 @@ def test_webui_json_import_export_and_lifecycle(tmp_path, monkeypatch) -> None:
     assert execute.json()["imported"] == 1
     assert imported.json()["memory_type"] == "paper_note"
     assert imported.json()["claims"][0]["verification_status"] == "evidence_backed"
+    assert imported.json()["metadata"]["save_confirmation"]["source"] == "webui_import"
+    assert app.state.webui.service.list_memory_proposals(status="saved")[0].saved_memory_id == "mem_imported"
     assert archived.json()["memory_status"] == MemoryStatus.archived.value
     assert exported.json()["count"] == 1
+
+
+def test_webui_import_validation_rejects_plan_without_plan_status(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    memory = {
+        "memory_id": "mem_bad_plan",
+        "project": "demo",
+        "topic": "Workflow",
+        "memory_type": "workflow_plan",
+        "title": "Missing status",
+        "summary": "Plan memories need plan_status.",
+    }
+
+    validate = client.post("/admin/api/import/json/validate", headers={"x-csrf-token": token}, json={"memories": [memory]})
+    execute = client.post("/admin/api/import/json/execute", headers={"x-csrf-token": token}, json={"memories": [memory]})
+
+    assert validate.json()["invalid"] == 1
+    assert "plan_status" in validate.json()["errors"][0]["error"]
+    assert execute.status_code == 400
+    assert execute.json()["error"] == "invalid_import_payload"
 
 
 def test_webui_overwrite_import_requires_confirmation_and_returns_diff(tmp_path, monkeypatch) -> None:
@@ -1215,7 +1504,7 @@ def test_webui_pages_render_forms_without_secret_values(tmp_path, monkeypatch) -
     client, _app = make_webui_client(tmp_path, monkeypatch)
     login_webui(client)
 
-    for path in ["/admin/memories/new", "/admin/config", "/admin/config/nocturne", "/admin/import", "/admin/exports"]:
+    for path in ["/admin/memories/new", "/admin/proposals", "/admin/config", "/admin/config/nocturne", "/admin/import", "/admin/exports"]:
         response = client.get(path)
         assert response.status_code == 200
         assert "https://" not in response.text

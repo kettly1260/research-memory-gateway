@@ -17,6 +17,7 @@ class MemoryType(str, Enum):
     material_system = "material_system"
     presentation_outline = "presentation_outline"
     research_decision = "research_decision"
+    workflow_plan = "workflow_plan"
 
 
 class VerificationStatus(str, Enum):
@@ -32,6 +33,15 @@ class MemoryStatus(str, Enum):
     active = "active"
     archived = "archived"
     deleted = "deleted"
+
+
+class ProposalStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    needs_edit = "needs_edit"
+    saved = "saved"
+    expired = "expired"
 
 
 class Confidence(str, Enum):
@@ -133,7 +143,11 @@ class SaveProposal(BaseModel):
     suggested_memory: ResearchMemory
     overlap_candidates: list[dict[str, Any]] = Field(default_factory=list)
     requires_confirmation: bool = True
+    proposal_status: ProposalStatus = ProposalStatus.pending
+    current_version: int = 1
+    saved_memory_id: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class SearchResult(BaseModel):

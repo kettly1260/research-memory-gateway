@@ -27,7 +27,7 @@ import {
   AlertTriangle,
   Copy,
 } from 'lucide-react'
-import { useMemory, useArchiveMemory, useRestoreMemory, useSoftDeleteMemory, useHardDeleteMemory, useUpdateMemory } from '@/lib/query'
+import { useMemory, useArchiveMemory, useRestoreMemory, useSoftDeleteMemory, useHardDeleteMemory, useUpdateMemory, useTaxonomy } from '@/lib/query'
 import type { ResearchMemory } from '@/types/api'
 import { formatMemoryType } from '@/constants/memoryTypes'
 import { toast } from 'sonner'
@@ -39,12 +39,13 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | '
 }
 
 export function MemoryDetail() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const params = useParams({ strict: false })
   const navigate = useNavigate()
   const memoryId = (params as Record<string, string>).id || ''
 
   const { data: memory, isLoading, error } = useMemory(memoryId)
+  const { data: taxonomy } = useTaxonomy()
   const archiveMutation = useArchiveMemory()
   const restoreMutation = useRestoreMemory()
   const softDeleteMutation = useSoftDeleteMemory()
@@ -128,7 +129,7 @@ export function MemoryDetail() {
             <Badge variant={statusVariants[memory.memory_status] || 'outline'} className="capitalize">
               {t(`common.${memory.memory_status}`)}
             </Badge>
-            <Badge variant="outline">{formatMemoryType(memory.memory_type)}</Badge>
+            <Badge variant="outline">{formatMemoryType(memory.memory_type, taxonomy?.memory_types, i18n.language)}</Badge>
             <button
               onClick={() => { navigator.clipboard.writeText(memory.memory_id); toast.success(t('common.copied')) }}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
