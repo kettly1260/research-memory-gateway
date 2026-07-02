@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import asyncio
-import difflib
+import base64
 import hashlib
 import hmac
 import json
 import os
-import base64
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -22,18 +21,27 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from ..backends import SQLiteMemoryBackend, memory_to_search_document
+from ..backends import SQLiteMemoryBackend
 from ..config import (
     AppConfig,
     AuthStore,
     RuntimeConfigResolver,
     SecretStore,
     WebConfigStore,
-    utc_now,
 )
 from ..models import ExportFormat, MemoryStatus, ResearchMemory
 from ..nocturne import NocturneReservedConnector
 from ..service import ResearchMemoryService
+from .runtime import (
+    BackfillManager,
+    ImportConfirmationRequired,
+    ImportValidationError,
+    bounded_int,
+    diff_json,
+    import_execute,
+    import_validate,
+    validate_backfill_options,
+)
 
 
 def b64_encode(data: bytes) -> str:
@@ -93,7 +101,7 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         backend = SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval, resolver)
         service = ResearchMemoryService(config, backend)
     sessions = SessionManager(config)
-    backfills = BackfillJobManager(service)
+    backfills = BackfillManager(service)
     state = WebState(config, service, auth_store, secret_store, web_config_store, resolver, sessions, backfills)
 
     routes = [
@@ -156,7 +164,7 @@ class WebState:
     web_config_store: WebConfigStore
     resolver: RuntimeConfigResolver
     sessions: "SessionManager"
-    backfills: "BackfillJobManager"
+    backfills: BackfillManager
 
 
 class SecurityMiddleware:
@@ -289,148 +297,6 @@ class SessionManager:
         self.active_refresh_jtis.clear()
 
 
-@dataclass
-class BackfillJob:
-    job_id: str
-    status: str = "running"
-    total: int = 0
-    completed: int = 0
-    failed: int = 0
-    skipped: int = 0
-    started_at: str = field(default_factory=utc_now)
-    updated_at: str = field(default_factory=utc_now)
-    last_error: str | None = None
-    cancel_requested: bool = False
-    batch_size: int = 8
-    concurrency: int = 2
-    request_timeout_seconds: int = 30
-    job_timeout_seconds: int = 1800
-
-    def as_dict(self) -> dict[str, Any]:
-        return self.__dict__.copy()
-
-
-class BackfillJobManager:
-    def __init__(self, service: ResearchMemoryService) -> None:
-        self.service = service
-        self.jobs: dict[str, BackfillJob] = {}
-        self.running_job_id: str | None = None
-
-    def dry_run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        targets = self._targets(payload)
-        existing = self._existing_embeddings()
-        candidates = [m for m in targets if payload.get("force") or m.memory_id not in existing]
-        self.service.append_audit_event("retrieval.backfill_dry_run", metadata={"total": len(candidates)})
-        return {"total": len(candidates), "memory_ids": [m.memory_id for m in candidates]}
-
-    def start(self, payload: dict[str, Any]) -> BackfillJob:
-        if self.running_job_id and self.jobs[self.running_job_id].status == "running":
-            raise RuntimeError("Only one backfill job can run at a time")
-        job = BackfillJob(
-            job_id=f"bf_{secrets.token_hex(8)}",
-            batch_size=_bounded_int(payload.get("batch_size"), 1, 32, 8),
-            concurrency=_bounded_int(payload.get("concurrency"), 1, 4, 2),
-            request_timeout_seconds=_bounded_int(payload.get("request_timeout_seconds"), 5, 120, 30),
-            job_timeout_seconds=_bounded_int(payload.get("job_timeout_seconds"), 60, 86400, 1800),
-        )
-        self.jobs[job.job_id] = job
-        self.running_job_id = job.job_id
-        self.service.append_audit_event("retrieval.backfill_started", metadata={"job_id": job.job_id})
-        asyncio.create_task(self._run(job, payload))
-        return job
-
-    def cancel(self, job_id: str) -> BackfillJob:
-        job = self.jobs[job_id]
-        job.cancel_requested = True
-        job.updated_at = utc_now()
-        self.service.append_audit_event("retrieval.backfill_cancelled", metadata={"job_id": job_id})
-        return job
-
-    async def _run(self, job: BackfillJob, payload: dict[str, Any]) -> None:
-        try:
-            targets = self._targets(payload)
-            existing = self._existing_embeddings()
-            targets = [m for m in targets if payload.get("force") or m.memory_id not in existing]
-            job.total = len(targets)
-            if hasattr(self.service.backend, "embedding_client"):
-                self.service.backend.embedding_client.config.timeout_seconds = job.request_timeout_seconds
-            started = time.monotonic()
-            for batch_start in range(0, len(targets), job.batch_size):
-                if job.cancel_requested:
-                    job.status = "cancelled"
-                    break
-                if time.monotonic() - started > job.job_timeout_seconds:
-                    job.status = "failed"
-                    job.last_error = "job_timeout"
-                    break
-                batch = targets[batch_start : batch_start + job.batch_size]
-                semaphore = asyncio.Semaphore(job.concurrency)
-                results = await asyncio.gather(*(self._backfill_one(job, memory, semaphore) for memory in batch))
-                for result, error in results:
-                    if result == "completed":
-                        job.completed += 1
-                    elif result == "skipped":
-                        job.skipped += 1
-                    else:
-                        job.failed += 1
-                        job.last_error = error or "embedding_failed"
-                job.updated_at = utc_now()
-            if job.status == "running":
-                job.status = "completed"
-                self.service.append_audit_event("retrieval.backfill_completed", metadata={"job_id": job.job_id})
-            elif job.status == "failed":
-                self.service.append_audit_event("retrieval.backfill_failed", metadata={"job_id": job.job_id, "error": job.last_error})
-        except Exception as exc:  # pragma: no cover - defensive safety for background task
-            job.status = "failed"
-            job.last_error = exc.__class__.__name__
-            self.service.append_audit_event("retrieval.backfill_failed", metadata={"job_id": job.job_id, "error": job.last_error})
-        finally:
-            job.updated_at = utc_now()
-            if self.running_job_id == job.job_id:
-                self.running_job_id = None
-
-    async def _backfill_one(
-        self,
-        job: BackfillJob,
-        memory: ResearchMemory,
-        semaphore: asyncio.Semaphore,
-    ) -> tuple[str, str | None]:
-        async with semaphore:
-            if job.cancel_requested:
-                return "skipped", "cancelled"
-            embedding_client = getattr(self.service.backend, "embedding_client", None)
-            if embedding_client is None or not embedding_client.enabled:
-                return "skipped", None
-            vector = await asyncio.to_thread(embedding_client.embed, memory_to_search_document(memory))
-            if not vector:
-                return "failed", getattr(embedding_client, "last_error", "embedding_failed")
-            with self.service.backend._connect() as connection:
-                connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory.memory_id,))
-                connection.execute(
-                    "INSERT INTO memory_embeddings(memory_id, embedding, updated_at) VALUES (?, ?, ?)",
-                    (memory.memory_id, json.dumps(vector), utc_now()),
-                )
-            return "completed", None
-
-    def _targets(self, payload: dict[str, Any]) -> list[ResearchMemory]:
-        statuses = _scope_to_statuses(payload.get("scope", "active"))
-        memories = self.service.backend.list_all(statuses=statuses)
-        if payload.get("project"):
-            memories = [m for m in memories if m.project == payload["project"]]
-        if payload.get("memory_type"):
-            memories = [m for m in memories if m.memory_type.value == payload["memory_type"]]
-        limit = payload.get("limit")
-        if limit not in (None, "all"):
-            memories = memories[: max(0, min(int(limit), 1000))]
-        return memories
-
-    def _existing_embeddings(self) -> set[str]:
-        if not hasattr(self.service.backend, "_connect"):
-            return set()
-        with self.service.backend._connect() as connection:
-            return {row["memory_id"] for row in connection.execute("SELECT memory_id FROM memory_embeddings").fetchall()}
-
-
 async def serve_spa(request: Request) -> Response:
     index_path = Path(__file__).parent / "static" / "dist" / "index.html"
     if index_path.exists():
@@ -538,7 +404,7 @@ async def api_taxonomy(request: Request) -> Response:
 async def api_proposals(request: Request) -> Response:
     state = request.app.state.webui
     status = request.query_params.get("status") or None
-    limit = _bounded_int(request.query_params.get("limit"), 1, 200, 50)
+    limit = bounded_int(request.query_params.get("limit"), 1, 200, 50)
     try:
         proposals = state.service.list_memory_proposals(status=status, limit=limit)
     except ValueError as exc:
@@ -604,9 +470,7 @@ async def api_overlap(request: Request) -> Response:
 
 async def api_diff(request: Request) -> Response:
     payload = await request.json()
-    before = json.dumps(payload.get("before", {}), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
-    after = json.dumps(payload.get("after", {}), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
-    return JSONResponse({"diff": "\n".join(difflib.unified_diff(before, after, lineterm=""))})
+    return JSONResponse({"diff": diff_json(payload.get("before", {}), payload.get("after", {}))})
 
 
 async def api_config_effective(request: Request) -> Response:
@@ -699,19 +563,18 @@ async def api_security_password(request: Request) -> Response:
 
 
 async def api_vector_coverage(request: Request) -> Response:
-    backend = request.app.state.webui.service.backend
-    memories = backend.list_all(statuses=[s.value for s in MemoryStatus])
-    existing = request.app.state.webui.backfills._existing_embeddings()
-    return JSONResponse({"total": len(memories), "embedded": len(existing), "missing": max(0, len(memories) - len(existing))})
+    return JSONResponse(request.app.state.webui.backfills.coverage())
 
 
 async def api_backfill_dry_run(request: Request) -> Response:
-    return JSONResponse(request.app.state.webui.backfills.dry_run(_validate_backfill(await request.json())))
+    return JSONResponse(
+        request.app.state.webui.backfills.dry_run(validate_backfill_options(await request.json()))
+    )
 
 
 async def api_backfill_start(request: Request) -> Response:
     try:
-        job = request.app.state.webui.backfills.start(_validate_backfill(await request.json()))
+        job = request.app.state.webui.backfills.start(validate_backfill_options(await request.json()))
     except RuntimeError as exc:
         return JSONResponse({"error": str(exc)}, status_code=409)
     return JSONResponse(job.as_dict(), status_code=202)
@@ -730,7 +593,7 @@ async def api_backfill_cancel(request: Request) -> Response:
 
 async def api_import_validate(request: Request) -> Response:
     payload = await request.json()
-    result = _validate_import_payload(request.app.state.webui.service, payload.get("memories", payload))
+    result = import_validate(request.app.state.webui.service, payload)
     request.app.state.webui.service.append_audit_event("import.json_validated", metadata={"valid": result["valid"], "invalid": result["invalid"]})
     return JSONResponse(result)
 
@@ -740,45 +603,13 @@ async def api_import_execute(request: Request) -> Response:
     payload = await request.json()
     policy = payload.get("policy", "skip_existing")
     confirmed = bool(payload.get("confirmed"))
-    validation = _validate_import_payload(state.service, payload.get("memories", []))
-    if validation["invalid"]:
-        return JSONResponse({"error": "invalid_import_payload", **validation}, status_code=400)
-    if policy == "overwrite_existing" and not confirmed:
-        diffs: dict[str, str] = {}
-        for item in payload.get("memories", []):
-            incoming = state.service.validate_research_memory_for_write(item)
-            existing = state.service.backend.get(incoming.memory_id)
-            if existing is None:
-                continue
-            before = json.dumps(existing.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
-            after = json.dumps(incoming.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True).splitlines()
-            diffs[incoming.memory_id] = "\n".join(difflib.unified_diff(before, after, lineterm=""))
-        return JSONResponse({"error": "confirmation_required", "diffs": diffs}, status_code=409)
-    memories = payload.get("memories", [])
-    imported = 0
-    skipped = 0
-    for item in memories:
-        memory = state.service.validate_research_memory_for_write(item)
-        exists = state.service.backend.get(memory.memory_id) is not None
-        if exists and policy == "skip_existing":
-            skipped += 1
-            continue
-        data = dict(item)
-        if policy == "import_as_new":
-            data.pop("memory_id", None)
-            data.setdefault("metadata", {})["imported_original_memory_id"] = memory.memory_id
-        state.service.save_research_memory(
-            user_confirmed=True,
-            memory=data,
-            confirmation={
-                "source": "webui_import",
-                "text": f"JSON import policy={policy}",
-                "confirmed_by": "webui_user",
-            },
-        )
-        imported += 1
-    state.service.append_audit_event("import.json_completed", metadata={"imported": imported, "skipped": skipped, "policy": policy})
-    return JSONResponse({"imported": imported, "skipped": skipped})
+    try:
+        result = import_execute(state.service, payload, policy=policy, confirmed=confirmed)
+    except ImportValidationError as exc:
+        return JSONResponse({"error": "invalid_import_payload", **exc.validation}, status_code=400)
+    except ImportConfirmationRequired as exc:
+        return JSONResponse({"error": "confirmation_required", "diffs": exc.diffs}, status_code=409)
+    return JSONResponse(result)
 
 
 async def api_export(request: Request) -> Response:
@@ -809,7 +640,7 @@ async def api_stats(request: Request) -> Response:
     all_memories = state.service.backend.list_all(statuses=[s.value for s in MemoryStatus])
     active = [m for m in all_memories if m.memory_status == MemoryStatus.active]
     archived = [m for m in all_memories if m.memory_status == MemoryStatus.archived]
-    existing_embeddings = state.backfills._existing_embeddings()
+    existing_embeddings = state.backfills.embedded_memory_ids()
 
     type_counts: dict[str, int] = {}
     for m in all_memories:
@@ -862,64 +693,6 @@ def _status_filter(status: str) -> list[str]:
     if status == "all":
         return [s.value for s in MemoryStatus]
     return [MemoryStatus(status).value]
-
-
-def _scope_to_statuses(scope: str) -> list[str]:
-    if scope == "all":
-        return [s.value for s in MemoryStatus]
-    if scope == "active_archived":
-        return [MemoryStatus.active.value, MemoryStatus.archived.value]
-    return [MemoryStatus.active.value]
-
-
-
-
-
-def _validate_backfill(payload: dict[str, Any]) -> dict[str, Any]:
-    data = dict(payload)
-    data["concurrency"] = _bounded_int(data.get("concurrency"), 1, 4, 2)
-    data["batch_size"] = _bounded_int(data.get("batch_size"), 1, 32, 8)
-    data["request_timeout_seconds"] = _bounded_int(data.get("request_timeout_seconds"), 5, 120, 30)
-    data["job_timeout_seconds"] = _bounded_int(data.get("job_timeout_seconds"), 60, 86400, 1800)
-    return data
-
-
-def _bounded_int(value: Any, low: int, high: int, default: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(low, min(parsed, high))
-
-
-def _validate_import_payload(service: ResearchMemoryService, raw: Any) -> dict[str, Any]:
-    items = raw if isinstance(raw, list) else []
-    seen: set[str] = set()
-    valid = 0
-    invalid = 0
-    duplicate_ids: list[str] = []
-    errors: list[dict[str, Any]] = []
-    overlaps: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
-        try:
-            memory = service.validate_research_memory_for_write(item)
-            valid += 1
-            if memory.memory_id in seen or service.backend.get(memory.memory_id) is not None:
-                duplicate_ids.append(memory.memory_id)
-            seen.add(memory.memory_id)
-            overlaps.extend(service.check_overlap(query=f"{memory.title} {memory.summary}", project=memory.project, limit=3))
-        except ValueError as exc:
-            invalid += 1
-            errors.append({"index": index, "error": str(exc)})
-    return {
-        "valid": valid,
-        "invalid": invalid,
-        "duplicates": len(duplicate_ids),
-        "duplicate_memory_id": duplicate_ids,
-        "overlap_candidates": overlaps,
-        "conflicts": duplicate_ids,
-        "errors": errors,
-    }
 
 
 async def _safe_probe(url: str, token: str | None, *, reserved: bool = False) -> JSONResponse:
