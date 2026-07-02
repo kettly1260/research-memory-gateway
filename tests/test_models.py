@@ -673,6 +673,34 @@ def test_service_preserves_explicit_unverified_claim_with_evidence(tmp_path) -> 
     assert memory.claims[0].verification_status == "unverified"
 
 
+def test_validate_research_memory_for_write_applies_write_policy(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    parsed = service.validate_research_memory_for_write(
+        {
+            "project": "demo",
+            "topic": "Mercury ion probe",
+            "memory_type": "paper_note",
+            "title": "Mercury paper",
+            "summary": "A paper reports sulfur-doped probes for mercury ions.",
+            "evidence": [{"evidence_id": "ev_1", "quote": "Sulfur doping improves Hg2+ affinity."}],
+            "claims": [{"claim": "Sulfur doping improves Hg2+ affinity.", "evidence_ids": ["ev_1"]}],
+        }
+    )
+
+    assert parsed.claims[0].verification_status == "evidence_backed"
+    with pytest.raises(ValueError, match="summary exceeds max_summary_chars"):
+        service.validate_research_memory_for_write(
+            {
+                "project": "demo",
+                "topic": "Mercury ion probe",
+                "memory_type": "paper_note",
+                "title": "Mercury paper",
+                "summary": "x" * (service.config.memory.max_summary_chars + 1),
+            }
+        )
+
+
 def test_taxonomy_includes_chinese_labels(tmp_path) -> None:
     service = make_service(tmp_path)
 

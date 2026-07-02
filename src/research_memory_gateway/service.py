@@ -17,8 +17,9 @@ from .models import (
     SourceRef,
     VerificationStatus,
 )
+from .policy import MemoryWritePolicy
 from .source_refs import SourceResolver
-from .taxonomy import get_memory_taxonomy, validate_plan_metadata
+from .taxonomy import get_memory_taxonomy
 
 
 SAVEABLE_PROPOSAL_STATUSES = {ProposalStatus.pending, ProposalStatus.approved}
@@ -53,6 +54,7 @@ class ResearchMemoryService:
     def __init__(self, config: AppConfig, backend: MemoryBackend) -> None:
         self.config = config
         self.backend = backend
+        self.write_policy = MemoryWritePolicy(config.memory)
         self.source_resolver = SourceResolver(config)
         self.proposals: dict[str, SaveProposal] = {}
 
@@ -64,7 +66,7 @@ class ResearchMemoryService:
         check_overlap: bool = True,
     ) -> SaveProposal:
         memory = ResearchMemory.model_validate(suggested_memory)
-        self._apply_evidence_policy(memory)
+        self.write_policy.validate(memory)
         overlaps = []
         if check_overlap:
             overlaps = self.check_overlap(
@@ -78,7 +80,6 @@ class ResearchMemoryService:
             overlap_candidates=overlaps,
             requires_confirmation=self.config.memory.require_user_confirmation,
         )
-        self._validate_memory_for_write(memory)
         proposal = self._persist_proposal(
             proposal,
             author="agent",
@@ -110,8 +111,7 @@ class ResearchMemoryService:
         else:
             raise ValueError("Provide either proposal_id or memory")
 
-        self._validate_memory_for_write(research_memory)
-        self._apply_evidence_policy(research_memory)
+        self.write_policy.validate(research_memory)
         confirmation_payload = self._confirmation_payload(confirmation) if user_confirmed else None
         if user_confirmed and proposal is None:
             proposal = SaveProposal(
@@ -257,7 +257,7 @@ class ResearchMemoryService:
         self, memory: dict[str, Any] | ResearchMemory
     ) -> ResearchMemory:
         parsed = memory if isinstance(memory, ResearchMemory) else ResearchMemory.model_validate(memory)
-        self._validate_memory_for_write(parsed)
+        self.write_policy.validate(parsed)
         return parsed
 
     def list_memory_proposals(self, status: str | None = None, limit: int = 50) -> list[SaveProposal]:
@@ -350,8 +350,7 @@ class ResearchMemoryService:
         data["memory_id"] = memory_id
         data["updated_at"] = _utc_now()
         updated = ResearchMemory.model_validate(data)
-        self._validate_memory_for_write(updated)
-        self._apply_evidence_policy(updated)
+        self.write_policy.validate(updated)
         return self.backend.save(updated)
 
     def delete_research_memory(self, memory_id: str, user_confirmed: bool) -> dict[str, Any]:
@@ -462,7 +461,7 @@ class ResearchMemoryService:
         merged_data["evidence"] = _dedupe_dicts(evidence)
         merged_data["updated_at"] = _utc_now()
         merged = ResearchMemory.model_validate(merged_data)
-        self._apply_evidence_policy(merged)
+        self.write_policy.validate(merged)
         saved = self.backend.save(merged)
         for source in sources:
             self.mark_memory_status(
@@ -472,26 +471,6 @@ class ResearchMemoryService:
                 user_confirmed=True,
             )
         return saved
-
-    def _apply_evidence_policy(self, memory: ResearchMemory) -> None:
-        if len(memory.summary) > self.config.memory.max_summary_chars:
-            raise ValueError(
-                f"summary exceeds max_summary_chars={self.config.memory.max_summary_chars}"
-            )
-        if not self.config.memory.require_evidence_for_claims:
-            return
-        evidence_ids = {item.evidence_id for item in memory.evidence}
-        for claim in memory.claims:
-            if not claim.evidence_ids:
-                claim.verification_status = VerificationStatus.unverified
-                continue
-            if any(evidence_id not in evidence_ids for evidence_id in claim.evidence_ids):
-                raise ValueError("claim references evidence_id that does not exist")
-            if claim.verification_status == VerificationStatus.unverified and "verification_status" not in claim.model_fields_set:
-                claim.verification_status = VerificationStatus.evidence_backed
-
-    def _validate_memory_for_write(self, memory: ResearchMemory) -> None:
-        validate_plan_metadata(memory.memory_type.value, memory.metadata)
 
     def _ensure_proposal_can_be_saved(self, proposal: SaveProposal) -> None:
         if proposal.proposal_status not in SAVEABLE_PROPOSAL_STATUSES:
