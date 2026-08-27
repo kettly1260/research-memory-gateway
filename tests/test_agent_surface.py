@@ -92,6 +92,31 @@ def test_recall_memory_rewrites_history_filler_for_keyword_mode(tmp_path) -> Non
     assert "储备液" in result["rewritten_query"]
 
 
+def test_recall_memory_retries_globally_after_wrong_project_hint(tmp_path) -> None:
+    service = make_service(tmp_path)
+    memory = ResearchMemory.model_validate(
+        {
+            "project": "Fe3-probe",
+            "topic": "Fe3+ stock preparation",
+            "memory_type": "material_system",
+            "title": "Fe3+ nitrate stock preparation",
+            "summary": "Fe3+ stock was prepared at 10 mM in 0.1 M HNO3.",
+            "claims": [{"claim": "Fe3+ stock was prepared at 10 mM in 0.1 M HNO3."}],
+        }
+    )
+    service.backend.save(memory)
+
+    result = recall_memory(
+        service,
+        query="之前 Fe 的硝酸溶液怎么配的？",
+        project="G:\\LLM\\memory\\.tmp\\codex-benchmark",
+    )
+
+    assert result["project_filter_fallback"] is True
+    assert result["project"] == "Fe3-probe"
+    assert result["results"][0]["memory_id"] == memory.memory_id
+
+
 def test_recall_memory_enforces_compact_context_budget(tmp_path) -> None:
     service = make_service(tmp_path)
     service.config.memory.recall_compact_token_budget = 450

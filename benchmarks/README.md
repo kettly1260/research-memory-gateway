@@ -6,8 +6,19 @@ This benchmark measures whether an agent **chooses** the V2 memory tools in natu
 
 - `recall_cases.jsonl`: 30 natural prompts covering explicit history, continuation, implicit history, and negative samples.
 - `capture_cases.jsonl`: 71 durable/non-durable outputs. The adversarial/generalization set spans polymers, ceramics, electrochemistry, spectroscopy, thermal analysis, mechanical/electrical properties, surface/microstructure characterization, literature conclusions, causal/association research hypotheses, explicit stable preferences, software state, sensitive configuration, speculation, and ordinary chat.
+- `results/`: checked-in pilot records and client-blocker notes. Incomplete pilot files are evidence,
+  not passing acceptance runs.
 
 Each client should be tested with the same Agent Surface and the concise V2 skill/system prompt. Do not prepend instructions such as “call recall_memory”.
+
+Before Recall evaluation, seed the deterministic benchmark corpus into an isolated database:
+
+```powershell
+python benchmarks/seed_recall_corpus.py --db data/benchmark_memory.db
+```
+
+Do not run Capture cases against a production memory database. Use a dedicated benchmark database
+so automatic Ambient saves and Trusted proposals cannot pollute real project memory.
 
 ## Result records
 
@@ -45,5 +56,9 @@ Target gates from the V2 plan:
 - Capture false-positive rate on non-durable chat: < 10%.
 
 Invocation benchmarks require a real client/model run. CI can validate dataset shape and score recorded runs, but it cannot honestly claim ChatGPT/Codex invocation rates without executing those clients.
+
+The checked-in Codex R01 pilot demonstrates one real autonomous recall. It must not be passed to
+`--require-pass` as if it were a complete 30-case result set; the scorer will correctly report the
+remaining case IDs as missing.
 
 The direct Gateway classifier test is intentionally weaker than the invocation benchmark: it checks whether `capture_memory` classifies these cases correctly **after the tool has already been called**. It does not prove that an agent will autonomously decide to call `capture_memory`, and it should not be used as a substitute for real client result JSONL files.

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from research_memory_gateway.agent_surface.capture import capture_memory
+from research_memory_gateway.agent_surface.recall import recall_memory
 from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.config import AppConfig
 from research_memory_gateway.service import ResearchMemoryService
@@ -20,6 +21,16 @@ load_jsonl = SCORE_INVOCATIONS.load_jsonl
 score_capture = SCORE_INVOCATIONS.score_capture
 score_recall = SCORE_INVOCATIONS.score_recall
 
+SEED_SPEC = importlib.util.spec_from_file_location(
+    "seed_recall_corpus",
+    ROOT / "benchmarks" / "seed_recall_corpus.py",
+)
+assert SEED_SPEC is not None and SEED_SPEC.loader is not None
+SEED_RECALL_CORPUS = importlib.util.module_from_spec(SEED_SPEC)
+SEED_SPEC.loader.exec_module(SEED_RECALL_CORPUS)
+MEMORIES = SEED_RECALL_CORPUS.MEMORIES
+seed_corpus = SEED_RECALL_CORPUS.seed_corpus
+
 
 def test_recall_benchmark_has_at_least_30_balanced_cases() -> None:
     cases = load_jsonl(str(ROOT / "benchmarks" / "recall_cases.jsonl"))
@@ -28,6 +39,25 @@ def test_recall_benchmark_has_at_least_30_balanced_cases() -> None:
     assert any(case["should_recall"] for case in cases)
     assert any(not case["should_recall"] for case in cases)
     assert len({case["case_id"] for case in cases}) == len(cases)
+
+
+def test_recall_benchmark_seed_corpus_is_stable_and_retrievable(tmp_path) -> None:
+    db_path = tmp_path / "recall-corpus.db"
+    memory_ids = seed_corpus(db_path)
+    repeated_memory_ids = seed_corpus(db_path)
+    config = AppConfig()
+    config.backend.sqlite_path = str(db_path)
+    service = ResearchMemoryService(config, SQLiteMemoryBackend(str(db_path)))
+
+    assert len(memory_ids) == len(MEMORIES)
+    assert len(set(memory_ids)) == len(memory_ids)
+    assert repeated_memory_ids == memory_ids
+    result = recall_memory(
+        service,
+        query="之前 Fe 的硝酸溶液怎么配的？",
+        project="Fe3-probe",
+    )
+    assert result["results"][0]["memory_id"] == "mem_benchmark_fe_conditions"
 
 
 def test_capture_benchmark_has_broad_cross_domain_coverage() -> None:

@@ -34,7 +34,9 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         continue/resume, what we decided, prior experiment conditions, established files,
         paths, tools, settings or preferences, and 之前/上次/以前/继续/还记得/原来/我们做过/怎么配的.
         Do not guess historical user-specific facts when this tool can retrieve them.
-        Only query is required; keep context_mode=compact unless more context is needed.
+        Only query is required; keep context_mode=compact unless more context is needed. Pass
+        project only when you know the exact gateway project label. Do not use the current working
+        directory or repository path as project; omit it when uncertain.
         """
         return recall_memory_impl(
             service,

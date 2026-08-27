@@ -92,6 +92,11 @@ The Agent Surface now publishes standard MCP `ToolAnnotations`: `recall_memory`,
 
 Recall output is claim-aware. When a query matches one or more claims, the compact result returns `matched_claims` and uses the best matched claim as `content`. Each matched claim carries its **own** `verification` and `confidence`; the result no longer substitutes the worst verification status from an unrelated claim in the same memory.
 
+If a client supplies a project hint and the filtered query returns no result, Recall retries once
+without the project filter. A successful retry sets `project_filter_fallback=true` and reports the
+project inferred from the returned memories. The tool description also instructs clients to omit
+`project` unless they know the exact gateway label and never to send cwd/repository paths.
+
 `summary` remains an index/overview field and is returned separately.
 
 Compact recall now has a configurable estimated-token budget of 1000 tokens, with a 1500-token
@@ -123,6 +128,7 @@ The frontend proposal page supports multi-select and the same batch actions.
 
 - 30 Recall natural-language cases.
 - 71 Capture natural-language cases, including a cross-domain/adversarial generalization set.
+- 8 deterministic Recall memories that can be seeded idempotently into an isolated benchmark DB.
 - a client-neutral scoring script.
 
 The scorer rejects duplicate/unknown case IDs, reports missing cases, evaluates target gates,
@@ -143,19 +149,32 @@ Target gates:
 
 ## Local verification status
 
-- Full pytest suite after the implementation audit and context-budget/scorer hardening: `119 passed`.
+- Full pytest suite after seed-corpus and project-filter-fallback hardening: `121 passed`.
 - V2 Agent Surface + benchmark code: Ruff check passed.
 - Real Streamable HTTP MCP integration test passed using `uvicorn`, `mcp.ClientSession`, `initialize`, `list_tools`, natural-language `recall_memory`, `capture_memory`, secret redaction, and Ambient supersession.
 - Frontend files were not changed by P0 hardening; ESLint and TypeScript `tsc -b` were re-run on the hardening branch and passed.
 - `git diff --check`: passed (Windows line-ending conversion warnings only).
 - Full-repository Ruff is **not** yet a clean gate: the V1 baseline contains 51 pre-existing style findings (for example legacy `datetime(timezone.utc)`, broad exception handling, and older test typing patterns). These were intentionally not mass-refactored as part of the Agent Memory change.
 
+## Real-client pilot status
+
+- Codex CLI `0.150.0-alpha.8`, `gpt-5.6-luna`, low reasoning: R01 autonomously called
+  `recall_memory`, recovered `mem_benchmark_fe_conditions`, and answered the Fe3+/HNO3/HEPES
+  conditions correctly while preserving the unverified status.
+- This pilot used 62,097 input tokens (48,384 cached), 252 output tokens, and 21 reasoning tokens;
+  wall time was approximately 22.8 seconds. It is recorded under `benchmarks/results/` and is not
+  treated as a complete benchmark pass.
+- A later optimized Codex attempt was blocked by model-service transport timeouts before any model
+  result or tool choice was produced.
+- ChatGPT Workspace currently has one blank unpublished Agent and no available Research Memory
+  Gateway app. Real ChatGPT testing is blocked until the custom MCP is registered and attached.
+
 ## Still not accepted
 
 The following remain P1/client-acceptance work and must not be reported as complete:
 
 - real ChatGPT autonomous recall/capture invocation rates
-- real Codex autonomous recall/capture invocation rates
+- complete real Codex autonomous recall/capture invocation rates (one Recall pilot is recorded)
 - Cherry Studio/Kilo cross-client invocation matrix
 - recorded client result JSONL and target-rate acceptance
 - reopenable conversation history without a client/session archive bridge

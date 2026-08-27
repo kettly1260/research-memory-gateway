@@ -95,13 +95,24 @@ def recall_memory(
         include_deleted=False,
         limit=safe_limit,
     )
+    project_filter_fallback = False
+    if project_hint and not results:
+        results = service.search_research_memory(
+            query=rewritten_query,
+            project=None,
+            include_archived=False,
+            include_deleted=False,
+            limit=safe_limit,
+        )
+        project_filter_fallback = bool(results)
 
-    inferred_project = project_hint or _infer_project(results)
+    inferred_project = _infer_project(results) if project_filter_fallback else project_hint or _infer_project(results)
     payload = {
         "query": retrieval_query,
         "rewritten_query": rewritten_query[:500],
         "query_truncated": len(retrieval_query) < len(normalized_query),
         "project": inferred_project,
+        "project_filter_fallback": project_filter_fallback,
         "context_mode": context_mode,
         "result_count": len(results),
         "results": [
