@@ -65,6 +65,7 @@ def test_capture_benchmark_matches_gateway_default_policy(tmp_path) -> None:
             service,
             content=case["content"],
             project=f"benchmark-{case['case_id']}",
+            user_confirmed=bool(case.get("user_confirmed", False)),
         )
         if case["should_capture"]:
             assert result["action"] in {"saved", "queued"}, case["case_id"]

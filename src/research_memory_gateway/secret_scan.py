@@ -124,12 +124,16 @@ def _redact_value(value: Any, *, path: str, report: SecretScanReport) -> Any:
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
-            child_path = f"{path}.{key}"
-            if _is_sensitive_key(str(key)) and item not in (None, "", REDACTED):
-                sanitized[key] = REDACTED
+            raw_key = str(key)
+            sanitized_key = _redact_text(raw_key, path=f"{path}.[key]", report=report)
+            if sanitized_key != raw_key:
+                sanitized_key = _unique_redacted_key(sanitized)
+            child_path = f"{path}.{sanitized_key}"
+            if _is_sensitive_key(raw_key) and item not in (None, "", REDACTED):
+                sanitized[sanitized_key] = REDACTED
                 report.add("sensitive_field", child_path)
             else:
-                sanitized[key] = _redact_value(item, path=child_path, report=report)
+                sanitized[sanitized_key] = _redact_value(item, path=child_path, report=report)
         return sanitized
     if isinstance(value, list):
         return [
@@ -195,3 +199,13 @@ def _looks_secret_value(value: str, *, separator: str) -> bool:
 def _is_sensitive_key(key: str) -> bool:
     lowered = key.lower().replace("-", "_").replace(" ", "_")
     return any(marker in lowered for marker in _SENSITIVE_KEY_MARKERS)
+
+
+def _unique_redacted_key(existing: dict[str, Any]) -> str:
+    base = "[REDACTED_KEY]"
+    if base not in existing:
+        return base
+    index = 2
+    while f"{base}_{index}" in existing:
+        index += 1
+    return f"{base}_{index}"

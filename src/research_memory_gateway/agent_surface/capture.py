@@ -16,6 +16,7 @@ from ..models import (
     VerificationStatus,
 )
 from ..secret_scan import redact_secrets
+from ..semantic_slots import infer_ambient_semantic_slot
 from ..service import ResearchMemoryService
 
 _RESEARCH_TERMS = (
@@ -89,6 +90,10 @@ _AMBIENT_TERMS = (
     "已完成",
     "偏好",
     "prefer",
+    "喜欢",
+    "不喜欢",
+    "回复风格",
+    "response style",
     "memory",
     "proposal",
     "记忆",
@@ -121,6 +126,10 @@ _OPERATIONAL_AMBIENT_TERMS = (
     "分支",
     "偏好",
     "prefer",
+    "喜欢",
+    "不喜欢",
+    "回复风格",
+    "response style",
     "memory",
     "proposal",
     "记忆",
@@ -156,6 +165,30 @@ _SPECULATION_MARKERS = (
     "i guess",
     "maybe it is",
     "not checked",
+)
+_HYPOTHESIS_CAUSAL_MARKERS = (
+    "导致",
+    "由于",
+    "来自",
+    "源于",
+    "引起",
+    "造成",
+    "due to",
+    "caused by",
+    "result from",
+    "results from",
+    "lead to",
+    "leads to",
+)
+_HYPOTHESIS_VALIDATION_MARKERS = (
+    "待验证",
+    "需验证",
+    "需要验证",
+    "尚待验证",
+    "未经验证",
+    "to be verified",
+    "needs verification",
+    "requires verification",
 )
 _ONE_OFF_TASK_MARKERS = (
     "翻译",
@@ -298,6 +331,7 @@ def capture_memory(
         normalized,
         importance=importance,
         min_chars=service.config.memory.capture_min_chars,
+        user_confirmed=user_confirmed,
     ):
         return {
             "action": "ignored",
@@ -471,9 +505,12 @@ def _build_memory(
         metadata["plan_status"] = "accepted" if user_confirmed else _default_plan_status(content, tier)
     if memory_type == MemoryType.workflow_plan:
         metadata["plan_type"] = _workflow_plan_type(content)
-    semantic_key = _ambient_semantic_key(content, project=project) if tier == MemoryTier.ambient else None
-    if semantic_key:
-        metadata["semantic_key"] = semantic_key
+    semantic_slot = infer_ambient_semantic_slot(content, project=project) if tier == MemoryTier.ambient else None
+    if semantic_slot:
+        metadata["semantic_key"] = semantic_slot.key(project)
+        metadata["semantic_role"] = semantic_slot.role
+        if semantic_slot.subject:
+            metadata["semantic_subject"] = semantic_slot.subject
 
     return ResearchMemory(
         project=project,
@@ -597,6 +634,15 @@ def _find_pending_duplicate(
 
 def _classify_tier(content: str) -> MemoryTier:
     lowered = content.lower()
+    if _is_research_hypothesis(content):
+        return MemoryTier.trusted
+    ambient_slot = infer_ambient_semantic_slot(content, project="capture")
+    if (
+        ambient_slot is not None
+        and not _is_scientific_measurement(content)
+        and not _is_scientific_observation(content)
+    ):
+        return MemoryTier.ambient
     if (
         _contains_any(lowered, _OPERATIONAL_AMBIENT_TERMS)
         and not _is_scientific_measurement(content)
@@ -637,7 +683,7 @@ def _classify_memory_type(content: str, *, tier: MemoryTier) -> MemoryType:
         return MemoryType.paper_note
     if _contains_any(lowered, _SYNTHESIS_MARKERS):
         return MemoryType.synthesis_route
-    if _contains_any(lowered, _MECHANISM_MARKERS):
+    if _is_research_hypothesis(content):
         return MemoryType.mechanism_hypothesis
     if _contains_any(lowered, _PLAN_MARKERS):
         return MemoryType.experiment_plan
@@ -646,15 +692,27 @@ def _classify_memory_type(content: str, *, tier: MemoryTier) -> MemoryType:
     return MemoryType.material_system
 
 
-def _should_ignore(content: str, *, importance: str, min_chars: int) -> bool:
+def _should_ignore(
+    content: str,
+    *,
+    importance: str,
+    min_chars: int,
+    user_confirmed: bool = False,
+) -> bool:
     lowered = content.lower()
+    if user_confirmed:
+        return False
     if len(content) < 4:
         return True
     if content.endswith(("?", "？")) and _contains_any(lowered, _QUESTION_PREFIXES):
         return True
     if importance == "auto" and _contains_any(lowered, _TRANSIENT_MARKERS):
         return True
-    if importance == "auto" and _contains_any(lowered, _SPECULATION_MARKERS):
+    if (
+        importance == "auto"
+        and _contains_any(lowered, _SPECULATION_MARKERS)
+        and not _is_research_hypothesis(content)
+    ):
         return True
     if (
         importance == "auto"
@@ -668,6 +726,7 @@ def _should_ignore(content: str, *, importance: str, min_chars: int) -> bool:
         or _WINDOWS_PATH_RE.search(content) is not None
         or _is_scientific_measurement(content)
         or _is_scientific_observation(content)
+        or _is_research_hypothesis(content)
         or _contains_any(lowered, _DECISION_MARKERS)
     )
     if importance == "high":
@@ -763,47 +822,18 @@ def _is_research_context(content: str) -> bool:
     )
 
 
+def _is_research_hypothesis(content: str) -> bool:
+    lowered = content.lower()
+    if _contains_any(lowered, _MECHANISM_MARKERS):
+        return True
+    has_causal_language = _contains_any(lowered, _HYPOTHESIS_CAUSAL_MARKERS)
+    has_validation_language = _contains_any(lowered, _HYPOTHESIS_VALIDATION_MARKERS)
+    has_speculative_language = _contains_any(lowered, _SPECULATION_MARKERS)
+    return has_causal_language and (has_validation_language or has_speculative_language)
+
+
 def _is_ambient_context(lowered: str) -> bool:
     return _contains_any(lowered, _AMBIENT_TERMS)
-
-
-def _ambient_semantic_key(content: str, *, project: str) -> str | None:
-    lowered = content.lower()
-    role: str | None = None
-    if _WINDOWS_PATH_RE.search(content):
-        if _contains_any(lowered, ("repository", "repo", "仓库")):
-            role = "repository_path"
-        elif _contains_any(lowered, ("workspace", "工作区")):
-            role = "workspace_path"
-        elif _contains_any(lowered, ("tool", "executable", "工具", "程序")):
-            role = "tool_path"
-        elif _contains_any(lowered, ("path", "目录", "路径")):
-            role = "project_path"
-    elif _contains_any(lowered, ("branch", "分支")):
-        role = "current_branch"
-    elif _contains_any(lowered, ("model", "模型")) and _contains_any(
-        lowered,
-        ("use", "using", "selected", "current", "采用", "使用", "当前"),
-    ):
-        role = "selected_model"
-    elif _contains_any(lowered, ("config", "configuration", "配置")) and _contains_any(
-        lowered,
-        ("use", "using", "active", "current", "采用", "使用", "当前"),
-    ):
-        role = "active_config"
-    elif _contains_any(lowered, ("workflow", "工作流", "流程")) and _contains_any(
-        lowered,
-        ("active", "current", "use", "采用", "当前", "执行中"),
-    ):
-        role = "current_workflow"
-    elif _contains_any(lowered, ("project state", "project status", "项目状态", "当前进度")):
-        role = "project_state"
-    elif _contains_any(lowered, ("next step", "下一步")):
-        role = "next_action"
-    if role is None:
-        return None
-    subject = _ambient_state_subject(lowered)
-    return f"{project}.{subject}.{role}" if subject else f"{project}.{role}"
 
 
 def _semantic_role(content: str, *, tier: MemoryTier, memory_type: MemoryType) -> str:
@@ -833,24 +863,6 @@ def _semantic_role(content: str, *, tier: MemoryTier, memory_type: MemoryType) -
     if memory_type == MemoryType.paper_note:
         return "literature_conclusion"
     return "research_fact"
-
-
-def _ambient_state_subject(lowered: str) -> str | None:
-    subjects = (
-        "embedding",
-        "rerank",
-        "origin",
-        "zotero",
-        "paper-fulltext",
-        "memory-gateway",
-        "research-memory-gateway",
-        "codex",
-        "chatgpt",
-        "kilo",
-        "cherry",
-        "mcp",
-    )
-    return next((subject for subject in subjects if subject in lowered), None)
 
 
 def _optional_text(value: Any) -> str | None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 from ..service import ResearchMemoryService
 from .capture import capture_memory as capture_memory_impl
@@ -19,7 +20,7 @@ AGENT_TOOL_NAMES = (
 
 
 def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def recall_memory(
         query: str,
         project: str | None = None,
@@ -43,7 +44,7 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
             context_mode=context_mode,
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
     def capture_memory(
         content: str,
         project: str | None = None,
@@ -83,7 +84,7 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
             user_confirmed=user_confirmed,
         )
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def verify_memory(memory_id: str, claim_id: str | None = None) -> dict[str, Any]:
         """Verify the provenance and scientific reliability of a recalled memory.
 
@@ -94,7 +95,7 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         """
         return verify_memory_impl(service, memory_id=memory_id, claim_id=claim_id)
 
-    @mcp.tool()
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def get_project_state(project: str, limit: int = 8) -> dict[str, Any]:
         """Return the recent active state and pending memory proposals for one project.
 

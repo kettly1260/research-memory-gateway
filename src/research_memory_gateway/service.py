@@ -20,6 +20,7 @@ from .models import (
 )
 from .policy import MemoryWritePolicy
 from .secret_scan import redact_secrets, sanitize_memory
+from .semantic_slots import infer_ambient_semantic_slot
 from .source_refs import SourceResolver
 from .taxonomy import get_memory_taxonomy
 
@@ -300,10 +301,11 @@ class ResearchMemoryService:
                 if existing.project != parsed.project:
                     continue
                 existing_key = str(existing.metadata.get("semantic_key") or "")
-                if existing_key != semantic_key and not _legacy_ambient_state_matches(
-                    existing,
-                    semantic_key,
-                ):
+                existing_has_v2_slot_metadata = bool(existing.metadata.get("semantic_role"))
+                same_slot = (
+                    existing_has_v2_slot_metadata and existing_key == semantic_key
+                ) or _ambient_state_matches(existing, parsed)
+                if not same_slot:
                     continue
                 if not existing_key:
                     existing.metadata = {**existing.metadata, "semantic_key": semantic_key}
@@ -752,20 +754,15 @@ def _dedupe_dicts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _legacy_ambient_state_matches(memory: ResearchMemory, semantic_key: str) -> bool:
-    role = semantic_key.rsplit(".", 1)[-1]
-    text = f"{memory.title} {memory.summary}".lower()
-    role_markers: dict[str, tuple[str, ...]] = {
-        "repository_path": ("repository", "repo", "仓库"),
-        "workspace_path": ("workspace", "工作区"),
-        "tool_path": ("tool path", "executable", "工具路径", "程序路径"),
-        "project_path": ("path", "目录", "路径"),
-        "current_branch": ("branch", "分支"),
-        "selected_model": ("model", "模型"),
-        "active_config": ("config", "configuration", "配置"),
-        "current_workflow": ("workflow", "工作流", "流程"),
-        "project_state": ("project state", "project status", "项目状态", "当前进度"),
-        "next_action": ("next step", "下一步"),
-    }
-    markers = role_markers.get(role, ())
-    return bool(markers and any(marker in text for marker in markers))
+def _ambient_state_matches(existing: ResearchMemory, incoming: ResearchMemory) -> bool:
+    existing_slot = infer_ambient_semantic_slot(
+        f"{existing.title} {existing.summary}",
+        project=existing.project,
+    )
+    incoming_slot = infer_ambient_semantic_slot(
+        f"{incoming.title} {incoming.summary}",
+        project=incoming.project,
+    )
+    if existing_slot is None or incoming_slot is None:
+        return False
+    return existing_slot.key(existing.project) == incoming_slot.key(incoming.project)

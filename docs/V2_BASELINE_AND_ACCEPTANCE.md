@@ -56,19 +56,29 @@ The Alpha classifier was overfit to the initial Fe/PL benchmark vocabulary. The 
 
 Regression examples now include Tg, dielectric constant, thermal conductivity, tensile strength, XRD, TGA, ceramic density, battery capacity/efficiency, Raman, XPS, SEM/TEM, BET, DSC/DMA, and FTIR.
 
-The direct Capture dataset contains **60** cases across research domains, software state, sensitive configuration, and negative chat/speculation/task samples. All 60 currently match the expected capture/ignore and Ambient/Trusted decision.
+The direct Capture dataset contains **63** cases across research domains, software state, sensitive configuration, research hypotheses, explicit stable preferences, and negative chat/speculation/task samples. All 63 currently match the expected capture/ignore and Ambient/Trusted decision.
 
 Classification is fail-safe: only positively recognized low-risk operational state (path/config/tool/workflow/Git/etc.) is eligible for Ambient auto-save. Durable content that remains semantically uncertain is routed to Trusted review rather than silently auto-saved as Ambient. This preserves safety even before a future model-backed semantic classifier is added.
 
 ### P0 hardening of secret handling
 
-All service-backed writes and Ambient auto-save now pass a recursive Secret Scanner **before SQLite/FTS persistence**. It scans/redacts string content and nested memory fields including title/summary, claims, evidence, source-ref excerpts, entities, metadata, confirmations, and audit metadata. Common password/token/API-key/Bearer/JWT/GitHub/AWS/private-key/cookie/session/connection-string credential forms are replaced with `[REDACTED]`.
+All service-backed writes and Ambient auto-save now pass a recursive Secret Scanner **before SQLite/FTS persistence**. It scans/redacts string content and nested memory fields including title/summary, claims, evidence, source-ref excerpts, entities, metadata, confirmations, audit metadata, dictionary values, and dictionary keys. Common password/token/API-key/Bearer/JWT/GitHub/AWS/private-key/cookie/session/connection-string credential forms are replaced with `[REDACTED]`; secret-shaped dictionary keys are replaced with `[REDACTED_KEY]`.
 
 Tests explicitly verify that a captured `sk-...` value is absent from the stored JSON and cannot be found through FTS.
 
 ### P0 hardening of Ambient state
 
-State-like Ambient records use `metadata.semantic_key`. A new active value with the same semantic key archives the previous value, marks its claims `superseded`, and records the transition. Normal recall only searches active memories, so stale paths/branches/models/configuration do not outrank the current state. V2 Alpha path/state memories without a semantic key can be conservatively superseded on the next capture.
+State-like Ambient records use high-confidence semantic slots derived as `project + subject/entity + property`. Examples include `multi.frontend.repository_path`, `multi.backend.repository_path`, and `origin-mcp.repository_path`. A new active value only supersedes an older record when both can be assigned to the same slot. Temporal modifiers such as `old`, `new`, and `original` are not treated as subjects. Legacy Alpha semantic keys are not blindly trusted; their content is re-inferred before supersession so an old coarse key cannot archive a distinct valid state.
+
+### P0.1 hypothesis and explicit-save semantics
+
+Scientific speculation is distinguished from disposable guessing. A causal/mechanistic statement with hypothesis/verification context (for example `AIE may cause the enhancement, to be verified`) is routed to Trusted `mechanism_hypothesis` rather than dropped by the speculation filter. Unsupported transient guesses such as an unchecked instrument-failure guess remain ignorable.
+
+`user_confirmed=true` represents explicit user intent to remember the supplied content and therefore bypasses normal durability/speculation/one-off ignore heuristics. Secret scanning and write validation still run first and cannot be bypassed by explicit confirmation.
+
+### MCP ToolAnnotations
+
+The Agent Surface now publishes standard MCP `ToolAnnotations`: `recall_memory`, `verify_memory`, and `get_project_state` set `readOnlyHint=true`; `capture_memory` sets `readOnlyHint=false` and `destructiveHint=false`. The real Streamable HTTP integration test verifies these annotations through `mcp.ClientSession.list_tools()`.
 
 ## Recall semantics
 
@@ -98,12 +108,12 @@ The frontend proposal page supports multi-select and the same batch actions.
 `benchmarks/` contains:
 
 - 30 Recall natural-language cases.
-- 60 Capture natural-language cases, including a cross-domain/adversarial generalization set.
+- 63 Capture natural-language cases, including a cross-domain/adversarial generalization set.
 - a client-neutral scoring script.
 
 The invocation benchmark must be run in real ChatGPT/Codex/Cherry/Kilo clients. Unit tests cannot substitute for model/tool-choice measurements; therefore client recall/capture rates must not be reported as passing until those actual runs are recorded.
 
-The Capture dataset is also executed directly against the default gateway classifier in pytest. All 60 cases currently match the expected capture/ignore decision and Ambient/Trusted tier. This proves classifier behavior **after the tool is called**; it does not prove autonomous agent tool choice.
+The Capture dataset is also executed directly against the default gateway classifier in pytest. All 63 cases currently match the expected capture/ignore decision and Ambient/Trusted tier. This proves classifier behavior **after the tool is called**; it does not prove autonomous agent tool choice.
 
 Target gates:
 
@@ -115,7 +125,7 @@ Target gates:
 
 ## Local verification status
 
-- Full pytest suite after P0 hardening: `96 passed`.
+- Full pytest suite after P0.1 hardening: `107 passed`.
 - V2 Agent Surface + benchmark code: Ruff check passed.
 - Real Streamable HTTP MCP integration test passed using `uvicorn`, `mcp.ClientSession`, `initialize`, `list_tools`, natural-language `recall_memory`, `capture_memory`, secret redaction, and Ambient supersession.
 - Frontend files were not changed by P0 hardening; ESLint and TypeScript `tsc -b` were re-run on the hardening branch and passed.

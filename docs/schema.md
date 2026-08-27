@@ -36,15 +36,23 @@ The default is fail-safe: only content that is positively recognized as low-risk
 State-like Ambient memories may carry `metadata.semantic_key`, for example:
 
 ```text
-origin-mcp.origin.repository_path
+origin-mcp.repository_path
+multi.frontend.repository_path
+multi.backend.repository_path
 memory-gateway.rerank.selected_model
 ```
 
-When `capture_memory` receives a newer active Ambient value with the same semantic key, the previous value is archived and its claims are marked `superseded`. Normal recall only searches active memories, so stale paths/branches/models/configuration do not outrank the current value. Legacy V2 Alpha Ambient path/state records without a semantic key are matched conservatively by state role and can be superseded on the next capture.
+Semantic slots are inferred as `project + subject/entity + property`. Auto-supersession is intentionally conservative: the gateway only archives an older value when both records can be assigned to the same high-confidence slot. Distinct subjects such as `frontend.repository_path` and `backend.repository_path` remain active simultaneously. Temporal adjectives such as `old`, `new`, and `original` are treated as modifiers, not subjects, so `Original repository path ...` does not accidentally become an `origin` slot.
+
+When `capture_memory` receives a newer active Ambient value with the same high-confidence semantic slot, the previous value is archived and its claims are marked `superseded`. Normal recall only searches active memories, so stale paths/branches/models/configuration do not outrank the current value. Legacy V2 Alpha path/state records are re-inferred from their content before supersession; an ambiguous legacy record is preserved rather than auto-archived.
+
+Research hypotheses are not treated as worthless speculation. Causal/mechanistic statements such as `AIE may cause the enhancement, to be verified` are routed to `trusted / mechanism_hypothesis` with `unverified` or later `inferred` verification. Unsupported transient guesses without a reusable research hypothesis may still be ignored.
+
+`user_confirmed=true` represents an explicit user request to remember the supplied content. It overrides normal durability/speculation/one-off ignore heuristics, but it never bypasses secret redaction or write validation.
 
 ## Secret redaction before persistence
 
-All service-backed writes and all `capture_memory` paths run through a recursive credential scanner before persistence. It scans string content and nested fields including summary, claims, evidence, source-ref excerpts, entities, metadata, confirmation payloads, and audit metadata. Detected credential values are replaced with `[REDACTED]` before SQLite/FTS indexing.
+All service-backed writes and all `capture_memory` paths run through a recursive credential scanner before persistence. It scans string content and nested fields including summary, claims, evidence, source-ref excerpts, entities, metadata, confirmation payloads, audit metadata, **dictionary keys**, and dictionary values. Detected credential values are replaced with `[REDACTED]`; secret-shaped dictionary keys are replaced with `[REDACTED_KEY]` before SQLite/FTS indexing.
 
 The scanner covers labeled passwords/tokens/API keys, Bearer/Authorization values, common `sk-` and GitHub token shapes, JWTs, AWS access keys, private-key blocks, URL passwords, cookies/sessions, and connection-string credentials. This is defense in depth: agents should still avoid sending credentials to `capture_memory` intentionally.
 

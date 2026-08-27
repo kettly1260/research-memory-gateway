@@ -74,6 +74,12 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                     "verify_memory",
                     "get_project_state",
                 }
+                tool_by_name = {tool.name: tool for tool in tools.tools}
+                assert tool_by_name["recall_memory"].annotations.readOnlyHint is True
+                assert tool_by_name["verify_memory"].annotations.readOnlyHint is True
+                assert tool_by_name["get_project_state"].annotations.readOnlyHint is True
+                assert tool_by_name["capture_memory"].annotations.readOnlyHint is False
+                assert tool_by_name["capture_memory"].annotations.destructiveHint is False
 
                 recalled = await session.call_tool(
                     "recall_memory",
@@ -153,7 +159,10 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
         anyio.run(exercise)
     finally:
         server.should_exit = True
-        thread.join(timeout=10)
+        thread.join(timeout=5)
+        if thread.is_alive():
+            server.force_exit = True
+            thread.join(timeout=5)
         assert not thread.is_alive()
 
 

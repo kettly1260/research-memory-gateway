@@ -22,6 +22,10 @@ def tool_names(mcp) -> set[str]:
     return {tool.name for tool in anyio.run(mcp.list_tools)}
 
 
+def tool_map(mcp):
+    return {tool.name: tool for tool in anyio.run(mcp.list_tools)}
+
+
 def test_research_memory_gets_stable_generated_claim_id() -> None:
     payload = {
         "memory_id": "mem_stable_claim",
@@ -334,6 +338,176 @@ def test_ambient_state_update_supersedes_alpha_memory_without_semantic_key(tmp_p
     assert legacy_after.metadata["semantic_key"] == service.get_research_memory(new["memory_id"]).metadata["semantic_key"]
 
 
+def test_distinct_repository_subjects_remain_active(tmp_path) -> None:
+    service = make_service(tmp_path)
+    frontend = capture_memory(
+        service,
+        content="Frontend repository path is G:\\LLM\\front.",
+        project="multi",
+    )
+    backend = capture_memory(
+        service,
+        content="Backend repository path is G:\\LLM\\back.",
+        project="multi",
+    )
+
+    frontend_memory = service.get_research_memory(frontend["memory_id"])
+    backend_memory = service.get_research_memory(backend["memory_id"])
+    assert frontend_memory.memory_status == MemoryStatus.active
+    assert backend_memory.memory_status == MemoryStatus.active
+    assert frontend_memory.metadata["semantic_key"] == "multi.frontend.repository_path"
+    assert backend_memory.metadata["semantic_key"] == "multi.backend.repository_path"
+
+
+def test_frontend_repository_update_only_supersedes_frontend_slot(tmp_path) -> None:
+    service = make_service(tmp_path)
+    old_frontend = capture_memory(
+        service,
+        content="Old frontend repository path is G:\\LLM\\front-old.",
+        project="multi",
+    )
+    backend = capture_memory(
+        service,
+        content="Backend repository path is G:\\LLM\\back.",
+        project="multi",
+    )
+    new_frontend = capture_memory(
+        service,
+        content="New frontend repository path is G:\\LLM\\front-new.",
+        project="multi",
+    )
+
+    assert service.get_research_memory(old_frontend["memory_id"]).memory_status == MemoryStatus.archived
+    assert service.get_research_memory(backend["memory_id"]).memory_status == MemoryStatus.active
+    assert service.get_research_memory(new_frontend["memory_id"]).memory_status == MemoryStatus.active
+
+
+def test_parallel_operational_path_slots_remain_distinct_ambient_state(tmp_path) -> None:
+    service = make_service(tmp_path)
+    cases = (
+        ("Source directory is G:\\LLM\\src.", "multi.source.directory_path"),
+        ("Data directory is G:\\LLM\\data.", "multi.data.directory_path"),
+        ("Python executable is G:\\Python\\python.exe.", "multi.python.executable_path"),
+        ("Origin executable is G:\\Origin\\Origin.exe.", "multi.origin.executable_path"),
+        ("Main config path is G:\\LLM\\main.yaml.", "multi.main.config_path"),
+        ("Test config path is G:\\LLM\\test.yaml.", "multi.test.config_path"),
+    )
+
+    memory_ids: list[str] = []
+    for content, semantic_key in cases:
+        result = capture_memory(service, content=content, project="multi")
+        assert result["action"] == "saved"
+        assert result["memory_tier"] == "ambient"
+        memory = service.get_research_memory(result["memory_id"])
+        assert memory.metadata["semantic_key"] == semantic_key
+        assert memory.memory_status == MemoryStatus.active
+        memory_ids.append(memory.memory_id)
+
+    assert len(set(memory_ids)) == len(cases)
+
+
+def test_original_repository_modifier_is_not_origin_subject(tmp_path) -> None:
+    service = make_service(tmp_path)
+    original = capture_memory(
+        service,
+        content="Original repository path is G:\\LLM\\repo-old.",
+        project="demo",
+    )
+    changed = capture_memory(
+        service,
+        content="Repository path changed to G:\\LLM\\repo-new.",
+        project="demo",
+    )
+
+    original_memory = service.get_research_memory(original["memory_id"])
+    changed_memory = service.get_research_memory(changed["memory_id"])
+    assert original_memory.metadata["semantic_key"] == "demo.repository_path"
+    assert "origin" not in original_memory.metadata["semantic_key"].split(".")[1:-1]
+    assert original_memory.memory_status == MemoryStatus.archived
+    assert changed_memory.memory_status == MemoryStatus.active
+
+
+def test_alpha_colliding_semantic_keys_do_not_override_distinct_subjects(tmp_path) -> None:
+    service = make_service(tmp_path)
+    for memory_id, subject, path in (
+        ("mem_front_alpha", "Frontend", "G:\\LLM\\front-old"),
+        ("mem_back_alpha", "Backend", "G:\\LLM\\back"),
+    ):
+        service.backend.save(
+            ResearchMemory.model_validate(
+                {
+                    "memory_id": memory_id,
+                    "project": "multi",
+                    "topic": f"{subject} repository path",
+                    "memory_type": "workflow_plan",
+                    "memory_tier": "ambient",
+                    "title": f"{subject} repository path",
+                    "summary": f"{subject} repository path is {path}.",
+                    "claims": [{"claim": f"{subject} repository path is {path}."}],
+                    "metadata": {
+                        "plan_status": "active",
+                        "plan_type": "mcp_setup",
+                        "semantic_key": "multi.repository_path",
+                    },
+                }
+            )
+        )
+
+    new_frontend = capture_memory(
+        service,
+        content="Frontend repository path changed to G:\\LLM\\front-new.",
+        project="multi",
+    )
+
+    assert service.get_research_memory("mem_front_alpha").memory_status == MemoryStatus.archived
+    assert service.get_research_memory("mem_back_alpha").memory_status == MemoryStatus.active
+    assert service.get_research_memory(new_frontend["memory_id"]).memory_status == MemoryStatus.active
+
+
+def test_research_hypotheses_are_trusted_proposals(tmp_path) -> None:
+    service = make_service(tmp_path)
+    cases = (
+        "AIE 可能导致增强，待验证。",
+        "这个现象也许由分子间氢键导致，需验证。",
+        "荧光增强可能是由于聚集诱导发光机制，需后续验证。",
+    )
+
+    for index, content in enumerate(cases):
+        result = capture_memory(service, content=content, project=f"hypothesis-{index}")
+        assert result["action"] == "queued"
+        assert result["memory_tier"] == "trusted"
+        proposal = service.get_memory_proposal(result["proposal_id"])
+        assert proposal.suggested_memory.memory_type.value == "mechanism_hypothesis"
+        assert proposal.suggested_memory.claims[0].verification_status.value == "unverified"
+
+
+def test_worthless_speculation_is_still_ignored(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    result = capture_memory(
+        service,
+        content="我猜可能是仪器坏了，但还没检查。",
+        project="demo",
+    )
+
+    assert result["action"] == "ignored"
+
+
+def test_user_confirmed_stable_preference_is_not_ignored(tmp_path) -> None:
+    service = make_service(tmp_path)
+
+    result = capture_memory(
+        service,
+        content="我喜欢简洁的回复风格。",
+        project="preferences",
+        user_confirmed=True,
+    )
+
+    assert result["action"] == "saved"
+    assert result["memory_tier"] == "ambient"
+    assert "简洁" in service.get_research_memory(result["memory_id"]).summary
+
+
 def test_capture_memory_deduplicates_pending_trusted_capture(tmp_path) -> None:
     service = make_service(tmp_path)
     content = "本次 PL 测试使用 20 mM HEPES 缓冲液。"
@@ -422,6 +596,20 @@ def test_agent_surface_exposes_only_four_agent_tools(tmp_path) -> None:
     names = tool_names(build_mcp(config))
 
     assert names == set(AGENT_TOOL_NAMES)
+
+
+def test_agent_tools_publish_mcp_annotations(tmp_path) -> None:
+    config = AppConfig()
+    config.backend.sqlite_path = str(tmp_path / "annotations.db")
+    config.server.surface = "agent"
+
+    tools = tool_map(build_mcp(config))
+
+    assert tools["recall_memory"].annotations.readOnlyHint is True
+    assert tools["verify_memory"].annotations.readOnlyHint is True
+    assert tools["get_project_state"].annotations.readOnlyHint is True
+    assert tools["capture_memory"].annotations.readOnlyHint is False
+    assert tools["capture_memory"].annotations.destructiveHint is False
 
 
 def test_admin_surface_keeps_legacy_tools_without_agent_tools(tmp_path) -> None:

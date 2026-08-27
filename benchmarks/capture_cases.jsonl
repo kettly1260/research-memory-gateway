@@ -58,3 +58,6 @@
 {"case_id":"C58","content":"TGA 是什么？","should_capture":false,"expected_tier":null,"category":"question"}
 {"case_id":"C59","content":"把 XRD 结果翻译成英文。","should_capture":false,"expected_tier":null,"category":"one_off_task"}
 {"case_id":"C60","content":"今天先不测了，晚点再看。","should_capture":false,"expected_tier":null,"category":"transient"}
+{"case_id":"C61","content":"AIE 可能导致增强，待验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C62","content":"这个现象也许由分子间氢键导致，需验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C63","content":"我喜欢简洁的回复风格。","should_capture":true,"expected_tier":"ambient","category":"stable_preference","user_confirmed":true}
