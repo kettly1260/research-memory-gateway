@@ -1,0 +1,30 @@
+{"case_id":"C01","content":"本次 Pyr PL 测试使用新购买的 HPLC 级 DMSO，之前使用的是化学纯 DMSO。","should_capture":true,"expected_tier":"trusted","category":"experiment_fact"}
+{"case_id":"C02","content":"Fe3+ 储备液浓度为 10 mM，并使用 0.1 M HNO3 作为酸性介质。","should_capture":true,"expected_tier":"trusted","category":"solution_recipe"}
+{"case_id":"C03","content":"HEPES 工作液最终使用 20 mM。","should_capture":true,"expected_tier":"trusted","category":"experiment_condition"}
+{"case_id":"C04","content":"Pyr 0Fe 的 1–60 min 全谱已经重新测试完成。","should_capture":true,"expected_tier":"trusted","category":"experiment_state"}
+{"case_id":"C05","content":"滤光片掉落导致部分 PL 曲线强度异常升高，后续计算应使用重新装上滤光片后的数据。","should_capture":true,"expected_tier":"trusted","category":"data_quality"}
+{"case_id":"C06","content":"Origin MCP repository is located at G:\\LLM\\originlab-jx.","should_capture":true,"expected_tier":"ambient","category":"project_path"}
+{"case_id":"C07","content":"Research Memory Gateway repository uses G:\\LLM\\memory as its active workspace.","should_capture":true,"expected_tier":"ambient","category":"project_path"}
+{"case_id":"C08","content":"paper-fulltext-mcp should prefer Zotero Desktop native acquisition before launching a browser.","should_capture":true,"expected_tier":"ambient","category":"workflow"}
+{"case_id":"C09","content":"Cloudflare authentication token should be configurable through environment variables.","should_capture":true,"expected_tier":"ambient","category":"configuration"}
+{"case_id":"C10","content":"V1 is frozen on legacy/research-memory-gateway-v1 and V2 development continues on main.","should_capture":true,"expected_tier":"ambient","category":"project_governance"}
+{"case_id":"C11","content":"For normal agents, expose only recall_memory, capture_memory, verify_memory, and get_project_state.","should_capture":true,"expected_tier":"ambient","category":"agent_policy"}
+{"case_id":"C12","content":"Trusted research captures should enter the proposal queue instead of interrupting the current task.","should_capture":true,"expected_tier":"ambient","category":"agent_policy"}
+{"case_id":"C13","content":"下一步先补充不同离子的选择性测试，再决定是否增加 LC-MS。","should_capture":true,"expected_tier":"trusted","category":"experiment_plan"}
+{"case_id":"C14","content":"LOD 计算使用空白标准差和低浓度区间线性斜率。","should_capture":true,"expected_tier":"trusted","category":"analysis_method"}
+{"case_id":"C15","content":"样品总体积以后统一保持至少 3 mL。","should_capture":true,"expected_tier":"trusted","category":"experiment_decision"}
+{"case_id":"C16","content":"For remote MCP access, Streamable HTTP is the primary transport and SSE remains for compatibility.","should_capture":true,"expected_tier":"ambient","category":"configuration"}
+{"case_id":"C17","content":"用户明确要求实验数据文件不要被移动丢失，项目修改过程使用 Git 记录。","should_capture":true,"expected_tier":"ambient","category":"workflow_preference"}
+{"case_id":"C18","content":"Embedding service unavailable时，hybrid retrieval 必须回退到 SQLite FTS。","should_capture":true,"expected_tier":"ambient","category":"troubleshooting"}
+{"case_id":"C19","content":"同一条项目路径已经保存过，再次出现时不应该创建重复 Ambient Memory。","should_capture":true,"expected_tier":"ambient","category":"duplicate_policy"}
+{"case_id":"C20","content":"新测试中发射峰相对旧 DMSO 条件发生了移动。","should_capture":true,"expected_tier":"trusted","category":"experiment_observation"}
+{"case_id":"C21","content":"什么是 FTS5？","should_capture":false,"expected_tier":null,"category":"question"}
+{"case_id":"C22","content":"为什么 Fe3+ 会水解？","should_capture":false,"expected_tier":null,"category":"question"}
+{"case_id":"C23","content":"好的，谢谢。","should_capture":false,"expected_tier":null,"category":"casual_chat"}
+{"case_id":"C24","content":"哈哈这个挺有意思。","should_capture":false,"expected_tier":null,"category":"casual_chat"}
+{"case_id":"C25","content":"我猜可能是仪器坏了，但还没检查。","should_capture":false,"expected_tier":null,"category":"unsupported_speculation"}
+{"case_id":"C26","content":"也许明天再说。","should_capture":false,"expected_tier":null,"category":"transient"}
+{"case_id":"C27","content":"把这句话翻译成英文。","should_capture":false,"expected_tier":null,"category":"one_off_task"}
+{"case_id":"C28","content":"2+2 等于 4。","should_capture":false,"expected_tier":null,"category":"generic_fact"}
+{"case_id":"C29","content":"今天有点累。","should_capture":false,"expected_tier":null,"category":"transient_chat"}
+{"case_id":"C30","content":"Could you explain what an embedding model is?","should_capture":false,"expected_tier":null,"category":"question"}

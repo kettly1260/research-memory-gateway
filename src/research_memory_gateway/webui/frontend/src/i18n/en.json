@@ -134,7 +134,14 @@
     "versions": "Version History",
     "save": "Confirm Save",
     "saved_toast": "Saved: {{title}}",
-    "status_updated": "Proposal status updated"
+    "status_updated": "Proposal status updated",
+    "selected_count": "{{count}} selected",
+    "select_all": "Select all visible proposals",
+    "approve_selected": "Approve Selected",
+    "edit_selected": "Needs Edit",
+    "save_selected": "Save Selected",
+    "reject_selected": "Reject Selected",
+    "batch_done": "Updated {{count}} proposals"
   },
   "config": {
     "title": "Configuration",

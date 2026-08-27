@@ -13,6 +13,20 @@ Every saved memory is a structured research asset. The `summary` field is only a
 - `evidence`
 - `source_refs`
 
+V2 adds two backward-compatible fields without changing the SQLite table schema:
+
+- `memory_tier`: `ambient` or `trusted`. Legacy memories without the field deserialize as `trusted`.
+- `claims[].claim_id`: stable claim-level identifier generated on parse/write when absent, used by `verify_memory` for targeted provenance expansion.
+
+## V2 Memory Tiers
+
+`memory_tier` controls the default capture workflow, not scientific truth status:
+
+- `ambient`: low-risk reusable project context such as paths, tool configuration, workflow rules, project state, and stable preferences. `capture_memory` may save these automatically when `memory.ambient_auto_save=true`.
+- `trusted`: high-value research content such as experimental conditions/results, quantitative values, solution recipes, spectra/peak positions, LOD, mechanisms, and literature conclusions. `capture_memory` creates a proposal by default when `memory.trusted_capture_requires_review=true`.
+
+Tier is independent from `verification_status`. A Trusted memory can still be `unverified`; the tier says it deserves stricter governance, not that the claim has already been proven.
+
 ## Memory Lifecycle Status
 
 Each `ResearchMemory` has a memory-level lifecycle status independent from claim verification status:
@@ -71,7 +85,9 @@ Optional `metadata.plan_type / 规划类型` values:
 
 ## Memory Proposals / 记忆提案
 
-Agents should not silently write memories merely because the MCP or skill is installed. The normal workflow is:
+For the V2 Agent Surface, agents normally call `capture_memory` instead of constructing proposals directly. The gateway classifies Ambient vs Trusted, builds the strong schema, checks overlap, and applies the appropriate write policy.
+
+The underlying Admin workflow remains:
 
 1. Agent drafts a reusable memory candidate.
 2. If the user has not confirmed saving, the candidate is stored as a proposal.

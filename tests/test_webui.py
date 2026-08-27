@@ -199,6 +199,47 @@ def test_webui_taxonomy_and_proposal_api(tmp_path, monkeypatch) -> None:
     assert saved.json()["metadata"]["save_confirmation"]["text"] == "WebUI confirmed"
 
 
+def test_webui_proposal_batch_review_and_save(tmp_path, monkeypatch) -> None:
+    client, app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+    headers = {"x-csrf-token": token}
+    proposals = []
+    for index in range(2):
+        proposals.append(
+            app.state.webui.service.propose_save(
+                reason=f"batch candidate {index}",
+                suggested_memory={
+                    "project": "research-memory-gateway",
+                    "topic": "Agent memory policy",
+                    "memory_type": "workflow_plan",
+                    "title": f"Batch proposal {index}",
+                    "summary": f"Batch review candidate {index}.",
+                    "metadata": {"plan_status": "draft", "plan_type": "agent_memory_policy"},
+                },
+                check_overlap=False,
+            )
+        )
+    proposal_ids = [item.proposal_id for item in proposals]
+
+    approved = client.post(
+        "/admin/api/proposals/batch",
+        headers=headers,
+        json={"proposal_ids": proposal_ids, "action": "approve", "reason": "Approve selected"},
+    )
+    saved = client.post(
+        "/admin/api/proposals/batch",
+        headers=headers,
+        json={"proposal_ids": proposal_ids, "action": "save", "reason": "Save selected"},
+    )
+
+    assert approved.status_code == 200
+    assert approved.json()["succeeded"] == 2
+    assert {item["status"] for item in approved.json()["results"]} == {"approved"}
+    assert saved.status_code == 200
+    assert saved.json()["succeeded"] == 2
+    assert len(app.state.webui.service.search_research_memory(query="Batch proposal")) == 2
+
+
 def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> None:
     client, _app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)

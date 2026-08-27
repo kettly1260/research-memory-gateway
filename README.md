@@ -4,6 +4,26 @@
 
 这个项目不是重型 RAG，也不是完整替代 Nocturne Memory、Engram 或其它长期记忆系统。它的定位是一个“自包含科研记忆 MCP 服务 + 可选向量/重排检索增强”：默认用内置 SQLite 保存和关键词检索记忆，Docker 部署后 AI 工具可以直接调用；如果你已经部署了 embedding 模型和 rerank 模型，可以把它们接进来做混合检索。
 
+## V2：Agent Memory Surface
+
+V2 不再要求普通 Agent 理解整套科研记忆 schema。默认 `server.surface: agent` 只向 Agent 暴露 4 个低成本工具：
+
+| 工具 | 普通 Agent 的职责 |
+|---|---|
+| `recall_memory` | 在“之前 / 上次 / 继续 / 我们做过 / 原来的配置”等历史依赖问题中主动召回长期记忆。 |
+| `capture_memory` | 把当前对话产生的可复用信息交给网关分类、去重和写入/排队。 |
+| `verify_memory` | 对召回结果展开 claims、evidence、source_refs、冲突和 superseded 信息。 |
+| `get_project_state` | 恢复一个已知项目的最近状态、下一步和待审提案。 |
+
+内部仍保留 V1 的 Evidence-first schema、SQLite FTS、可选 embedding/rerank、提案生命周期、WebUI、审计、导出和来源回溯；只是这些复杂度不再直接暴露给普通 Agent。
+
+V2 还把记忆分成两层：
+
+- **Ambient Memory**：项目路径、工具配置、工作流、稳定偏好、项目状态等低风险上下文，可在去重后自动保存。
+- **Trusted Research Memory**：实验条件、定量数据、配液方法、谱峰、LOD、机理、论文结论等高价值科研事实，默认进入 Proposal Queue，集中审核后再成为正式长期科研记忆。
+
+服务支持三种工具面：`agent`（默认 4 工具）、`admin`（V1 管理工具）、`full`（两者同时暴露，供调试/迁移）。
+
 ## 重要说明：当前不需要 Nocturne
 
 本项目 Docker 镜像只部署 `research-memory-gateway` 本身，不部署 Nocturne。
@@ -14,14 +34,14 @@
 AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
 ```
 
-也就是说，不接 Nocturne 时，仍然可以正常使用：
+也就是说，不接 Nocturne 时，普通 Agent 仍然可以正常使用：
 
-- `propose_save` 生成保存建议。
-- `save_research_memory` 写入 SQLite。
-- `search_research_memory` 从 SQLite 检索。
-- `check_overlap` 检查重复/相似记忆。
-- `audit_unverified` 审计未验证结论。
-- `export_memories` 导出 Markdown/JSON。
+- `recall_memory` 自动利用 SQLite FTS 或 hybrid retrieval 召回。
+- `capture_memory` 自动完成分类、构建内部 schema、去重和保存/排队。
+- `verify_memory` 按需展开证据和来源。
+- `get_project_state` 恢复项目状态。
+
+原有 `propose_save`、`search_research_memory`、`audit_unverified`、`export_memories` 等工具仍在 `admin` / `full` surface 中保留。
 
 如果你已经部署了向量模型和重排模型，推荐模式是：
 
@@ -36,8 +56,9 @@ AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
 ## 设计目标
 
 - 跨 Codex、Cherry Studio、KiloCode 等工具保存和检索科研结论。
-- 只在出现可复用科研资产时提醒保存，避免长期记忆变成聊天垃圾桶。
-- 写入长期记忆必须经过用户确认。
+- 主动召回而不是依赖 Agent 自己“想起来要搜记忆”。
+- 把低风险 Ambient Memory 与高价值 Trusted Research Memory 分层处理，减少反复确认造成的调用阻力。
+- Trusted Research Memory 仍保留审核/确认门槛；Ambient Memory 可按配置自动保存。
 - 摘要只作为检索入口，科研结论必须写入 `claims` 并尽量绑定 `evidence`。
 - 每条记忆保存 `source_refs`，可回溯原会话、论文、文件、DOI 或 URL。
 - 使用轻图谱字段 `entities` 和 `relations`，支持材料、论文、合成路线、实验条件和机理假设之间的关系检索。
@@ -63,7 +84,9 @@ SQLite 默认后端
 已部署的向量模型 / 重排模型
 ```
 
-## MCP 工具
+## MCP 管理工具（Admin / Full Surface）
+
+以下是保留的 V1 管理能力。普通 Agent 默认看不到这些工具；需要人工管理、调试、迁移或审计时使用 `--surface admin` / `--surface full`。
 
 | 工具 | 作用 |
 |---|---|
@@ -144,13 +167,13 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 Copy-Item config.example.yaml config.yaml
-research-memory-gateway --config config.yaml --transport stdio
+research-memory-gateway --config config.yaml --transport stdio --surface agent
 ```
 
 Streamable HTTP 模式适合远程 MCP 客户端，也是 Docker 镜像默认启动方式：
 
 ```powershell
-research-memory-gateway --config config.yaml --transport streamable-http --host 0.0.0.0 --port 8787
+research-memory-gateway --config config.yaml --transport streamable-http --surface agent --host 0.0.0.0 --port 8787
 ```
 
 客户端访问地址通常是：
@@ -455,7 +478,7 @@ prompts/research-memory-system-prompt.md
 skills/research-memory-gateway/SKILL.md
 ```
 
-它的作用是让所有 agent 更稳定地调用 MCP：什么时候该主动询问保存、先查重还是先提议、如何区分摘要和证据、何时调用 `open_source_ref`、何时审计未验证结论。客户端本地 memory 不会自动写入该 gateway，新部署应把这个 skill 或同等系统提示安装到每个可访问 MCP 的 agent/client。
+它的作用是让所有 agent 更稳定地使用 V2 Agent Surface：什么时候应主动 `recall_memory`、什么信息值得 `capture_memory`、何时用 `verify_memory` 检查来源和科研可靠性。分类、查重、proposal、claims/evidence schema 等复杂规则由 Gateway 内部负责。客户端本地 memory 不会自动写入该 gateway，新部署应把这个 skill 或同等系统提示安装到每个可访问 MCP 的 agent/client。
 
 Kilo 全局安装示例：
 
@@ -470,6 +493,7 @@ Kilo 全局安装示例：
 ## 测试
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 pytest
 ```
 
@@ -481,6 +505,9 @@ pytest
 
 已覆盖：
 
+- Agent Surface 默认只暴露 4 个低成本工具，Admin/Full Surface 保留 V1 管理能力。
+- Ambient 自动保存、Trusted Proposal Queue、显式确认保存和待审去重。
+- 30 条 Capture benchmark 默认策略逐条校验 capture/ignore 与 Ambient/Trusted 分类。
 - `evidence_backed` claim 必须绑定 evidence。
 - `unverified` claim 可无 evidence。
 - SQLite 检索支持 `sulfur-doped`、`Hg2+` 等含连字符或符号的科研术语。
@@ -502,8 +529,10 @@ tag 触发后会发布 `ghcr.io/<owner>/<repo>:v0.1.0` 和对应 sha 标签；�
 
 ```text
 src/research_memory_gateway/  # 网关源码
+src/research_memory_gateway/agent_surface/ # V2 Agent-facing adapter
 prompts/                      # AI 客户端系统提示
 skills/                       # 可复制到 Kilo/Codex/Cherry 的调用策略
+benchmarks/                   # Recall/Capture 自然语言调用基准
 docs/                         # 部署、客户端配置、schema 文档
 examples/                     # 示例记忆
 .github/workflows/            # GitHub Actions 镜像发布

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
@@ -35,6 +36,11 @@ class MemoryStatus(str, Enum):
     deleted = "deleted"
 
 
+class MemoryTier(str, Enum):
+    ambient = "ambient"
+    trusted = "trusted"
+
+
 class ProposalStatus(str, Enum):
     pending = "pending"
     approved = "approved"
@@ -62,6 +68,7 @@ class Evidence(BaseModel):
 
 
 class Claim(BaseModel):
+    claim_id: str | None = None
     claim: str
     confidence: Confidence = Confidence.medium
     verification_status: VerificationStatus = VerificationStatus.unverified
@@ -102,6 +109,7 @@ class ResearchMemory(BaseModel):
     project: str = "default"
     topic: str
     memory_type: MemoryType
+    memory_tier: MemoryTier = MemoryTier.trusted
     memory_status: MemoryStatus = MemoryStatus.active
     status_changed_at: str | None = None
     status_change_reason: str | None = None
@@ -128,7 +136,12 @@ class ResearchMemory(BaseModel):
     @model_validator(mode="after")
     def validate_claim_evidence_links(self) -> "ResearchMemory":
         evidence_ids = {item.evidence_id for item in self.evidence}
-        for claim in self.claims:
+        for index, claim in enumerate(self.claims):
+            if not claim.claim_id:
+                digest = hashlib.sha256(
+                    f"{self.memory_id}\0{index}\0{claim.claim}".encode()
+                ).hexdigest()[:12]
+                claim.claim_id = f"claim_{digest}"
             missing = [evidence_id for evidence_id in claim.evidence_ids if evidence_id not in evidence_ids]
             if missing:
                 raise ValueError(f"claim references missing evidence ids: {missing}")

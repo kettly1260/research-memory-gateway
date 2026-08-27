@@ -4,12 +4,14 @@
 
 Use stdio mode when the client does not support remote SSE or Streamable HTTP.
 
+Normal clients should use the V2 Agent Surface. The server then exposes only `recall_memory`, `capture_memory`, `verify_memory`, and `get_project_state`.
+
 ```json
 {
   "mcpServers": {
     "research-memory-gateway": {
       "command": "research-memory-gateway",
-      "args": ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio"]
+      "args": ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio", "--surface", "agent"]
     }
   }
 }
@@ -20,7 +22,7 @@ Use stdio mode when the client does not support remote SSE or Streamable HTTP.
 The Docker image defaults to Streamable HTTP. Start the gateway on the NAS:
 
 ```powershell
-research-memory-gateway --config config.yaml --transport streamable-http --host 0.0.0.0 --port 8787
+research-memory-gateway --config config.yaml --transport streamable-http --surface agent --host 0.0.0.0 --port 8787
 ```
 
 Then point clients that support remote Streamable HTTP MCP to:
@@ -36,6 +38,20 @@ Authorization: Bearer <token>
 ```
 
 When `RESEARCH_MEMORY_TOKEN` is unset, only loopback HTTP/SSE clients from `127.0.0.1` or `::1` are allowed without a token.
+
+## ChatGPT Custom App / Workspace Agent Notes
+
+Use the Streamable HTTP endpoint for the normal V2 integration:
+
+```text
+http://<nas-tailscale-ip>:8787/mcp
+```
+
+Start the server with `--surface agent` (or keep `server.surface: agent`) so ChatGPT sees only the four low-friction memory tools. Configure the same Bearer token used by other remote MCP clients.
+
+Pair the MCP connection with `skills/research-memory-gateway/SKILL.md` or the concise prompt in `prompts/research-memory-system-prompt.md`. The MCP endpoint supplies capabilities; the skill/prompt supplies the proactive recall/capture policy.
+
+For invocation validation, use the natural prompts in `benchmarks/recall_cases.jsonl` and `benchmarks/capture_cases.jsonl`. Do not tell the model to call a specific tool; the benchmark is intended to measure autonomous tool choice.
 
 ## Legacy SSE Mode
 
@@ -84,15 +100,15 @@ If Cherry Studio supports remote MCP, configure the remote URL as `http://<nas-t
 ```json
 {
   "command": "research-memory-gateway",
-  "args": ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio"]
+  "args": ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio", "--surface", "agent"]
 }
 ```
 
 ## Codex Notes
 
-Use the same system prompt from `prompts/research-memory-system-prompt.md`, or inject the bundled skill text from `skills/research-memory-gateway/SKILL.md`, so save suggestions are consistent across tools.
+Use the concise V2 system prompt from `prompts/research-memory-system-prompt.md`, or install/inject the bundled skill from `skills/research-memory-gateway/SKILL.md`, so recall and capture triggers are consistent across tools.
 
-Codex local memory options such as `memories`, `generate_memories`, or `use_memories` do not make this MCP a memory backend. They write Codex local memory only. To persist durable knowledge in this gateway, the agent must proactively call `propose_save`, ask for user confirmation, and only then call `save_research_memory` with `user_confirmed=true`.
+Codex local memory options such as `memories`, `generate_memories`, or `use_memories` do not make this MCP a memory backend. They write Codex local memory only. V2 therefore relies on explicit Agent Surface tools: proactive `recall_memory` for prior context and `capture_memory` for durable new information. Trusted research captures are queued by the gateway instead of requiring the Agent to construct `propose_save` payloads itself.
 
 For remote-capable Codex clients, prefer:
 
@@ -110,8 +126,32 @@ For local stdio:
 ```toml
 [mcp_servers.research-memory-gateway]
 command = "research-memory-gateway"
-args = ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio"]
+args = ["--config", "G:/LLM/memory/config.yaml", "--transport", "stdio", "--surface", "agent"]
 ```
+
+## Surface Selection
+
+`config.yaml` defaults to:
+
+```yaml
+server:
+  surface: agent
+```
+
+Override per process when needed:
+
+```powershell
+# Normal agent: only four low-friction memory tools
+research-memory-gateway --config config.yaml --transport stdio --surface agent
+
+# Human/admin automation: legacy management tools only
+research-memory-gateway --config config.yaml --transport stdio --surface admin
+
+# Migration/debugging: all tools
+research-memory-gateway --config config.yaml --transport stdio --surface full
+```
+
+Do not use `full` as the default Agent integration: a large management tool surface recreates the tool-choice problem V2 is intended to solve.
 
 ## Retrieval Mode Notes
 

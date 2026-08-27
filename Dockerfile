@@ -20,4 +20,4 @@ COPY --from=frontend-builder /app/static/dist ./src/research_memory_gateway/webu
 RUN pip install --no-cache-dir -e .
 
 EXPOSE 8787 8788
-CMD ["research-memory-gateway", "--config", "/app/config.yaml", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8787"]
+CMD ["research-memory-gateway", "--config", "/app/config.yaml", "--transport", "streamable-http", "--surface", "agent", "--host", "0.0.0.0", "--port", "8787"]

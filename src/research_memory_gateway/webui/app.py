@@ -68,6 +68,7 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/memories/{memory_id:str}/hard-delete", api_hard_delete, methods=["DELETE"]),
         Route("/admin/api/taxonomy", api_taxonomy, methods=["GET"]),
         Route("/admin/api/proposals", api_proposals, methods=["GET"]),
+        Route("/admin/api/proposals/batch", api_proposals_batch, methods=["POST"]),
         Route("/admin/api/proposals/{proposal_id:str}", api_proposal_detail, methods=["GET", "PATCH"]),
         Route("/admin/api/proposals/{proposal_id:str}/save", api_proposal_save, methods=["POST"]),
         Route("/admin/api/projects", api_projects, methods=["GET"]),
@@ -285,6 +286,85 @@ async def api_proposals(request: Request) -> Response:
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse({"items": [item.model_dump(mode="json") for item in proposals]})
+
+
+async def api_proposals_batch(request: Request) -> Response:
+    state = request.app.state.webui
+    payload = await request.json()
+    proposal_ids = payload.get("proposal_ids") or []
+    action = str(payload.get("action") or "").strip().lower()
+    reason = str(payload.get("reason") or f"WebUI batch {action}")
+    if not isinstance(proposal_ids, list) or not proposal_ids:
+        return JSONResponse({"error": "proposal_ids_required"}, status_code=400)
+    proposal_ids = list(dict.fromkeys(str(item) for item in proposal_ids if str(item).strip()))
+    if not proposal_ids:
+        return JSONResponse({"error": "proposal_ids_required"}, status_code=400)
+    if action not in {"approve", "reject", "needs_edit", "save"}:
+        return JSONResponse({"error": "unsupported_batch_action"}, status_code=400)
+
+    results: list[dict[str, Any]] = []
+    failed: list[dict[str, str]] = []
+    for proposal_id in proposal_ids:
+        try:
+            if action == "save":
+                saved = state.service.save_research_memory(
+                    user_confirmed=True,
+                    proposal_id=proposal_id,
+                    confirmation={
+                        "source": "webui",
+                        "text": reason,
+                        "confirmed_by": "webui_user",
+                    },
+                )
+                results.append(
+                    {
+                        "proposal_id": proposal_id,
+                        "memory_id": saved.memory_id,
+                        "status": "saved",
+                    }
+                )
+            else:
+                status = {
+                    "approve": "approved",
+                    "reject": "rejected",
+                    "needs_edit": "needs_edit",
+                }[action]
+                proposal = state.service.update_memory_proposal_status(
+                    proposal_id,
+                    status,
+                    reason=reason,
+                    user_confirmed=True,
+                )
+                results.append(
+                    {
+                        "proposal_id": proposal_id,
+                        "status": proposal.proposal_status.value,
+                    }
+                )
+        except (KeyError, PermissionError, ValueError) as exc:
+            failed.append({"proposal_id": proposal_id, "error": str(exc)})
+
+    state.service.append_audit_event(
+        "memory_proposal.batch_action",
+        metadata={
+            "action": action,
+            "requested": len(proposal_ids),
+            "succeeded": len(results),
+            "failed": len(failed),
+        },
+    )
+    status_code = 200 if not failed else 207
+    return JSONResponse(
+        {
+            "action": action,
+            "requested": len(proposal_ids),
+            "succeeded": len(results),
+            "failed": len(failed),
+            "results": results,
+            "errors": failed,
+        },
+        status_code=status_code,
+    )
 
 
 async def api_proposal_detail(request: Request) -> Response:

@@ -182,6 +182,7 @@ import type {
   AuditEvent,
   StatsResponse,
   MemoryTaxonomyResponse,
+  ProposalBatchResponse,
   ProposalDetail,
   ProposalsListResponse,
   SaveProposal,
@@ -260,6 +261,12 @@ export const api = {
       return request<SaveProposal>(`/proposals/${id}`, {
         method: 'PATCH',
         body: { proposal_status: proposalStatus, reason },
+      })
+    },
+    batch(proposalIds: string[], action: 'approve' | 'reject' | 'needs_edit' | 'save', reason?: string) {
+      return request<ProposalBatchResponse>('/proposals/batch', {
+        method: 'POST',
+        body: { proposal_ids: proposalIds, action, reason },
       })
     },
   },

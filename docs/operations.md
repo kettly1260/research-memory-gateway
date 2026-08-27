@@ -4,7 +4,7 @@
 
 1. Copy `config.example.yaml` to `config.yaml`.
 2. Keep the default `backend.type: sqlite` and `retrieval.mode: keyword` for first launch.
-3. Start locally with `research-memory-gateway --config config.yaml --transport stdio` or on NAS with `--transport streamable-http --host 0.0.0.0 --port 8787`.
+3. Start normal clients with `research-memory-gateway --config config.yaml --transport stdio --surface agent` or on NAS with `--transport streamable-http --surface agent --host 0.0.0.0 --port 8787`.
 4. Add `prompts/research-memory-system-prompt.md` or install `skills/research-memory-gateway/SKILL.md` in each AI client/agent so save behavior is consistent.
 5. Treat this prompt/skill as the cross-agent policy: client-local memory features do not automatically write to the gateway, so each agent must proactively call `propose_save` and ask for confirmation when durable knowledge is produced.
 
@@ -15,7 +15,7 @@
 | Kilo | Streamable HTTP `/mcp` when available, otherwise SSE or stdio | `.kilo/` or global Kilo MCP config | Use the bundled skill in `skills/research-memory-gateway/SKILL.md`. |
 | Cherry Studio | Remote MCP `/mcp` or legacy SSE `/sse` if supported, otherwise local command | Cherry Studio MCP settings | Embedding/rerank variables belong on the server, not in Cherry. |
 | Codex | Remote Streamable HTTP `/mcp`, otherwise local stdio | Codex MCP settings | Reuse the same system prompt or inject the bundled skill text; Codex local memory is not a gateway backend. |
-| Generic local MCP | stdio | client-specific JSON | Command: `research-memory-gateway --config <path> --transport stdio`. |
+| Generic local MCP | stdio | client-specific JSON | Command: `research-memory-gateway --config <path> --transport stdio --surface agent`. |
 | NAS remote MCP | Streamable HTTP | client-specific remote MCP URL | URL: `http://<nas-ip>:8787/mcp`; set `RESEARCH_MEMORY_TOKEN` for exposed deployments. |
 
 Security rule: when `RESEARCH_MEMORY_TOKEN` is unset, HTTP/SSE loopback requests from `127.0.0.1` or `::1` are allowed for local development. Non-loopback requests must use a configured master token or an active WebUI-created API key.

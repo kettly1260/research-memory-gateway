@@ -1,0 +1,43 @@
+# Research Memory Gateway V2 Agent Invocation Benchmark
+
+This benchmark measures whether an agent **chooses** the V2 memory tools in natural conversations. It is intentionally separate from unit tests that only prove the tools execute correctly.
+
+## Datasets
+
+- `recall_cases.jsonl`: 30 natural prompts covering explicit history, continuation, implicit history, and negative samples.
+- `capture_cases.jsonl`: 30 durable/non-durable conversation outputs covering Trusted, Ambient, duplicate-risk, speculation, and ordinary chat.
+
+Each client should be tested with the same Agent Surface and the concise V2 skill/system prompt. Do not prepend instructions such as “call recall_memory”.
+
+## Result records
+
+Create one JSONL record per benchmark case.
+
+Recall result example:
+
+```json
+{"case_id":"R01","did_recall":true,"correct_memory":true,"false_positive":false,"latency_ms":412,"token_usage":880}
+```
+
+Capture result example:
+
+```json
+{"case_id":"C01","did_capture":true,"actual_tier":"trusted","duplicate":false,"false_capture":false,"proposal_correct":true}
+```
+
+## Scoring
+
+```powershell
+python benchmarks/score_invocations.py recall benchmarks/recall_cases.jsonl results/chatgpt-recall.jsonl
+python benchmarks/score_invocations.py capture benchmarks/capture_cases.jsonl results/chatgpt-capture.jsonl
+```
+
+Target gates from the V2 plan:
+
+- Explicit historical recall rate: >= 90%.
+- Top-5 correct memory rate: >= 90%.
+- Recall false-positive rate on negative samples: < 10%.
+- Durable capture rate: >= 80%.
+- Capture false-positive rate on non-durable chat: < 10%.
+
+Invocation benchmarks require a real client/model run. CI can validate dataset shape and score recorded runs, but it cannot honestly claim ChatGPT/Codex invocation rates without executing those clients.

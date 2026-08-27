@@ -20,6 +20,7 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8787
     auth_token_env: str = "RESEARCH_MEMORY_TOKEN"
+    surface: Literal["agent", "admin", "full"] = "agent"
 
 
 class BackendConfig(BaseModel):
@@ -115,6 +116,11 @@ class MemoryConfig(BaseModel):
     default_verification_status: str = "unverified"
     enable_light_graph: bool = True
     overlap_limit: int = 5
+    recall_default_limit: int = 5
+    recall_max_limit: int = 10
+    capture_min_chars: int = 12
+    ambient_auto_save: bool = True
+    trusted_capture_requires_review: bool = True
 
 
 class SourceAllowlistEntry(BaseModel):

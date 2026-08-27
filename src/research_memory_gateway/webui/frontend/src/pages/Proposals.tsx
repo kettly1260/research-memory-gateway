@@ -19,7 +19,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Check, Clock, FileClock, PencilLine, XCircle } from 'lucide-react'
-import { useProposal, useProposals, useSaveProposal, useTaxonomy, useUpdateProposalStatus } from '@/lib/query'
+import { useBatchProposalAction, useProposal, useProposals, useSaveProposal, useTaxonomy, useUpdateProposalStatus } from '@/lib/query'
 import { formatMemoryType, localizedLabel } from '@/constants/memoryTypes'
 import type { ProposalStatus, SaveProposal } from '@/types/api'
 import { toast } from 'sonner'
@@ -40,6 +40,7 @@ export function Proposals() {
   const { t, i18n } = useTranslation()
   const [statusFilter, setStatusFilter] = React.useState('pending')
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
   const { data: taxonomy } = useTaxonomy()
   const { data: proposals = [], isLoading } = useProposals({
     status: statusFilter === 'all' ? undefined : statusFilter,
@@ -56,6 +57,7 @@ export function Proposals() {
   const selectedProposal = selectedProposalId ? selected : undefined
   const saveMutation = useSaveProposal()
   const statusMutation = useUpdateProposalStatus()
+  const batchMutation = useBatchProposalAction()
 
   const formatProposalStatus = (status: string) =>
     localizedLabel(taxonomy?.proposal_statuses, status, i18n.language)
@@ -85,24 +87,86 @@ export function Proposals() {
     )
   }
 
+  const toggleSelected = (proposalId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(proposalId)) next.delete(proposalId)
+      else next.add(proposalId)
+      return next
+    })
+  }
+
+  const toggleAllVisible = () => {
+    setSelectedIds((current) => {
+      if (proposals.length > 0 && proposals.every((item) => current.has(item.proposal_id))) {
+        return new Set()
+      }
+      return new Set(proposals.map((item) => item.proposal_id))
+    })
+  }
+
+  const runBatch = (action: 'approve' | 'reject' | 'needs_edit' | 'save') => {
+    const proposalIds = [...selectedIds]
+    if (proposalIds.length === 0) return
+    batchMutation.mutate(
+      { proposalIds, action, reason: `WebUI batch ${action}` },
+      {
+        onSuccess: (result) => {
+          toast.success(t('proposals.batch_done', { count: result.succeeded }))
+          setSelectedIds(new Set())
+        },
+        onError: (err) => toast.error(String(err)),
+      },
+    )
+  }
+
   return (
     <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6 animate-fade-in">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold tracking-tight">{t('proposals.title')}</h1>
-        <Select value={statusFilter} onValueChange={(value) => { if (value !== null) setStatusFilter(value) }}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="pending">{formatProposalStatus('pending')}</SelectItem>
-            <SelectItem value="needs_edit">{formatProposalStatus('needs_edit')}</SelectItem>
-            <SelectItem value="approved">{formatProposalStatus('approved')}</SelectItem>
-            <SelectItem value="saved">{formatProposalStatus('saved')}</SelectItem>
-            <SelectItem value="rejected">{formatProposalStatus('rejected')}</SelectItem>
-            <SelectItem value="expired">{formatProposalStatus('expired')}</SelectItem>
-            <SelectItem value="all">{t('common.all')}</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedIds.size > 0 && (
+            <>
+              <span className="text-sm text-muted-foreground">
+                {t('proposals.selected_count', { count: selectedIds.size })}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => runBatch('approve')} disabled={batchMutation.isPending}>
+                {t('proposals.approve_selected')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => runBatch('needs_edit')} disabled={batchMutation.isPending}>
+                {t('proposals.edit_selected')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => runBatch('save')} disabled={batchMutation.isPending}>
+                {t('proposals.save_selected')}
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => runBatch('reject')} disabled={batchMutation.isPending}>
+                {t('proposals.reject_selected')}
+              </Button>
+            </>
+          )}
+          <Select
+            value={statusFilter}
+            onValueChange={(value) => {
+              if (value !== null) {
+                setStatusFilter(value)
+                setSelectedIds(new Set())
+              }
+            }}
+          >
+            <SelectTrigger className="w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="pending">{formatProposalStatus('pending')}</SelectItem>
+              <SelectItem value="needs_edit">{formatProposalStatus('needs_edit')}</SelectItem>
+              <SelectItem value="approved">{formatProposalStatus('approved')}</SelectItem>
+              <SelectItem value="saved">{formatProposalStatus('saved')}</SelectItem>
+              <SelectItem value="rejected">{formatProposalStatus('rejected')}</SelectItem>
+              <SelectItem value="expired">{formatProposalStatus('expired')}</SelectItem>
+              <SelectItem value="all">{t('common.all')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(420px,0.9fr)]">
@@ -110,6 +174,14 @@ export function Proposals() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/30 hover:bg-muted/30">
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    aria-label={t('proposals.select_all')}
+                    checked={proposals.length > 0 && proposals.every((item) => selectedIds.has(item.proposal_id))}
+                    onChange={toggleAllVisible}
+                  />
+                </TableHead>
                 <TableHead>{t('proposals.memory')}</TableHead>
                 <TableHead>{t('proposals.reason')}</TableHead>
                 <TableHead>{t('common.status')}</TableHead>
@@ -120,14 +192,14 @@ export function Proposals() {
               {isLoading ? (
                 Array.from({ length: 4 }).map((_, index) => (
                   <TableRow key={index}>
-                    <TableCell colSpan={4}>
+                    <TableCell colSpan={5}>
                       <div className="skeleton h-4 w-full" />
                     </TableCell>
                   </TableRow>
                 ))
               ) : proposals.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                  <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
                     {t('common.no_results')}
                   </TableCell>
                 </TableRow>
@@ -137,9 +209,11 @@ export function Proposals() {
                     key={proposal.proposal_id}
                     proposal={proposal}
                     selected={proposal.proposal_id === selectedProposalId}
+                    checked={selectedIds.has(proposal.proposal_id)}
                     statusLabel={formatProposalStatus(proposal.proposal_status)}
                     typeLabel={formatMemoryType(proposal.suggested_memory.memory_type, taxonomy?.memory_types, i18n.language)}
                     onSelect={() => setSelectedId(proposal.proposal_id)}
+                    onToggle={() => toggleSelected(proposal.proposal_id)}
                   />
                 ))
               )}
@@ -177,6 +251,9 @@ export function Proposals() {
                     <Button size="sm" onClick={saveSelected} disabled={saveMutation.isPending || !canSaveSelectedProposal}>
                       <Check className="w-4 h-4 mr-2" />
                       {t('proposals.save')}
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => changeStatus('approved')} disabled={statusMutation.isPending || !canChangeSelectedProposalStatus || selectedProposalStatus === 'approved'}>
+                      {formatProposalStatus('approved')}
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => changeStatus('needs_edit')} disabled={statusMutation.isPending || !canChangeSelectedProposalStatus || selectedProposalStatus === 'needs_edit'}>
                       <PencilLine className="w-4 h-4 mr-2" />
@@ -237,21 +314,33 @@ export function Proposals() {
 function ProposalRow({
   proposal,
   selected,
+  checked,
   statusLabel,
   typeLabel,
   onSelect,
+  onToggle,
 }: {
   proposal: SaveProposal
   selected: boolean
+  checked: boolean
   statusLabel: string
   typeLabel: string
   onSelect: () => void
+  onToggle: () => void
 }) {
   return (
     <TableRow
       className={selected ? 'bg-muted/50 cursor-pointer' : 'cursor-pointer'}
       onClick={onSelect}
     >
+      <TableCell onClick={(event) => event.stopPropagation()}>
+        <input
+          type="checkbox"
+          aria-label={`Select ${proposal.suggested_memory.title}`}
+          checked={checked}
+          onChange={onToggle}
+        />
+      </TableCell>
       <TableCell>
         <div className="space-y-1">
           <p className="font-medium line-clamp-1">{proposal.suggested_memory.title}</p>

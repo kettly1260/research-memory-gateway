@@ -12,12 +12,14 @@ export type MemoryType = MemoryTypeValue
 export type VerificationStatus = 'evidence_backed' | 'inferred' | 'unverified' | 'conflicting' | 'superseded' | 'retracted'
 export type ProposalStatus = ProposalStatusValue
 export type PlanStatus = PlanStatusValue
+export type MemoryTier = 'ambient' | 'trusted'
 
 export interface Claim {
+  claim_id?: string
   claim: string
   verification_status: VerificationStatus
   source?: string
-  confidence?: number
+  confidence?: string | number
 }
 
 export interface Evidence {
@@ -32,6 +34,7 @@ export interface ResearchMemory {
   project: string
   topic: string
   memory_type: MemoryType
+  memory_tier?: MemoryTier
   title: string
   summary: string
   tags: string[]
@@ -120,6 +123,15 @@ export interface ProposalDetail extends SaveProposal {
 
 export interface ProposalsListResponse {
   items: SaveProposal[]
+}
+
+export interface ProposalBatchResponse {
+  action: string
+  requested: number
+  succeeded: number
+  failed: number
+  results: Array<{ proposal_id: string; status: string; memory_id?: string }>
+  errors: Array<{ proposal_id: string; error: string }>
 }
 
 // ─── Config Types ───

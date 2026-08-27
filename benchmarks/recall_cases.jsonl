@@ -1,0 +1,30 @@
+{"case_id":"R01","prompt":"之前 Fe 的硝酸溶液怎么配的？","should_recall":true,"category":"explicit_history","expected_project":"Fe3-probe"}
+{"case_id":"R02","prompt":"上次 HEPES 配多少 mM？","should_recall":true,"category":"explicit_history","expected_project":"Fe3-probe"}
+{"case_id":"R03","prompt":"之前那个 PDF 下载问题后来怎么解决的？","should_recall":true,"category":"explicit_history","expected_project":"paper-fulltext-mcp"}
+{"case_id":"R04","prompt":"我们之前给 Origin MCP 定的仓库路径是什么？","should_recall":true,"category":"explicit_history","expected_project":"origin-mcp"}
+{"case_id":"R05","prompt":"还记得我之前用的 DMSO 纯度吗？","should_recall":true,"category":"explicit_history","expected_project":"Fe3-probe"}
+{"case_id":"R06","prompt":"原来 Fe3+ stock 的酸度是多少？","should_recall":true,"category":"explicit_history","expected_project":"Fe3-probe"}
+{"case_id":"R07","prompt":"继续上次 Origin MCP 的工作。","should_recall":true,"category":"continuation","expected_project":"origin-mcp"}
+{"case_id":"R08","prompt":"我们接着之前的实验计划做。","should_recall":true,"category":"continuation","expected_project":"Fe3-probe"}
+{"case_id":"R09","prompt":"继续 paper-fulltext-mcp 后面的验证。","should_recall":true,"category":"continuation","expected_project":"paper-fulltext-mcp"}
+{"case_id":"R10","prompt":"把上次没做完的 PL 测试接着排下去。","should_recall":true,"category":"continuation","expected_project":"Fe3-probe"}
+{"case_id":"R11","prompt":"这个还按之前的方法做吗？","should_recall":true,"category":"implicit_history","expected_project":null}
+{"case_id":"R12","prompt":"用我们之前确认过的条件。","should_recall":true,"category":"implicit_history","expected_project":null}
+{"case_id":"R13","prompt":"这次仍然放到原来的项目目录。","should_recall":true,"category":"implicit_history","expected_project":null}
+{"case_id":"R14","prompt":"按之前定好的分支策略继续改。","should_recall":true,"category":"implicit_history","expected_project":"research-memory-gateway"}
+{"case_id":"R15","prompt":"那个配置不用重新讨论，沿用上次的。","should_recall":true,"category":"implicit_history","expected_project":null}
+{"case_id":"R16","prompt":"What concentration did we use for the Fe stock last time?","should_recall":true,"category":"explicit_history","expected_project":"Fe3-probe"}
+{"case_id":"R17","prompt":"Resume the MCP work from our previous session.","should_recall":true,"category":"continuation","expected_project":null}
+{"case_id":"R18","prompt":"Use the repository path we already agreed on.","should_recall":true,"category":"implicit_history","expected_project":null}
+{"case_id":"R19","prompt":"What did we decide about Playwright versus Edge debugging?","should_recall":true,"category":"decision_history","expected_project":"paper-fulltext-mcp"}
+{"case_id":"R20","prompt":"之前为什么没有把 EverOS 直接加进主依赖？","should_recall":true,"category":"decision_history","expected_project":"research-memory-gateway"}
+{"case_id":"R21","prompt":"我之前说过数据整理最终放在哪个目录？","should_recall":true,"category":"path_history","expected_project":null}
+{"case_id":"R22","prompt":"上次我们给 legacy 分支起的名字是什么？","should_recall":true,"category":"decision_history","expected_project":"research-memory-gateway"}
+{"case_id":"R23","prompt":"什么是 SQLite FTS5？","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R24","prompt":"解释一下 HEPES 的缓冲原理。","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R25","prompt":"Python dataclass 和 Pydantic BaseModel 有什么区别？","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R26","prompt":"Fe3+ 为什么容易水解？","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R27","prompt":"给我解释一下向量检索和关键词检索的区别。","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R28","prompt":"What is reranking in information retrieval?","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R29","prompt":"MCP 的 Streamable HTTP 是什么？","should_recall":false,"category":"negative_general_knowledge","expected_project":null}
+{"case_id":"R30","prompt":"硝酸的摩尔质量是多少？","should_recall":false,"category":"negative_general_knowledge","expected_project":null}

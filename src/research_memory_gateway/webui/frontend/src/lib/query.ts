@@ -170,6 +170,25 @@ export function useUpdateProposalStatus() {
   })
 }
 
+export function useBatchProposalAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      proposalIds,
+      action,
+      reason,
+    }: {
+      proposalIds: string[]
+      action: 'approve' | 'reject' | 'needs_edit' | 'save'
+      reason?: string
+    }) => api.proposals.batch(proposalIds, action, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.memories.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.proposals.all })
+    },
+  })
+}
+
 // ─── Config ───
 
 export function useEffectiveConfig() {

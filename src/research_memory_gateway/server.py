@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
 
 from .backends import build_backend
+from .agent_surface.tools import register_agent_tools
 from .config import AppConfig, load_config
 from .models import ExportFormat
 from .service import ResearchMemoryService, serialize_results
@@ -25,6 +26,29 @@ from .webui.app import build_webui_app
 
 
 logger = logging.getLogger(__name__)
+
+
+ADMIN_TOOL_NAMES = (
+    "get_memory_taxonomy",
+    "propose_save",
+    "save_research_memory",
+    "list_memory_proposals",
+    "get_memory_proposal",
+    "update_memory_proposal_status",
+    "search_research_memory",
+    "check_overlap",
+    "get_research_memory",
+    "update_research_memory",
+    "delete_research_memory",
+    "mark_memory_status",
+    "merge_research_memories",
+    "open_source_ref",
+    "audit_unverified",
+    "health",
+    "audit_database_integrity",
+    "retrieval_health",
+    "export_memories",
+)
 
 
 class BearerAuthMiddleware:
@@ -125,10 +149,13 @@ def _is_loopback_client(scope: Scope) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
-def build_mcp(config: AppConfig) -> FastMCP:
+def build_mcp(config: AppConfig, surface: str | None = None) -> FastMCP:
     backend = build_backend(config)
     service = ResearchMemoryService(config, backend)
     mcp = FastMCP(config.server.name, host=config.server.host, port=config.server.port)
+    selected_surface = surface or config.server.surface
+    if selected_surface not in {"agent", "admin", "full"}:
+        raise ValueError("surface must be agent, admin, or full")
 
     @mcp.tool()
     def get_memory_taxonomy() -> dict[str, Any]:
@@ -359,6 +386,12 @@ def build_mcp(config: AppConfig) -> FastMCP:
             include_deleted=include_deleted,
         )
 
+    if selected_surface in {"agent", "full"}:
+        register_agent_tools(mcp, service)
+    if selected_surface == "agent":
+        for tool_name in ADMIN_TOOL_NAMES:
+            mcp.remove_tool(tool_name)
+
     return mcp
 
 
@@ -377,6 +410,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument(
+        "--surface",
+        choices=["agent", "admin", "full"],
+        default=None,
+        help="MCP tool surface. agent is the V2 low-friction default; admin exposes legacy tools.",
+    )
     return parser.parse_args()
 
 
@@ -439,6 +478,8 @@ def main() -> None:
         config.server.host = args.host
     if args.port is not None:
         config.server.port = args.port
+    if args.surface is not None:
+        config.server.surface = args.surface
 
     auth_token = os.getenv(config.server.auth_token_env)
     transport = args.transport

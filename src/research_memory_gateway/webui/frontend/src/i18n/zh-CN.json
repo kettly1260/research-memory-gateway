@@ -134,7 +134,14 @@
     "versions": "历史版本",
     "save": "确认保存",
     "saved_toast": "已保存：{{title}}",
-    "status_updated": "提案状态已更新"
+    "status_updated": "提案状态已更新",
+    "selected_count": "已选择 {{count}} 项",
+    "select_all": "选择当前显示的全部提案",
+    "approve_selected": "批准所选",
+    "edit_selected": "标记需修改",
+    "save_selected": "保存所选",
+    "reject_selected": "驳回所选",
+    "batch_done": "已处理 {{count}} 个提案"
   },
   "config": {
     "title": "参数配置",

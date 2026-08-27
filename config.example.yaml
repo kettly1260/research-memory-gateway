@@ -3,6 +3,10 @@ server:
   host: 127.0.0.1
   port: 8787
   auth_token_env: RESEARCH_MEMORY_TOKEN
+  # agent: only recall/capture/verify/project-state tools (recommended for normal agents)
+  # admin: legacy evidence-first management tools only
+  # full: both surfaces, intended for debugging/migration
+  surface: agent
 
 backend:
   # Default self-contained backend. This is enough for direct MCP calls.
@@ -44,6 +48,11 @@ memory:
   default_verification_status: unverified
   enable_light_graph: true
   overlap_limit: 5
+  recall_default_limit: 5
+  recall_max_limit: 10
+  capture_min_chars: 12
+  ambient_auto_save: true
+  trusted_capture_requires_review: true
 
 sources:
   allowlist:
