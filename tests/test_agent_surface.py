@@ -7,6 +7,7 @@ from research_memory_gateway.agent_surface.verify import verify_memory
 from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.config import AppConfig
 from research_memory_gateway.models import MemoryStatus, MemoryTier, ResearchMemory
+from research_memory_gateway.semantic_slots import infer_ambient_semantic_slot
 from research_memory_gateway.server import ADMIN_TOOL_NAMES, build_mcp
 from research_memory_gateway.service import ResearchMemoryService
 
@@ -406,6 +407,70 @@ def test_parallel_operational_path_slots_remain_distinct_ambient_state(tmp_path)
     assert len(set(memory_ids)) == len(cases)
 
 
+def test_property_for_subject_slots_remain_distinct(tmp_path) -> None:
+    service = make_service(tmp_path)
+    cases = (
+        ("Repository path for frontend is G:\\LLM\\front.", "multi.frontend.repository_path"),
+        ("Repository path for backend is G:\\LLM\\back.", "multi.backend.repository_path"),
+        ("Config path for main is G:\\LLM\\main.yaml.", "multi.main.config_path"),
+        ("Config path for test is G:\\LLM\\test.yaml.", "multi.test.config_path"),
+        ("Selected model for embedding is bge-m3.", "multi.embedding.selected_model"),
+        ("Selected model for reranking is bge-reranker-v2.", "multi.reranking.selected_model"),
+    )
+
+    memory_ids: list[str] = []
+    for content, semantic_key in cases:
+        result = capture_memory(service, content=content, project="multi")
+        assert result["action"] == "saved"
+        assert result["memory_tier"] == "ambient"
+        memory = service.get_research_memory(result["memory_id"])
+        assert memory.metadata["semantic_key"] == semantic_key
+        assert memory.memory_status == MemoryStatus.active
+        memory_ids.append(memory.memory_id)
+
+    assert len(set(memory_ids)) == len(cases)
+
+
+def test_semantic_slot_fails_closed_on_unparsed_explicit_qualifier() -> None:
+    slot = infer_ambient_semantic_slot(
+        "Repository path for is G:\\LLM\\unknown.",
+        project="multi",
+    )
+
+    assert slot is None
+
+
+def test_property_of_subject_normalizes_article() -> None:
+    slot = infer_ambient_semantic_slot(
+        "Repository path of the frontend is G:\\LLM\\front.",
+        project="multi",
+    )
+
+    assert slot is not None
+    assert slot.key("multi") == "multi.frontend.repository_path"
+
+
+def test_chinese_possessive_subject_normalizes_to_same_slot(tmp_path) -> None:
+    service = make_service(tmp_path)
+    old = capture_memory(
+        service,
+        content="前端仓库路径是 G:\\LLM\\front-old.",
+        project="multi",
+    )
+    new = capture_memory(
+        service,
+        content="前端的仓库路径改为 G:\\LLM\\front-new.",
+        project="multi",
+    )
+
+    old_memory = service.get_research_memory(old["memory_id"])
+    new_memory = service.get_research_memory(new["memory_id"])
+    assert old_memory.metadata["semantic_key"] == "multi.前端.repository_path"
+    assert new_memory.metadata["semantic_key"] == "multi.前端.repository_path"
+    assert old_memory.memory_status == MemoryStatus.archived
+    assert new_memory.memory_status == MemoryStatus.active
+
+
 def test_original_repository_modifier_is_not_origin_subject(tmp_path) -> None:
     service = make_service(tmp_path)
     original = capture_memory(
@@ -481,6 +546,25 @@ def test_research_hypotheses_are_trusted_proposals(tmp_path) -> None:
         assert proposal.suggested_memory.claims[0].verification_status.value == "unverified"
 
 
+def test_association_hypotheses_are_mechanism_proposals(tmp_path) -> None:
+    service = make_service(tmp_path)
+    cases = (
+        "AIE 可能与分子内运动受限有关，需进一步验证。",
+        "荧光增强可能与分子间氢键相关，待验证。",
+        "发射峰位移动可能与溶剂极性有关，需验证。",
+        "The fluorescence enhancement may be due to aggregation-induced emission and needs validation.",
+        "The fluorescence enhancement may be related to restricted intramolecular motion and needs verification.",
+    )
+
+    for index, content in enumerate(cases):
+        result = capture_memory(service, content=content, project=f"association-hypothesis-{index}")
+        assert result["action"] == "queued"
+        assert result["memory_tier"] == "trusted"
+        proposal = service.get_memory_proposal(result["proposal_id"])
+        assert proposal.suggested_memory.memory_type.value == "mechanism_hypothesis"
+        assert proposal.suggested_memory.metadata["capture_semantic_role"] == "mechanism"
+
+
 def test_worthless_speculation_is_still_ignored(tmp_path) -> None:
     service = make_service(tmp_path)
 
@@ -506,6 +590,25 @@ def test_user_confirmed_stable_preference_is_not_ignored(tmp_path) -> None:
     assert result["action"] == "saved"
     assert result["memory_tier"] == "ambient"
     assert "简洁" in service.get_research_memory(result["memory_id"]).summary
+
+
+def test_explicit_reply_preferences_are_ambient(tmp_path) -> None:
+    service = make_service(tmp_path)
+    cases = (
+        "以后回复简洁一点。",
+        "记住以后回答尽量简洁。",
+        "Keep replies concise.",
+    )
+
+    for index, content in enumerate(cases):
+        result = capture_memory(
+            service,
+            content=content,
+            project=f"preference-{index}",
+            user_confirmed=True,
+        )
+        assert result["action"] == "saved"
+        assert result["memory_tier"] == "ambient"
 
 
 def test_capture_memory_deduplicates_pending_trusted_capture(tmp_path) -> None:

@@ -166,29 +166,71 @@ _SPECULATION_MARKERS = (
     "maybe it is",
     "not checked",
 )
+_HYPOTHESIS_MODALITY_MARKERS = (
+    "可能",
+    "也许",
+    "或许",
+    "可能会",
+    "may ",
+    "might ",
+    "could ",
+    "possibly",
+    "perhaps",
+)
 _HYPOTHESIS_CAUSAL_MARKERS = (
     "导致",
     "由于",
     "来自",
     "源于",
+    "源自",
     "引起",
     "造成",
+    "有关",
+    "相关",
+    "关联",
+    "归因于",
     "due to",
     "caused by",
     "result from",
     "results from",
     "lead to",
     "leads to",
+    "related to",
+    "associated with",
+    "attributed to",
+    "linked to",
+    "arise from",
+    "arises from",
 )
 _HYPOTHESIS_VALIDATION_MARKERS = (
     "待验证",
+    "待进一步验证",
     "需验证",
+    "需进一步验证",
     "需要验证",
+    "需要进一步验证",
     "尚待验证",
     "未经验证",
-    "to be verified",
+    "needs validation",
+    "needs further validation",
+    "requires validation",
+    "requires further validation",
+    "to be validated",
     "needs verification",
+    "needs further verification",
     "requires verification",
+    "requires further verification",
+    "to be verified",
+)
+_PREFERENCE_ZH_RE = re.compile(
+    r"(?:以后|今后|从现在开始|记住以后).{0,20}(?:回复|回答)|"
+    r"(?:回复|回答).{0,12}(?:要|尽量|保持|不要|别)|"
+    r"(?:不要再).{0,12}(?:回复|回答)",
+)
+_PREFERENCE_EN_RE = re.compile(
+    r"\b(?:from now on|always)\b.{0,40}\b(?:reply|replies|response|responses|answer|answers)\b|"
+    r"\bkeep\s+(?:reply|replies|response|responses|answer|answers)\b",
+    re.IGNORECASE,
 )
 _ONE_OFF_TASK_MARKERS = (
     "翻译",
@@ -634,6 +676,8 @@ def _find_pending_duplicate(
 
 def _classify_tier(content: str) -> MemoryTier:
     lowered = content.lower()
+    if _is_explicit_user_preference(content):
+        return MemoryTier.ambient
     if _is_research_hypothesis(content):
         return MemoryTier.trusted
     ambient_slot = infer_ambient_semantic_slot(content, project="capture")
@@ -727,6 +771,7 @@ def _should_ignore(
         or _is_scientific_measurement(content)
         or _is_scientific_observation(content)
         or _is_research_hypothesis(content)
+        or _is_explicit_user_preference(content)
         or _contains_any(lowered, _DECISION_MARKERS)
     )
     if importance == "high":
@@ -826,10 +871,15 @@ def _is_research_hypothesis(content: str) -> bool:
     lowered = content.lower()
     if _contains_any(lowered, _MECHANISM_MARKERS):
         return True
-    has_causal_language = _contains_any(lowered, _HYPOTHESIS_CAUSAL_MARKERS)
+    has_modality = _contains_any(lowered, _HYPOTHESIS_MODALITY_MARKERS)
+    has_relation = _contains_any(lowered, _HYPOTHESIS_CAUSAL_MARKERS)
     has_validation_language = _contains_any(lowered, _HYPOTHESIS_VALIDATION_MARKERS)
-    has_speculative_language = _contains_any(lowered, _SPECULATION_MARKERS)
-    return has_causal_language and (has_validation_language or has_speculative_language)
+    has_research_context = _is_research_context(content)
+    return has_modality and has_relation and (has_validation_language or has_research_context)
+
+
+def _is_explicit_user_preference(content: str) -> bool:
+    return bool(_PREFERENCE_ZH_RE.search(content) or _PREFERENCE_EN_RE.search(content))
 
 
 def _is_ambient_context(lowered: str) -> bool:

@@ -5,7 +5,7 @@ This benchmark measures whether an agent **chooses** the V2 memory tools in natu
 ## Datasets
 
 - `recall_cases.jsonl`: 30 natural prompts covering explicit history, continuation, implicit history, and negative samples.
-- `capture_cases.jsonl`: 63 durable/non-durable outputs. The adversarial/generalization set spans polymers, ceramics, electrochemistry, spectroscopy, thermal analysis, mechanical/electrical properties, surface/microstructure characterization, literature conclusions, research hypotheses, explicit stable preferences, software state, sensitive configuration, speculation, and ordinary chat.
+- `capture_cases.jsonl`: 71 durable/non-durable outputs. The adversarial/generalization set spans polymers, ceramics, electrochemistry, spectroscopy, thermal analysis, mechanical/electrical properties, surface/microstructure characterization, literature conclusions, causal/association research hypotheses, explicit stable preferences, software state, sensitive configuration, speculation, and ordinary chat.
 
 Each client should be tested with the same Agent Surface and the concise V2 skill/system prompt. Do not prepend instructions such as “call recall_memory”.
 

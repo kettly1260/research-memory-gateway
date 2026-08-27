@@ -91,6 +91,12 @@ _CHINESE_PREFIX_MODIFIERS = (
     "这个",
 )
 
+_POST_PROPERTY_QUALIFIER_RE = re.compile(r"^\s*(?:for|of)\b", re.IGNORECASE)
+_POST_PROPERTY_ASSIGNMENT_RE = re.compile(
+    r"\s+(?:is|was|changed(?:\s+to)?|uses?|using|selected|active|current)\b|\s*=",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class AmbientSemanticSlot:
@@ -112,12 +118,16 @@ def infer_ambient_semantic_slot(content: str, *, project: str) -> AmbientSemanti
         return None
     lowered = f" {text.lower()} "
 
-    if re.search(r"\b[A-Za-z]:[\\/]", text):
+    path_match = re.search(r"\b[A-Za-z]:[\\/]", text)
+    if path_match:
+        property_text = text[: path_match.start()]
         for role, pattern in _PATH_ROLE_PATTERNS:
-            match = pattern.search(text)
+            match = pattern.search(property_text)
             if match is None:
                 continue
-            subject = _extract_subject(text[: match.start()])
+            subject, ambiguous = _subject_around_property(property_text, match)
+            if ambiguous:
+                return None
             return AmbientSemanticSlot(role=role, subject=_dedupe_project_subject(subject, project))
 
     if any(marker in lowered for marker in ("project state", "project status", "项目状态", "当前进度")):
@@ -130,7 +140,9 @@ def infer_ambient_semantic_slot(content: str, *, project: str) -> AmbientSemanti
         match = pattern.search(text)
         if match is None:
             continue
-        subject = _extract_subject(text[: match.start()])
+        subject, ambiguous = _subject_around_property(text, match)
+        if ambiguous:
+            return None
         return AmbientSemanticSlot(role=role, subject=_dedupe_project_subject(subject, project))
 
     return None
@@ -152,6 +164,7 @@ def _extract_subject(prefix: str) -> str | None:
     for modifier in _CHINESE_PREFIX_MODIFIERS:
         if candidate.startswith(modifier):
             candidate = candidate[len(modifier) :].strip()
+    candidate = re.sub(r"\s*的\s*$", "", candidate).strip()
 
     english_tokens = re.findall(r"[A-Za-z0-9_+.-]+", candidate)
     chinese_tokens = re.findall(r"[\u4e00-\u9fff]+", candidate)
@@ -166,10 +179,44 @@ def _extract_subject(prefix: str) -> str | None:
         chinese = chinese_tokens[-1]
         for modifier in _CHINESE_PREFIX_MODIFIERS:
             chinese = chinese.removeprefix(modifier)
+        chinese = chinese.removesuffix("的")
         subject = _slug(chinese)
         return subject or None
 
     subject = _slug(candidate)
+    return subject or None
+
+
+def _subject_around_property(text: str, match: re.Match[str]) -> tuple[str | None, bool]:
+    """Return a normalized subject and whether an explicit qualifier was ambiguous.
+
+    Subject-before-property and property-for/of-subject are both accepted.  If the
+    sentence explicitly contains a post-property qualifier but we cannot parse it,
+    fail closed instead of emitting a coarse project-level slot that could archive a
+    different valid state.
+    """
+
+    suffix = text[match.end() :]
+    suffix_subject = _extract_post_property_subject(suffix)
+    if suffix_subject is not None:
+        return suffix_subject, False
+    if _POST_PROPERTY_QUALIFIER_RE.match(suffix):
+        return None, True
+    return _extract_subject(text[: match.start()]), False
+
+
+def _extract_post_property_subject(suffix: str) -> str | None:
+    qualifier = _POST_PROPERTY_QUALIFIER_RE.match(suffix)
+    if qualifier is None:
+        return None
+    remainder = suffix[qualifier.end() :].strip()
+    assignment = _POST_PROPERTY_ASSIGNMENT_RE.search(f" {remainder}")
+    if assignment is None:
+        return None
+    subject_text = f" {remainder}"[: assignment.start()].strip()
+    if not subject_text:
+        return None
+    subject = _extract_subject(subject_text)
     return subject or None
 
 

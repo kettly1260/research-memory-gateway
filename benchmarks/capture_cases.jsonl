@@ -61,3 +61,11 @@
 {"case_id":"C61","content":"AIE 可能导致增强，待验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
 {"case_id":"C62","content":"这个现象也许由分子间氢键导致，需验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
 {"case_id":"C63","content":"我喜欢简洁的回复风格。","should_capture":true,"expected_tier":"ambient","category":"stable_preference","user_confirmed":true}
+{"case_id":"C64","content":"AIE 可能与分子内运动受限有关，需进一步验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C65","content":"荧光增强可能与分子间氢键相关，待验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C66","content":"The fluorescence enhancement may be due to aggregation-induced emission and needs validation.","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C67","content":"The fluorescence enhancement may be related to restricted intramolecular motion and needs verification.","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
+{"case_id":"C68","content":"以后回复简洁一点。","should_capture":true,"expected_tier":"ambient","category":"stable_preference","user_confirmed":true}
+{"case_id":"C69","content":"记住以后回答尽量简洁。","should_capture":true,"expected_tier":"ambient","category":"stable_preference","user_confirmed":true}
+{"case_id":"C70","content":"Keep replies concise.","should_capture":true,"expected_tier":"ambient","category":"stable_preference","user_confirmed":true}
+{"case_id":"C71","content":"发射峰位移动可能与溶剂极性有关，需验证。","should_capture":true,"expected_tier":"trusted","category":"mechanism_hypothesis"}
