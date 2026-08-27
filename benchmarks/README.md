@@ -32,6 +32,10 @@ python benchmarks/score_invocations.py recall benchmarks/recall_cases.jsonl resu
 python benchmarks/score_invocations.py capture benchmarks/capture_cases.jsonl results/chatgpt-capture.jsonl
 ```
 
+Add `--require-pass` in CI or release acceptance. The command then exits non-zero when the
+result set is incomplete or a target gate fails. The scorer rejects duplicate and unknown
+case IDs, reports missing cases, and summarizes latency/token samples when supplied.
+
 Target gates from the V2 plan:
 
 - Explicit historical recall rate: >= 90%.

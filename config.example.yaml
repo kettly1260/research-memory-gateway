@@ -50,6 +50,8 @@ memory:
   overlap_limit: 5
   recall_default_limit: 5
   recall_max_limit: 10
+  recall_compact_token_budget: 1000
+  recall_standard_token_budget: 1500
   capture_min_chars: 12
   ambient_auto_save: true
   trusted_capture_requires_review: true

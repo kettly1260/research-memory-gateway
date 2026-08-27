@@ -118,6 +118,8 @@ class MemoryConfig(BaseModel):
     overlap_limit: int = 5
     recall_default_limit: int = 5
     recall_max_limit: int = 10
+    recall_compact_token_budget: int = Field(default=1000, ge=100, le=10000)
+    recall_standard_token_budget: int = Field(default=1500, ge=100, le=20000)
     capture_min_chars: int = 12
     ambient_auto_save: bool = True
     trusted_capture_requires_review: bool = True

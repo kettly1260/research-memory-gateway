@@ -92,6 +92,60 @@ def test_recall_memory_rewrites_history_filler_for_keyword_mode(tmp_path) -> Non
     assert "储备液" in result["rewritten_query"]
 
 
+def test_recall_memory_enforces_compact_context_budget(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.config.memory.recall_compact_token_budget = 450
+    for index in range(5):
+        long_text = f"budgetprobe 记录 {index}：" + ("这是需要截断的长期科研上下文。" * 90)
+        service.backend.save(
+            ResearchMemory.model_validate(
+                {
+                    "project": "budget-project",
+                    "topic": f"budget test {index}",
+                    "memory_type": "material_system",
+                    "title": f"Budget memory {index}",
+                    "summary": long_text,
+                    "claims": [{"claim": long_text}],
+                }
+            )
+        )
+
+    result = recall_memory(
+        service,
+        query="budgetprobe",
+        project="budget-project",
+        limit=5,
+    )
+
+    assert result["available_result_count"] == 5
+    assert result["result_count"] < result["available_result_count"]
+    assert result["context_budget"]["truncated"] is True
+    assert result["context_budget"]["estimated_tokens"] <= 450
+
+
+def test_recall_memory_budget_also_bounds_long_empty_queries(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.config.memory.recall_compact_token_budget = 100
+
+    result = recall_memory(service, query="不存在的超长查询" * 100)
+
+    assert result["result_count"] == 0
+    assert result["context_budget"]["truncated"] is True
+    assert result["context_budget"]["estimated_tokens"] <= 100
+
+
+def test_recall_memory_budget_bounds_long_project_hint(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.config.memory.recall_compact_token_budget = 100
+
+    result = recall_memory(service, query="missing", project="P" * 3000)
+
+    assert result["result_count"] == 0
+    assert result["context_budget"]["truncated"] is True
+    assert result["context_budget"]["estimated_tokens"] <= 100
+    assert len(result["project"]) < 3000
+
+
 def test_recall_returns_matched_claim_with_claim_verification(tmp_path) -> None:
     service = make_service(tmp_path)
     memory = ResearchMemory.model_validate(
@@ -689,6 +743,33 @@ def test_get_project_state_includes_pending_trusted_capture(tmp_path) -> None:
 
     assert state["memory_count"] == 1
     assert state["pending_proposals"][0]["proposal_id"] == queued["proposal_id"]
+
+
+def test_get_project_state_enforces_standard_context_budget(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.config.memory.recall_standard_token_budget = 500
+    for index in range(5):
+        long_text = f"Project checkpoint {index}: " + ("durable context " * 120)
+        service.backend.save(
+            ResearchMemory.model_validate(
+                {
+                    "project": "budget-state",
+                    "topic": f"checkpoint {index}",
+                    "memory_type": "workflow_plan",
+                    "memory_tier": "ambient",
+                    "title": f"Checkpoint {index}",
+                    "summary": long_text,
+                    "next_actions": [f"Continue task {index}"],
+                }
+            )
+        )
+
+    state = get_project_state(service, project="budget-state", limit=5)
+
+    assert state["available_memory_count"] == 5
+    assert state["memory_count"] < state["available_memory_count"]
+    assert state["context_budget"]["truncated"] is True
+    assert state["context_budget"]["estimated_tokens"] <= 500
 
 
 def test_agent_surface_exposes_only_four_agent_tools(tmp_path) -> None:

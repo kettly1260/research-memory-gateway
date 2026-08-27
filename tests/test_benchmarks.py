@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from research_memory_gateway.agent_surface.capture import capture_memory
 from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.config import AppConfig
@@ -96,3 +98,57 @@ def test_benchmark_scorers_compute_expected_rates() -> None:
     assert score_recall(recall_cases, recall_results)["false_positive_rate"] == 0.0
     assert score_capture(capture_cases, capture_results)["capture_rate"] == 1.0
     assert score_capture(capture_cases, capture_results)["correct_tier_rate"] == 1.0
+
+
+def test_recall_scorer_requires_complete_results_and_reports_operations() -> None:
+    cases = [
+        {"case_id": "R1", "should_recall": True, "category": "explicit_history"},
+        {"case_id": "R2", "should_recall": False, "category": "negative_general_knowledge"},
+    ]
+    incomplete = score_recall(
+        cases,
+        [
+            {
+                "case_id": "R1",
+                "did_recall": True,
+                "correct_memory": True,
+                "latency_ms": 120,
+                "token_usage": 500,
+            }
+        ],
+    )
+    assert incomplete["complete"] is False
+    assert incomplete["missing_case_ids"] == ["R2"]
+    assert incomplete["passed"] is False
+
+    complete = score_recall(
+        cases,
+        [
+            {
+                "case_id": "R1",
+                "did_recall": True,
+                "correct_memory": True,
+                "latency_ms": 120,
+                "token_usage": 500,
+            },
+            {"case_id": "R2", "did_recall": False, "latency_ms": 80, "token_usage": 300},
+        ],
+    )
+    assert complete["complete"] is True
+    assert complete["passed"] is True
+    assert complete["operational"]["average_latency_ms"] == 100.0
+    assert complete["operational"]["total_token_usage"] == 800
+
+
+def test_benchmark_scorer_rejects_duplicate_and_unknown_case_ids() -> None:
+    cases = [{"case_id": "R1", "should_recall": True, "category": "explicit_history"}]
+    with pytest.raises(ValueError, match="duplicate"):
+        score_recall(
+            cases,
+            [
+                {"case_id": "R1", "did_recall": True},
+                {"case_id": "R1", "did_recall": True},
+            ],
+        )
+    with pytest.raises(ValueError, match="unknown"):
+        score_recall(cases, [{"case_id": "R2", "did_recall": True}])

@@ -94,6 +94,14 @@ Recall output is claim-aware. When a query matches one or more claims, the compa
 
 `summary` remains an index/overview field and is returned separately.
 
+Compact recall now has a configurable estimated-token budget of 1000 tokens, with a 1500-token
+standard-mode budget. The gateway removes lower-ranked results first and then truncates long text
+when necessary. Query and project headers are also bounded, so oversized hints cannot bypass the
+budget. Responses expose `available_result_count` and `context_budget` so an agent can see whether
+the compact context was reduced. `get_project_state` applies the standard budget independently.
+The estimator is deliberately conservative and does not add a tokenizer dependency to the Agent
+Surface.
+
 ## Conversation provenance
 
 `capture_memory` accepts optional `source_client`, `conversation_id`, `message_id`, `session_id`, and `source_timestamp`. These fields produce an auditable conversation anchor. A generic `source_context="current conversation"` is not described as a reopenable transcript. `open_source_ref` reports `conversation_anchor` with `resolvable=false` until a client/Memory Bridge provides a resolvable archived session/export.
@@ -117,6 +125,10 @@ The frontend proposal page supports multi-select and the same batch actions.
 - 71 Capture natural-language cases, including a cross-domain/adversarial generalization set.
 - a client-neutral scoring script.
 
+The scorer rejects duplicate/unknown case IDs, reports missing cases, evaluates target gates,
+summarizes latency/token samples, and supports `--require-pass` for CI or release acceptance.
+An incomplete result file can no longer be reported as passing.
+
 The invocation benchmark must be run in real ChatGPT/Codex/Cherry/Kilo clients. Unit tests cannot substitute for model/tool-choice measurements; therefore client recall/capture rates must not be reported as passing until those actual runs are recorded.
 
 The Capture dataset is also executed directly against the default gateway classifier in pytest. All 71 cases currently match the expected capture/ignore decision and Ambient/Trusted tier. This proves classifier behavior **after the tool is called**; it does not prove autonomous agent tool choice.
@@ -131,7 +143,7 @@ Target gates:
 
 ## Local verification status
 
-- Full pytest suite after P0.2 hardening: `113 passed`.
+- Full pytest suite after the implementation audit and context-budget/scorer hardening: `119 passed`.
 - V2 Agent Surface + benchmark code: Ruff check passed.
 - Real Streamable HTTP MCP integration test passed using `uvicorn`, `mcp.ClientSession`, `initialize`, `list_tools`, natural-language `recall_memory`, `capture_memory`, secret redaction, and Ambient supersession.
 - Frontend files were not changed by P0 hardening; ESLint and TypeScript `tsc -b` were re-run on the hardening branch and passed.
@@ -148,7 +160,7 @@ The following remain P1/client-acceptance work and must not be reported as compl
 - recorded client result JSONL and target-rate acceptance
 - reopenable conversation history without a client/session archive bridge
 
-Unit tests and the direct 60-case classifier benchmark cannot substitute for those model/tool-choice measurements.
+Unit tests and the direct 71-case classifier benchmark cannot substitute for those model/tool-choice measurements.
 
 ## Rollback
 
