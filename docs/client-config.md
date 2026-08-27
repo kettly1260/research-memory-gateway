@@ -41,17 +41,48 @@ When `RESEARCH_MEMORY_TOKEN` is unset, only loopback HTTP/SSE clients from `127.
 
 ## ChatGPT Custom App / Workspace Agent Notes
 
-Use the Streamable HTTP endpoint for the normal V2 integration:
+Do **not** point ChatGPT Cloud directly at a NAS Tailscale/private-network address. OpenAI's
+current MCP documentation states that ChatGPT connects to remote MCP servers and cannot
+directly connect to a local/private/on-premises MCP server. For a gateway that stays on a
+NAS, developer machine, or private network, use **Secure MCP Tunnel**.
+
+Recommended topology:
 
 ```text
-http://<nas-tailscale-ip>:8787/mcp
+G:/LLM/memory or NAS
+        |
+        | Streamable HTTP :8787/mcp
+        v
+Secure MCP Tunnel
+        |
+        v
+ChatGPT custom MCP app
+        |
+        v
+Workspace Agent
 ```
 
-Start the server with `--surface agent` (or keep `server.surface: agent`) so ChatGPT sees only the four low-friction memory tools. Configure the same Bearer token used by other remote MCP clients.
+Start the gateway with `--surface agent` (or keep `server.surface: agent`) so the connected
+MCP exposes only the four low-friction memory tools. Keep the gateway private; the tunnel is
+the supported bridge rather than exposing the NAS directly to the public Internet.
+
+For ordinary ChatGPT chats, manually selecting a custom app applies to the **single message**
+where it is selected, not automatically to the whole conversation. Therefore a normal chat +
+manually selected app is not a reliable implementation of "always consider recall on every
+turn". Use a **Workspace Agent** with the custom MCP added in its Tools configuration when
+you need a repeatable agent whose tool policy is attached to the agent itself.
+
+Do not confuse Workspace Agents with ChatGPT **agent mode**: current OpenAI documentation
+states that agent mode does not use custom apps.
 
 Pair the MCP connection with `skills/research-memory-gateway/SKILL.md` or the concise prompt in `prompts/research-memory-system-prompt.md`. The MCP endpoint supplies capabilities; the skill/prompt supplies the proactive recall/capture policy.
 
 For invocation validation, use the natural prompts in `benchmarks/recall_cases.jsonl` and `benchmarks/capture_cases.jsonl`. Do not tell the model to call a specific tool; the benchmark is intended to measure autonomous tool choice.
+
+Current OpenAI references (verify again before deployment because these features evolve):
+
+- https://help.openai.com/en/articles/12584461-developer-mode-apps-and-full-mcp-connectors-in-chatgpt-beta
+- https://help.openai.com/en/articles/20001143
 
 ## Legacy SSE Mode
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .backends import MemoryBackend
@@ -10,6 +10,7 @@ from .exporters import export_memories
 from .models import (
     ExportFormat,
     MemoryStatus,
+    MemoryTier,
     ProposalStatus,
     ResearchMemory,
     SaveProposal,
@@ -18,9 +19,9 @@ from .models import (
     VerificationStatus,
 )
 from .policy import MemoryWritePolicy
+from .secret_scan import redact_secrets, sanitize_memory
 from .source_refs import SourceResolver
 from .taxonomy import get_memory_taxonomy
-
 
 SAVEABLE_PROPOSAL_STATUSES = {ProposalStatus.pending, ProposalStatus.approved}
 TERMINAL_PROPOSAL_STATUSES = {
@@ -67,6 +68,13 @@ class ResearchMemoryService:
     ) -> SaveProposal:
         memory = ResearchMemory.model_validate(suggested_memory)
         self.write_policy.validate(memory)
+        memory, secret_report = sanitize_memory(memory)
+        if secret_report.detected:
+            memory.metadata = {
+                **memory.metadata,
+                "secret_redaction": secret_report.as_dict(),
+            }
+        self.write_policy.validate(memory)
         overlaps = []
         if check_overlap:
             overlaps = self.check_overlap(
@@ -74,8 +82,9 @@ class ResearchMemoryService:
                 project=memory.project,
                 limit=self.config.memory.overlap_limit,
             )
+        sanitized_reason, _ = redact_secrets(reason, path="$.proposal.reason")
         proposal = SaveProposal(
-            reason=reason,
+            reason=str(sanitized_reason),
             suggested_memory=memory,
             overlap_candidates=overlaps,
             requires_confirmation=self.config.memory.require_user_confirmation,
@@ -112,6 +121,8 @@ class ResearchMemoryService:
             raise ValueError("Provide either proposal_id or memory")
 
         self.write_policy.validate(research_memory)
+        research_memory, secret_report = sanitize_memory(research_memory)
+        self.write_policy.validate(research_memory)
         confirmation_payload = self._confirmation_payload(confirmation) if user_confirmed else None
         if user_confirmed and proposal is None:
             proposal = SaveProposal(
@@ -134,6 +145,8 @@ class ResearchMemoryService:
             metadata.setdefault("saved_from_proposal_version", proposal.current_version)
             if confirmation_payload is not None:
                 metadata.setdefault("save_confirmation", confirmation_payload)
+            if secret_report.detected:
+                metadata.setdefault("secret_redaction", secret_report.as_dict())
             research_memory.metadata = metadata
 
         saved = self.backend.save(research_memory)
@@ -258,7 +271,103 @@ class ResearchMemoryService:
     ) -> ResearchMemory:
         parsed = memory if isinstance(memory, ResearchMemory) else ResearchMemory.model_validate(memory)
         self.write_policy.validate(parsed)
+        parsed, _ = sanitize_memory(parsed)
+        self.write_policy.validate(parsed)
         return parsed
+
+    def save_ambient_memory(
+        self,
+        memory: dict[str, Any] | ResearchMemory,
+        *,
+        audit_metadata: dict[str, Any] | None = None,
+    ) -> ResearchMemory:
+        parsed = memory if isinstance(memory, ResearchMemory) else ResearchMemory.model_validate(memory)
+        self.write_policy.validate(parsed)
+        parsed, secret_report = sanitize_memory(parsed)
+        self.write_policy.validate(parsed)
+        metadata = dict(parsed.metadata)
+        if secret_report.detected:
+            metadata["secret_redaction"] = secret_report.as_dict()
+            parsed.metadata = metadata
+        semantic_key = str(parsed.metadata.get("semantic_key") or "").strip()
+        superseded_ids: list[str] = []
+        if semantic_key:
+            for existing in self.backend.list_all(statuses=[MemoryStatus.active.value]):
+                if existing.memory_id == parsed.memory_id:
+                    continue
+                if existing.memory_tier != MemoryTier.ambient:
+                    continue
+                if existing.project != parsed.project:
+                    continue
+                existing_key = str(existing.metadata.get("semantic_key") or "")
+                if existing_key != semantic_key and not _legacy_ambient_state_matches(
+                    existing,
+                    semantic_key,
+                ):
+                    continue
+                if not existing_key:
+                    existing.metadata = {**existing.metadata, "semantic_key": semantic_key}
+                self._supersede_ambient_state(
+                    existing,
+                    superseded_by=parsed.memory_id,
+                    semantic_key=semantic_key,
+                )
+                superseded_ids.append(existing.memory_id)
+        if superseded_ids:
+            parsed.metadata = {
+                **parsed.metadata,
+                "supersedes_memory_ids": superseded_ids,
+            }
+        saved = self.backend.save(parsed)
+        self.append_audit_event(
+            "memory.capture.ambient_saved",
+            memory_id=saved.memory_id,
+            metadata={
+                **(audit_metadata or {}),
+                "secret_redaction": secret_report.as_dict() if secret_report.detected else None,
+                "semantic_key": semantic_key or None,
+                "superseded_memory_ids": superseded_ids,
+            },
+        )
+        return saved
+
+    def _supersede_ambient_state(
+        self,
+        memory: ResearchMemory,
+        *,
+        superseded_by: str,
+        semantic_key: str,
+    ) -> None:
+        if memory.memory_tier != MemoryTier.ambient:
+            raise ValueError("Only ambient memories can be auto-superseded")
+        now = _utc_now()
+        memory.memory_status = MemoryStatus.archived
+        memory.status_changed_at = now
+        memory.status_change_reason = f"Superseded ambient state: {semantic_key}"
+        memory.updated_at = now
+        memory.tags = sorted(set(memory.tags + [VerificationStatus.superseded.value]))
+        for claim in memory.claims:
+            claim.verification_status = VerificationStatus.superseded
+        memory.metadata = {
+            **memory.metadata,
+            "superseded_by": superseded_by,
+        }
+        memory.source_refs.append(
+            SourceRef(
+                source_type="ambient_state_transition",
+                source_id=semantic_key,
+                excerpt=f"Superseded by {superseded_by}",
+                metadata={"semantic_key": semantic_key, "superseded_by": superseded_by},
+            )
+        )
+        memory, _ = sanitize_memory(memory)
+        self.write_policy.validate(memory)
+        self.backend.save(memory)
+        self.append_audit_event(
+            "memory.capture.ambient_superseded",
+            memory_id=memory.memory_id,
+            metadata={"semantic_key": semantic_key, "superseded_by": superseded_by},
+        )
 
     def list_memory_proposals(self, status: str | None = None, limit: int = 50) -> list[SaveProposal]:
         if not self._backend_overrides("list_proposals"):
@@ -290,6 +399,8 @@ class ResearchMemoryService:
         if self.config.memory.require_user_confirmation and not user_confirmed:
             raise PermissionError("Changing memory proposal status requires user_confirmed=true")
         parsed_status = ProposalStatus(proposal_status)
+        sanitized_reason, _ = redact_secrets(reason, path="$.proposal_status.reason")
+        reason = str(sanitized_reason)
         proposal = self._get_proposal(proposal_id)
         if proposal is None:
             raise KeyError(f"Unknown proposal_id: {proposal_id}")
@@ -350,6 +461,8 @@ class ResearchMemoryService:
         data["memory_id"] = memory_id
         data["updated_at"] = _utc_now()
         updated = ResearchMemory.model_validate(data)
+        self.write_policy.validate(updated)
+        updated, _ = sanitize_memory(updated)
         self.write_policy.validate(updated)
         return self.backend.save(updated)
 
@@ -421,12 +534,15 @@ class ResearchMemoryService:
             )
         )
         memory.updated_at = _utc_now()
+        memory, _ = sanitize_memory(memory)
+        self.write_policy.validate(memory)
         return self.backend.save(memory)
 
     def append_audit_event(self, event_type: str, *, memory_id: str | None = None, metadata: dict[str, Any] | None = None) -> None:
         append = getattr(self.backend, "append_audit_event", None)
         if append is not None:
-            append(event_type, memory_id=memory_id, metadata=metadata or {})
+            sanitized_metadata, _ = redact_secrets(metadata or {}, path="$.audit.metadata")
+            append(event_type, memory_id=memory_id, metadata=sanitized_metadata)
 
     def list_audit_events(self, limit: int = 100) -> list[dict[str, Any]]:
         list_events = getattr(self.backend, "list_audit_events", None)
@@ -461,6 +577,8 @@ class ResearchMemoryService:
         merged_data["evidence"] = _dedupe_dicts(evidence)
         merged_data["updated_at"] = _utc_now()
         merged = ResearchMemory.model_validate(merged_data)
+        self.write_policy.validate(merged)
+        merged, _ = sanitize_memory(merged)
         self.write_policy.validate(merged)
         saved = self.backend.save(merged)
         for source in sources:
@@ -506,7 +624,8 @@ class ResearchMemoryService:
         payload.setdefault("text", "")
         payload.setdefault("confirmed_by", "caller")
         payload.setdefault("confirmed_at", _utc_now())
-        return payload
+        sanitized, _ = redact_secrets(payload, path="$.confirmation")
+        return sanitized
 
     def _persist_proposal(
         self,
@@ -587,6 +706,8 @@ class ResearchMemoryService:
         memory.status_changed_at = _utc_now()
         memory.status_change_reason = reason or None
         memory.updated_at = _utc_now()
+        memory, _ = sanitize_memory(memory)
+        self.write_policy.validate(memory)
         saved = self.backend.save(memory)
         self.append_audit_event(
             f"memory.{status.value}",
@@ -607,7 +728,7 @@ def serialize_results(items: Iterable[Any]) -> list[Any]:
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _status_scope(*, include_archived: bool, include_deleted: bool) -> list[str]:
@@ -629,3 +750,22 @@ def _dedupe_dicts(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         deduped.append(item)
     return deduped
+
+
+def _legacy_ambient_state_matches(memory: ResearchMemory, semantic_key: str) -> bool:
+    role = semantic_key.rsplit(".", 1)[-1]
+    text = f"{memory.title} {memory.summary}".lower()
+    role_markers: dict[str, tuple[str, ...]] = {
+        "repository_path": ("repository", "repo", "仓库"),
+        "workspace_path": ("workspace", "工作区"),
+        "tool_path": ("tool path", "executable", "工具路径", "程序路径"),
+        "project_path": ("path", "目录", "路径"),
+        "current_branch": ("branch", "分支"),
+        "selected_model": ("model", "模型"),
+        "active_config": ("config", "configuration", "配置"),
+        "current_workflow": ("workflow", "工作流", "流程"),
+        "project_state": ("project state", "project status", "项目状态", "当前进度"),
+        "next_action": ("next step", "下一步"),
+    }
+    markers = role_markers.get(role, ())
+    return bool(markers and any(marker in text for marker in markers))

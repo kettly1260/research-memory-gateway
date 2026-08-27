@@ -14,12 +14,15 @@ Use the V2 Agent Surface. Keep memory work subordinate to the user's main task.
 - Also recall for established experiment conditions, project state, prior decisions, workflows, paths, tools, settings, or stable preferences.
 - Do not guess historical user-specific facts when `recall_memory` can retrieve them.
 - Keep `context_mode="compact"` unless the compact result is insufficient.
+- Prefer `matched_claims` over `summary` when recall returns them; each matched claim carries its own verification status.
 
 ## Capture
 
 - Call `capture_memory` when the interaction produces durable reusable information.
 - Typical captures: project paths/state, stable configurations, workflows, settled decisions, experiment conditions/results, solution preparation details, and durable preferences.
 - Pass the durable statement in `content`; add `project` when known.
+- Never intentionally include passwords, API keys, cookies, bearer tokens, private keys, or other credentials. The gateway also redacts detected secrets before persistence as a defense in depth.
+- When the client exposes provenance identifiers, pass `source_client`, `conversation_id`, `message_id`, `session_id`, and `source_timestamp`; otherwise conversation evidence is only an assertion anchor and cannot be reopened later.
 - Do not construct taxonomy, claims, evidence, overlap checks, or proposal objects yourself. The gateway owns that schema.
 - Do not capture casual chat, transient errors, pure questions, or unsupported speculation unless the user explicitly asks to remember it.
 - Set `user_confirmed=true` only when the user explicitly asks to save/remember that specific information.

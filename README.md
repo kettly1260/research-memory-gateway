@@ -22,6 +22,8 @@ V2 还把记忆分成两层：
 - **Ambient Memory**：项目路径、工具配置、工作流、稳定偏好、项目状态等低风险上下文，可在去重后自动保存。
 - **Trusted Research Memory**：实验条件、定量数据、配液方法、谱峰、LOD、机理、论文结论等高价值科研事实，默认进入 Proposal Queue，集中审核后再成为正式长期科研记忆。
 
+V2 hardening 进一步保证：科研分类优先依据“测量/观察/条件/结果/决策”等通用语义结构而不是具体化合物名；所有 capture/service 写入在 SQLite/FTS 前做递归 Secret Redaction；Recall 会做历史套话 Query Rewrite，并把真正命中的 Claim 与该 Claim 自己的 verification 返回给 Agent；状态型 Ambient Memory 使用 `semantic_key` 自动 supersede 旧路径/旧分支/旧模型/旧配置。
+
 服务支持三种工具面：`agent`（默认 4 工具）、`admin`（V1 管理工具）、`full`（两者同时暴露，供调试/迁移）。
 
 ## 重要说明：当前不需要 Nocturne
@@ -60,7 +62,7 @@ AI 客户端 -> research-memory-gateway MCP -> SQLite 数据库
 - 把低风险 Ambient Memory 与高价值 Trusted Research Memory 分层处理，减少反复确认造成的调用阻力。
 - Trusted Research Memory 仍保留审核/确认门槛；Ambient Memory 可按配置自动保存。
 - 摘要只作为检索入口，科研结论必须写入 `claims` 并尽量绑定 `evidence`。
-- 每条记忆保存 `source_refs`，可回溯原会话、论文、文件、DOI 或 URL。
+- 每条记忆保存 `source_refs`。论文、文件、DOI/URL 可直接回溯；会话来源只有在客户端提供 conversation/message/session 标识并由客户端或 Memory Bridge 提供可解析归档时才能真正重新打开，否则只是可审计的 conversation anchor。
 - 使用轻图谱字段 `entities` 和 `relations`，支持材料、论文、合成路线、实验条件和机理假设之间的关系检索。
 - 支持 Markdown 和 JSON 导出，便于 Obsidian、备份和迁移。
 - 默认 SQLite 后端可直接在 NAS/VPS 上长期运行，并通过 SSE 暴露给 AI 客户端。

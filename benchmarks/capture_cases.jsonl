@@ -28,3 +28,33 @@
 {"case_id":"C28","content":"2+2 等于 4。","should_capture":false,"expected_tier":null,"category":"generic_fact"}
 {"case_id":"C29","content":"今天有点累。","should_capture":false,"expected_tier":null,"category":"transient_chat"}
 {"case_id":"C30","content":"Could you explain what an embedding model is?","should_capture":false,"expected_tier":null,"category":"question"}
+{"case_id":"C31","content":"碳硼烷改性树脂的玻璃化转变温度为 312 °C。","should_capture":true,"expected_tier":"trusted","category":"polymer_thermal"}
+{"case_id":"C32","content":"该材料介电常数为 2.8。","should_capture":true,"expected_tier":"trusted","category":"electrical_property"}
+{"case_id":"C33","content":"热导率达到 1.25 W m-1 K-1。","should_capture":true,"expected_tier":"trusted","category":"thermal_property"}
+{"case_id":"C34","content":"拉伸强度为 48 MPa。","should_capture":true,"expected_tier":"trusted","category":"mechanical_property"}
+{"case_id":"C35","content":"XRD 显示 2theta=25.4° 出现新峰。","should_capture":true,"expected_tier":"trusted","category":"xrd_observation"}
+{"case_id":"C36","content":"TGA 的 5% 失重温度为 486 °C。","should_capture":true,"expected_tier":"trusted","category":"thermal_analysis"}
+{"case_id":"C37","content":"烧结陶瓷的体密度为 3.92 g/cm3。","should_capture":true,"expected_tier":"trusted","category":"ceramic_property"}
+{"case_id":"C38","content":"首圈放电比容量达到 165 mAh g-1。","should_capture":true,"expected_tier":"trusted","category":"electrochemistry"}
+{"case_id":"C39","content":"第 100 圈库仑效率为 98.7%。","should_capture":true,"expected_tier":"trusted","category":"electrochemistry"}
+{"case_id":"C40","content":"Raman 在 1350 cm-1 附近出现新的 D band。","should_capture":true,"expected_tier":"trusted","category":"spectroscopy"}
+{"case_id":"C41","content":"XPS 中 C 1s 主峰位于 284.8 eV。","should_capture":true,"expected_tier":"trusted","category":"surface_characterization"}
+{"case_id":"C42","content":"SEM 显示断面形成连续多孔结构。","should_capture":true,"expected_tier":"trusted","category":"microstructure"}
+{"case_id":"C43","content":"TEM 观察到平均粒径约 20 nm 的纳米颗粒。","should_capture":true,"expected_tier":"trusted","category":"microstructure"}
+{"case_id":"C44","content":"BET 比表面积为 320 m2/g。","should_capture":true,"expected_tier":"trusted","category":"surface_area"}
+{"case_id":"C45","content":"DSC 二次升温得到 Tg 为 178 °C。","should_capture":true,"expected_tier":"trusted","category":"polymer_thermal"}
+{"case_id":"C46","content":"DMA 测得室温储能模量为 2.1 GPa。","should_capture":true,"expected_tier":"trusted","category":"mechanical_property"}
+{"case_id":"C47","content":"FTIR 在 1720 cm-1 出现新的羰基吸收带。","should_capture":true,"expected_tier":"trusted","category":"spectroscopy"}
+{"case_id":"C48","content":"论文指出提高交联密度会降低链段运动自由度，因此可能提高玻璃化转变温度。","should_capture":true,"expected_tier":"trusted","category":"literature_conclusion"}
+{"case_id":"C49","content":"后续实验决定采用三点弯曲测试作为陶瓷强度的主评价方法。","should_capture":true,"expected_tier":"trusted","category":"research_decision"}
+{"case_id":"C50","content":"Rerank model currently uses bge-reranker-v2 for the memory gateway configuration.","should_capture":true,"expected_tier":"ambient","category":"software_state"}
+{"case_id":"C51","content":"Current Git branch is v2/p0-hardening for the memory gateway.","should_capture":true,"expected_tier":"ambient","category":"branch_state"}
+{"case_id":"C52","content":"Origin MCP repository path changed to G:\\LLM\\originlab-jx.","should_capture":true,"expected_tier":"ambient","category":"path_state"}
+{"case_id":"C53","content":"MCP config uses API token sk-test-SECRET-123456789 and repository path G:\\LLM\\memory.","should_capture":true,"expected_tier":"ambient","category":"sensitive_configuration"}
+{"case_id":"C54","content":"The active workflow now uses SQLite FTS first and embedding only as an optional retrieval enhancement.","should_capture":true,"expected_tier":"ambient","category":"workflow_state"}
+{"case_id":"C55","content":"今天午饭还挺好吃的。","should_capture":false,"expected_tier":null,"category":"casual_chat"}
+{"case_id":"C56","content":"我猜介电常数可能变高了，但还没检查。","should_capture":false,"expected_tier":null,"category":"unsupported_speculation"}
+{"case_id":"C57","content":"帮我把这段摘要润色一下。","should_capture":false,"expected_tier":null,"category":"one_off_task"}
+{"case_id":"C58","content":"TGA 是什么？","should_capture":false,"expected_tier":null,"category":"question"}
+{"case_id":"C59","content":"把 XRD 结果翻译成英文。","should_capture":false,"expected_tier":null,"category":"one_off_task"}
+{"case_id":"C60","content":"今天先不测了，晚点再看。","should_capture":false,"expected_tier":null,"category":"transient"}

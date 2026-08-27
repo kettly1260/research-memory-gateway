@@ -48,6 +48,11 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         content: str,
         project: str | None = None,
         source_context: str = "current conversation",
+        source_client: str | None = None,
+        conversation_id: str | None = None,
+        message_id: str | None = None,
+        session_id: str | None = None,
+        source_timestamp: str | None = None,
         importance: str = "auto",
         user_confirmed: bool = False,
     ) -> dict[str, Any]:
@@ -55,17 +60,25 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
 
         Call this when the current interaction produces information worth reusing in future
         sessions: project paths or state, stable configurations, workflows, decisions,
-        experiment conditions/results, solution preparation details, or durable preferences.
+        experiment conditions/results, generic material measurements/properties, characterization
+        observations, solution preparation details, literature conclusions, or durable preferences.
         The gateway classifies Ambient versus Trusted Research Memory, builds the internal
         schema, checks overlap, and either saves ambient memory or queues trusted research
         memory for review. Set user_confirmed=true only when the user explicitly asked to
-        remember/save this specific information.
+        remember/save this specific information. Do not intentionally send credentials. When
+        available, pass the client/conversation/message/session/timestamp fields so provenance
+        can be anchored beyond the generic "current conversation" label.
         """
         return capture_memory_impl(
             service,
             content=content,
             project=project,
             source_context=source_context,
+            source_client=source_client,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            session_id=session_id,
+            source_timestamp=source_timestamp,
             importance=importance,
             user_confirmed=user_confirmed,
         )

@@ -5,7 +5,7 @@ This benchmark measures whether an agent **chooses** the V2 memory tools in natu
 ## Datasets
 
 - `recall_cases.jsonl`: 30 natural prompts covering explicit history, continuation, implicit history, and negative samples.
-- `capture_cases.jsonl`: 30 durable/non-durable conversation outputs covering Trusted, Ambient, duplicate-risk, speculation, and ordinary chat.
+- `capture_cases.jsonl`: 60 durable/non-durable outputs. The second half is an adversarial/generalization set spanning polymers, ceramics, electrochemistry, spectroscopy, thermal analysis, mechanical/electrical properties, surface/microstructure characterization, literature conclusions, software state, sensitive configuration, speculation, and ordinary chat.
 
 Each client should be tested with the same Agent Surface and the concise V2 skill/system prompt. Do not prepend instructions such as “call recall_memory”.
 
@@ -41,3 +41,5 @@ Target gates from the V2 plan:
 - Capture false-positive rate on non-durable chat: < 10%.
 
 Invocation benchmarks require a real client/model run. CI can validate dataset shape and score recorded runs, but it cannot honestly claim ChatGPT/Codex invocation rates without executing those clients.
+
+The direct Gateway classifier test is intentionally weaker than the invocation benchmark: it checks whether `capture_memory` classifies these cases correctly **after the tool has already been called**. It does not prove that an agent will autonomously decide to call `capture_memory`, and it should not be used as a substitute for real client result JSONL files.

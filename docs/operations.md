@@ -151,6 +151,8 @@ Visual smoke breakpoints and page checklist are in `docs/webui-visual-smoke.md`.
 
 Do not save transient conversation phrasing, temporary debugging logs, private credentials, raw unpublished data without explicit consent, or claims that cannot be represented as `claims` plus evidence status. Save durable decisions, literature findings, experimental routes, mechanism hypotheses, reusable project context, and reusable agent/MCP/deployment configuration lessons.
 
+V2 hardening adds a recursive Secret Scanner before service-backed persistence and before Ambient auto-save. Detected passwords/tokens/API keys/Bearer values/JWTs/private keys/cookies/sessions/connection-string credentials are replaced with `[REDACTED]` before SQLite and FTS see them. Treat this as defense in depth, not permission to send credentials to memory deliberately. If a credential may have been captured by an older build, rotate the credential first, then remove the affected memory/database backup as appropriate.
+
 ## Unpublished Research Safety
 
 Keep `config.yaml`, `data/`, and `exports/` out of public repositories. Treat unpublished experiments, negative results, compound structures, and manuscript plans as sensitive. Prefer private NAS or VPN access, set `RESEARCH_MEMORY_TOKEN`, and avoid exposing the service directly to the public internet.

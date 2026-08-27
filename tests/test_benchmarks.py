@@ -28,13 +28,30 @@ def test_recall_benchmark_has_at_least_30_balanced_cases() -> None:
     assert len({case["case_id"] for case in cases}) == len(cases)
 
 
-def test_capture_benchmark_has_at_least_30_balanced_cases() -> None:
+def test_capture_benchmark_has_broad_cross_domain_coverage() -> None:
     cases = load_jsonl(str(ROOT / "benchmarks" / "capture_cases.jsonl"))
 
-    assert len(cases) >= 30
+    assert len(cases) >= 60
     assert any(case["should_capture"] for case in cases)
     assert any(not case["should_capture"] for case in cases)
     assert len({case["case_id"] for case in cases}) == len(cases)
+    categories = {case["category"] for case in cases}
+    assert {
+        "polymer_thermal",
+        "ceramic_property",
+        "electrochemistry",
+        "spectroscopy",
+        "thermal_analysis",
+        "mechanical_property",
+        "electrical_property",
+        "surface_characterization",
+        "microstructure",
+        "literature_conclusion",
+        "software_state",
+        "sensitive_configuration",
+        "casual_chat",
+        "unsupported_speculation",
+    }.issubset(categories)
 
 
 def test_capture_benchmark_matches_gateway_default_policy(tmp_path) -> None:

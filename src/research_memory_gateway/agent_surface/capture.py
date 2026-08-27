@@ -15,12 +15,26 @@ from ..models import (
     SourceRef,
     VerificationStatus,
 )
+from ..secret_scan import redact_secrets
 from ..service import ResearchMemoryService
 
 _RESEARCH_TERMS = (
     "实验",
     "测试",
     "样品",
+    "测量",
+    "测定",
+    "表征",
+    "性能",
+    "数据",
+    "结果",
+    "观察",
+    "分析",
+    "计算",
+    "标准差",
+    "斜率",
+    "回归",
+    "线性",
     "配制",
     "配液",
     "母液",
@@ -30,47 +44,31 @@ _RESEARCH_TERMS = (
     "合成",
     "反应",
     "产率",
-    "发射",
-    "激发",
-    "峰位",
     "光谱",
-    "lod",
-    "hepes",
-    "dmso",
-    "fe3+",
-    "hno3",
-    "uv-vis",
-    "xps",
-    "lc-ms",
-    "nmr",
-    "photoluminescence",
-    "fluorescence",
+    "峰",
+    "材料",
+    "论文",
+    "文献",
+    "机理",
+    "机制",
+    "experiment",
+    "measurement",
+    "measured",
+    "characterization",
+    "property",
+    "performance",
+    "observation",
+    "result",
+    "analysis",
+    "calculation",
+    "standard deviation",
+    "slope",
+    "regression",
     "spectrum",
     "sample",
     "stock solution",
     "concentration",
     "reaction",
-)
-_STRONG_RESEARCH_TERMS = (
-    "配制",
-    "配液",
-    "母液",
-    "发射",
-    "激发",
-    "峰位",
-    "lod",
-    "dmso",
-    "hepes",
-    "fe3+",
-    "hno3",
-    "uv-vis",
-    "xps",
-    "lc-ms",
-    "nmr",
-    "荧光",
-    "滤光片",
-    "发光强度",
-    "pl ",
 )
 _AMBIENT_TERMS = (
     "路径",
@@ -106,6 +104,70 @@ _AMBIENT_TERMS = (
     "playwright",
     "git",
 )
+_OPERATIONAL_AMBIENT_TERMS = (
+    "路径",
+    "目录",
+    "仓库",
+    "工作区",
+    "配置",
+    "设置",
+    "mcp",
+    "agent",
+    "workflow",
+    "repository",
+    "workspace",
+    "config",
+    "branch",
+    "分支",
+    "偏好",
+    "prefer",
+    "memory",
+    "proposal",
+    "记忆",
+    "提案",
+    "retrieval",
+    "embedding",
+    "rerank",
+    "sqlite",
+    "fts",
+    "streamable http",
+    "sse",
+    "zotero",
+    "playwright",
+    "git",
+)
+_TRANSIENT_MARKERS = (
+    "哈哈",
+    "谢谢",
+    "有点累",
+    "明天再说",
+    "回头再说",
+    "maybe tomorrow",
+    "thanks",
+    "thank you",
+)
+_SPECULATION_MARKERS = (
+    "我猜",
+    "可能是",
+    "也许是",
+    "还没检查",
+    "尚未检查",
+    "未经验证",
+    "i guess",
+    "maybe it is",
+    "not checked",
+)
+_ONE_OFF_TASK_MARKERS = (
+    "翻译",
+    "润色",
+    "改写",
+    "格式化",
+    "translate",
+    "polish",
+    "rewrite",
+    "format this",
+)
+_REQUEST_PREFIXES = ("把", "帮我", "请", "please", "can you", "could you")
 _QUESTION_PREFIXES = (
     "什么是",
     "为什么",
@@ -135,8 +197,58 @@ _DECISION_MARKERS = ("决定", "确认", "采用", "选择", "不再", "decided"
 _MECHANISM_MARKERS = ("机理", "机制", "假设", "推测", "mechanism", "hypothesis")
 _SYNTHESIS_MARKERS = ("合成", "反应条件", "前驱体", "synthesis", "reaction condition", "precursor")
 _PAPER_MARKERS = ("doi", "论文", "文献", "paper", "article")
-_QUANTITY_RE = re.compile(
-    r"(?:\b\d+(?:\.\d+)?\s*(?:mM|uM|µM|nM|M|mg|g|mL|uL|µL|nm|min|h|%|°C)\b|pH\s*\d)",
+_OBSERVATION_MARKERS = (
+    "显示",
+    "表明",
+    "观察到",
+    "出现",
+    "检测到",
+    "说明",
+    "shows",
+    "showed",
+    "indicates",
+    "indicated",
+    "observed",
+    "detected",
+    "appeared",
+)
+_METHOD_RE = re.compile(
+    r"\b(?:XRD|XPS|FTIR|FT-IR|Raman|SEM|TEM|AFM|TGA|DSC|DMA|NMR|LC-MS|GC-MS|"
+    r"HPLC|UV-Vis|PL|EIS|CV|GCD|XAS|SAXS|WAXS|BET|ICP-MS|ICP-OES)\b",
+    flags=re.IGNORECASE,
+)
+_SCIENTIFIC_QUANTITY_RE = re.compile(
+    r"(?:"
+    r"\b[+-]?\d+(?:\.\d+)?(?:\s*±\s*\d+(?:\.\d+)?)?\s*(?:"
+    r"mM|uM|µM|μM|nM|mol(?:\s*L-?1|/L)?|M|"
+    r"mg(?:\s*/\s*cm2|\s*cm-?2)?|µg|μg|ng|kg|g(?:\s*/\s*cm3|\s*cm-?3)?|"
+    r"mL|uL|µL|μL|L|nm|µm|μm|mm|cm|Å|min|h|s|"
+    r"°C|℃|K|Pa|kPa|MPa|GPa|bar|Torr|psi|"
+    r"mV|V|µA|μA|mA|A|Ω(?:·?m)?|ohm(?:\s*m)?|"
+    r"Hz|kHz|MHz|GHz|rpm|eV|"
+    r"J(?:\s*/\s*g|\s*g-?1)?|kJ(?:\s*/\s*mol|\s*mol-?1)?|"
+    r"mAh(?:\s*/\s*g|\s*g-?1)?|Ah(?:\s*/\s*g|\s*g-?1)?|Wh(?:\s*/\s*kg|\s*kg-?1)?|"
+    r"S(?:\s*/\s*m|\s*m-?1|\s*cm-?1)?|"
+    r"W(?:\s*/\s*\(?m[·* ]?K\)?|\s*m-?1\s*K-?1)?|"
+    r"m2\s*/\s*g|m²\s*/\s*g|cm-?1|%|wt%|mol%|°"
+    r")(?=$|[\s,.;:，。；：])"
+    r"|pH\s*[=:]?\s*\d+(?:\.\d+)?"
+    r")",
+    flags=re.IGNORECASE,
+)
+_DIMENSIONLESS_MEASUREMENT_RE = re.compile(
+    r"(?:"
+    r"[\u4e00-\u9fffA-Za-z0-9+()/-]{1,24}(?:常数|系数|比|率|因子|指数|效率|容量|强度|"
+    r"模量|硬度|密度|温度|电位|电压|电流|电阻|导率|尺寸|粒径|面积|厚度)"
+    r"\s*(?:为|=|达到|约为|is|was)?\s*[+-]?\d+(?:\.\d+)?"
+    r"|(?:constant|coefficient|ratio|factor|index|efficiency|capacity|strength|modulus|hardness|"
+    r"density|conductivity|permittivity|dielectric constant|particle size|surface area)"
+    r"\s*(?:is|was|=|of)?\s*[+-]?\d+(?:\.\d+)?"
+    r")",
+    flags=re.IGNORECASE,
+)
+_ASSIGNMENT_RE = re.compile(
+    r"(?:\b[A-Za-z][A-Za-z0-9_+/-]{1,20}\b|[\u4e00-\u9fff]{2,20})\s*(?:为|=|达到|约为|is|was)\s*[+-]?\d+(?:\.\d+)?",
     flags=re.IGNORECASE,
 )
 _WINDOWS_PATH_RE = re.compile(r"\b[A-Za-z]:[\\/][^\s]+")
@@ -149,11 +261,34 @@ def capture_memory(
     content: str,
     project: str | None = None,
     source_context: str = "current conversation",
+    source_client: str | None = None,
+    conversation_id: str | None = None,
+    message_id: str | None = None,
+    session_id: str | None = None,
+    source_timestamp: str | None = None,
     importance: str = "auto",
     user_confirmed: bool = False,
 ) -> dict[str, Any]:
     """Classify and store/queue durable information without exposing the core schema to the agent."""
-    normalized = " ".join(content.strip().split())
+    sanitized_input, input_secret_report = redact_secrets(
+        {
+            "content": content,
+            "source_context": source_context,
+            "source_client": source_client,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "session_id": session_id,
+            "source_timestamp": source_timestamp,
+        },
+        path="$.capture",
+    )
+    normalized = " ".join(str(sanitized_input["content"]).strip().split())
+    source_context = str(sanitized_input["source_context"] or "").strip()
+    source_client = _optional_text(sanitized_input.get("source_client"))
+    conversation_id = _optional_text(sanitized_input.get("conversation_id"))
+    message_id = _optional_text(sanitized_input.get("message_id"))
+    session_id = _optional_text(sanitized_input.get("session_id"))
+    source_timestamp = _optional_text(sanitized_input.get("source_timestamp"))
     if not normalized:
         raise ValueError("content must not be empty")
     if importance not in {"auto", "low", "normal", "high"}:
@@ -202,6 +337,11 @@ def capture_memory(
         content=normalized,
         project=resolved_project,
         source_context=source_context,
+        source_client=source_client,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        session_id=session_id,
+        source_timestamp=source_timestamp,
         tier=tier,
         memory_type=memory_type,
         fingerprint=fingerprint,
@@ -225,17 +365,15 @@ def capture_memory(
             )
             return _queued_payload(proposal, tier=tier, potential_conflict=potential_conflict)
 
-        saved = service.backend.save(memory)
-        service.append_audit_event(
-            "memory.capture.ambient_saved",
-            memory_id=saved.memory_id,
-            metadata={
+        saved = service.save_ambient_memory(
+            memory,
+            audit_metadata={
                 "source_context": source_context,
                 "importance": importance,
                 "potential_conflict": potential_conflict,
             },
         )
-        return {
+        payload = {
             "action": "saved",
             "memory_tier": tier.value,
             "memory_id": saved.memory_id,
@@ -245,6 +383,9 @@ def capture_memory(
             "potential_conflict": potential_conflict,
             "overlap_count": len(overlaps),
         }
+        if input_secret_report.detected:
+            payload["secret_redaction"] = input_secret_report.as_dict()
+        return payload
 
     proposal = service.propose_save(
         reason="capture_memory classified this as trusted research memory",
@@ -270,7 +411,7 @@ def capture_memory(
             else None
         ),
     )
-    return {
+    payload = {
         "action": "saved",
         "memory_tier": tier.value,
         "memory_id": saved.memory_id,
@@ -281,6 +422,9 @@ def capture_memory(
         "potential_conflict": potential_conflict,
         "overlap_count": len(proposal.overlap_candidates),
     }
+    if input_secret_report.detected:
+        payload["secret_redaction"] = input_secret_report.as_dict()
+    return payload
 
 
 def _build_memory(
@@ -289,6 +433,11 @@ def _build_memory(
     content: str,
     project: str,
     source_context: str,
+    source_client: str | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    session_id: str | None,
+    source_timestamp: str | None,
     tier: MemoryTier,
     memory_type: MemoryType,
     fingerprint: str,
@@ -296,7 +445,15 @@ def _build_memory(
     user_confirmed: bool,
 ) -> ResearchMemory:
     summary = content[: service.config.memory.max_summary_chars]
-    evidence, source_ref = _source_records(content, source_context)
+    evidence, source_ref = _source_records(
+        content,
+        source_context,
+        source_client=source_client,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        session_id=session_id,
+        source_timestamp=source_timestamp,
+    )
     claim = Claim(
         claim=summary,
         confidence=Confidence.medium,
@@ -307,12 +464,16 @@ def _build_memory(
         "capture_origin": "agent_surface",
         "capture_fingerprint": fingerprint,
         "capture_importance": importance,
+        "capture_semantic_role": _semantic_role(content, tier=tier, memory_type=memory_type),
         "source_context": source_context,
     }
     if memory_type in {MemoryType.experiment_plan, MemoryType.workflow_plan}:
         metadata["plan_status"] = "accepted" if user_confirmed else _default_plan_status(content, tier)
     if memory_type == MemoryType.workflow_plan:
         metadata["plan_type"] = _workflow_plan_type(content)
+    semantic_key = _ambient_semantic_key(content, project=project) if tier == MemoryTier.ambient else None
+    if semantic_key:
+        metadata["semantic_key"] = semantic_key
 
     return ResearchMemory(
         project=project,
@@ -330,7 +491,16 @@ def _build_memory(
     )
 
 
-def _source_records(content: str, source_context: str) -> tuple[Evidence | None, SourceRef | None]:
+def _source_records(
+    content: str,
+    source_context: str,
+    *,
+    source_client: str | None,
+    conversation_id: str | None,
+    message_id: str | None,
+    session_id: str | None,
+    source_timestamp: str | None,
+) -> tuple[Evidence | None, SourceRef | None]:
     context = source_context.strip()
     if not context:
         return None, None
@@ -350,9 +520,29 @@ def _source_records(content: str, source_context: str) -> tuple[Evidence | None,
             SourceRef(source_type="file", path=path, excerpt=content),
         )
     if "conversation" in lowered or "chat" in lowered or "session" in lowered or "对话" in context:
+        anchor_metadata = {
+            key: value
+            for key, value in {
+                "context": context,
+                "client": source_client,
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "session_id": session_id,
+                "timestamp": source_timestamp,
+            }.items()
+            if value
+        }
+        source_id = conversation_id or session_id or context
         return (
-            Evidence(type="conversation_assertion", quote=content, metadata={"context": context}),
-            SourceRef(source_type="conversation", source_id=context, excerpt=content),
+            Evidence(type="conversation_assertion", quote=content, metadata=anchor_metadata),
+            SourceRef(
+                source_type="conversation",
+                source_id=source_id,
+                timestamp=source_timestamp,
+                message_range=message_id,
+                excerpt=content,
+                metadata=anchor_metadata,
+            ),
         )
     return (
         Evidence(type="capture_context", quote=content, metadata={"context": context}),
@@ -407,10 +597,18 @@ def _find_pending_duplicate(
 
 def _classify_tier(content: str) -> MemoryTier:
     lowered = content.lower()
-    research_hits = sum(term in lowered for term in _RESEARCH_TERMS)
-    if _QUANTITY_RE.search(content) and research_hits:
+    if (
+        _contains_any(lowered, _OPERATIONAL_AMBIENT_TERMS)
+        and not _is_scientific_measurement(content)
+        and not _is_scientific_observation(content)
+    ):
+        return MemoryTier.ambient
+    if _is_scientific_measurement(content):
         return MemoryTier.trusted
-    if _contains_any(lowered, _STRONG_RESEARCH_TERMS):
+    if _is_scientific_observation(content):
+        return MemoryTier.trusted
+    research_hits = sum(term in lowered for term in _RESEARCH_TERMS)
+    if research_hits and _METHOD_RE.search(content):
         return MemoryTier.trusted
     if research_hits and (
         _contains_any(lowered, _PLAN_MARKERS)
@@ -418,11 +616,17 @@ def _classify_tier(content: str) -> MemoryTier:
         or _contains_any(lowered, _MECHANISM_MARKERS)
         or _contains_any(lowered, _PAPER_MARKERS)
         or _contains_any(lowered, _SYNTHESIS_MARKERS)
+        or _contains_any(lowered, _CHANGE_MARKERS)
     ):
         return MemoryTier.trusted
     if research_hits >= 2 and not _contains_any(lowered, _AMBIENT_TERMS):
         return MemoryTier.trusted
-    return MemoryTier.ambient
+    # Fail safe: reaching this point means _should_ignore already decided that the
+    # content is durable, but we could not confidently prove it is low-risk Ambient
+    # state. Queue it as Trusted instead of silently auto-saving an unknown research
+    # fact as Ambient. A future semantic classifier can refine this boundary without
+    # weakening the default write policy.
+    return MemoryTier.trusted
 
 
 def _classify_memory_type(content: str, *, tier: MemoryTier) -> MemoryType:
@@ -448,12 +652,22 @@ def _should_ignore(content: str, *, importance: str, min_chars: int) -> bool:
         return True
     if content.endswith(("?", "？")) and _contains_any(lowered, _QUESTION_PREFIXES):
         return True
+    if importance == "auto" and _contains_any(lowered, _TRANSIENT_MARKERS):
+        return True
+    if importance == "auto" and _contains_any(lowered, _SPECULATION_MARKERS):
+        return True
+    if (
+        importance == "auto"
+        and _contains_any(lowered, _ONE_OFF_TASK_MARKERS)
+        and any(lowered.startswith(prefix.lower()) for prefix in _REQUEST_PREFIXES)
+    ):
+        return True
     durable = (
         _contains_any(lowered, _RESEARCH_TERMS)
-        or _contains_any(lowered, _STRONG_RESEARCH_TERMS)
         or _contains_any(lowered, _AMBIENT_TERMS)
         or _WINDOWS_PATH_RE.search(content) is not None
-        or _QUANTITY_RE.search(content) is not None
+        or _is_scientific_measurement(content)
+        or _is_scientific_observation(content)
         or _contains_any(lowered, _DECISION_MARKERS)
     )
     if importance == "high":
@@ -490,30 +704,160 @@ def _workflow_plan_type(content: str) -> str:
 def _extract_tags(content: str, *, tier: MemoryTier) -> list[str]:
     lowered = content.lower()
     tags = [tier.value, "agent-captured"]
-    for term in ("dmso", "hepes", "fe3+", "hno3", "uv-vis", "xps", "lc-ms", "mcp", "agent"):
+    for term in ("mcp", "agent", "git", "embedding", "rerank"):
         if term in lowered:
             tags.append(term)
+    if _is_scientific_measurement(content):
+        tags.append("measurement")
+    if _is_scientific_observation(content):
+        tags.append("observation")
+    method_match = _METHOD_RE.search(content)
+    if method_match:
+        tags.append(method_match.group(0).lower())
     if _WINDOWS_PATH_RE.search(content):
         tags.append("project-path")
     return sorted(set(tags))
 
 
 def _extract_entities(content: str) -> list[Entity]:
-    lowered = content.lower()
     entities: list[Entity] = []
-    mapping = {
-        "dmso": "solvent",
-        "hepes": "buffer",
-        "fe3+": "ion",
-        "hno3": "reagent",
-        "uv-vis": "method",
-        "xps": "method",
-        "lc-ms": "method",
-    }
-    for name, entity_type in mapping.items():
-        if name in lowered:
-            entities.append(Entity(name=name.upper() if name != "fe3+" else "Fe3+", entity_type=entity_type))
+    for match in _METHOD_RE.finditer(content):
+        name = match.group(0)
+        if not any(existing.name.lower() == name.lower() for existing in entities):
+            entities.append(Entity(name=name, entity_type="characterization_method"))
+    for match in _SCIENTIFIC_QUANTITY_RE.finditer(content):
+        quantity = match.group(0).strip()
+        if quantity and not any(existing.name == quantity for existing in entities):
+            entities.append(Entity(name=quantity, entity_type="measurement_value"))
     return entities
+
+
+def _is_scientific_measurement(content: str) -> bool:
+    lowered = content.lower()
+    if _is_ambient_context(lowered) and not _contains_any(lowered, _RESEARCH_TERMS):
+        return False
+    if _SCIENTIFIC_QUANTITY_RE.search(content):
+        return True
+    if _DIMENSIONLESS_MEASUREMENT_RE.search(content):
+        return True
+    return bool(_METHOD_RE.search(content) and _ASSIGNMENT_RE.search(content))
+
+
+def _is_scientific_observation(content: str) -> bool:
+    lowered = content.lower()
+    if _METHOD_RE.search(content) and _contains_any(lowered, _OBSERVATION_MARKERS):
+        return True
+    return _contains_any(lowered, _RESEARCH_TERMS) and _contains_any(
+        lowered,
+        _OBSERVATION_MARKERS,
+    )
+
+
+def _is_research_context(content: str) -> bool:
+    lowered = content.lower()
+    return bool(
+        _contains_any(lowered, _RESEARCH_TERMS)
+        or _METHOD_RE.search(content)
+        or _SCIENTIFIC_QUANTITY_RE.search(content)
+        or _DIMENSIONLESS_MEASUREMENT_RE.search(content)
+    )
+
+
+def _is_ambient_context(lowered: str) -> bool:
+    return _contains_any(lowered, _AMBIENT_TERMS)
+
+
+def _ambient_semantic_key(content: str, *, project: str) -> str | None:
+    lowered = content.lower()
+    role: str | None = None
+    if _WINDOWS_PATH_RE.search(content):
+        if _contains_any(lowered, ("repository", "repo", "仓库")):
+            role = "repository_path"
+        elif _contains_any(lowered, ("workspace", "工作区")):
+            role = "workspace_path"
+        elif _contains_any(lowered, ("tool", "executable", "工具", "程序")):
+            role = "tool_path"
+        elif _contains_any(lowered, ("path", "目录", "路径")):
+            role = "project_path"
+    elif _contains_any(lowered, ("branch", "分支")):
+        role = "current_branch"
+    elif _contains_any(lowered, ("model", "模型")) and _contains_any(
+        lowered,
+        ("use", "using", "selected", "current", "采用", "使用", "当前"),
+    ):
+        role = "selected_model"
+    elif _contains_any(lowered, ("config", "configuration", "配置")) and _contains_any(
+        lowered,
+        ("use", "using", "active", "current", "采用", "使用", "当前"),
+    ):
+        role = "active_config"
+    elif _contains_any(lowered, ("workflow", "工作流", "流程")) and _contains_any(
+        lowered,
+        ("active", "current", "use", "采用", "当前", "执行中"),
+    ):
+        role = "current_workflow"
+    elif _contains_any(lowered, ("project state", "project status", "项目状态", "当前进度")):
+        role = "project_state"
+    elif _contains_any(lowered, ("next step", "下一步")):
+        role = "next_action"
+    if role is None:
+        return None
+    subject = _ambient_state_subject(lowered)
+    return f"{project}.{subject}.{role}" if subject else f"{project}.{role}"
+
+
+def _semantic_role(content: str, *, tier: MemoryTier, memory_type: MemoryType) -> str:
+    lowered = content.lower()
+    if tier == MemoryTier.ambient:
+        if _WINDOWS_PATH_RE.search(content):
+            return "project_path"
+        if _contains_any(lowered, ("branch", "分支")):
+            return "project_state"
+        if _contains_any(lowered, ("config", "configuration", "配置", "model", "模型")):
+            return "configuration"
+        if _contains_any(lowered, ("workflow", "工作流", "流程")):
+            return "workflow"
+        return "ambient_context"
+    if _is_scientific_measurement(content):
+        return "measurement"
+    if _is_scientific_observation(content):
+        return "observation"
+    if memory_type == MemoryType.experiment_plan:
+        return "experiment_plan"
+    if memory_type == MemoryType.research_decision:
+        return "research_decision"
+    if memory_type == MemoryType.synthesis_route:
+        return "synthesis"
+    if memory_type == MemoryType.mechanism_hypothesis:
+        return "mechanism"
+    if memory_type == MemoryType.paper_note:
+        return "literature_conclusion"
+    return "research_fact"
+
+
+def _ambient_state_subject(lowered: str) -> str | None:
+    subjects = (
+        "embedding",
+        "rerank",
+        "origin",
+        "zotero",
+        "paper-fulltext",
+        "memory-gateway",
+        "research-memory-gateway",
+        "codex",
+        "chatgpt",
+        "kilo",
+        "cherry",
+        "mcp",
+    )
+    return next((subject for subject in subjects if subject in lowered), None)
+
+
+def _optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _title(content: str) -> str:

@@ -27,6 +27,27 @@ V2 adds two backward-compatible fields without changing the SQLite table schema:
 
 Tier is independent from `verification_status`. A Trusted memory can still be `unverified`; the tier says it deserves stricter governance, not that the claim has already been proven.
 
+Capture classification is intentionally based on **semantic role/structure**, not a whitelist of the user's current compounds. Generic scientific measurements (value + scientific unit, dimensionless material/property assignments), characterization observations, experimental conditions/results, literature conclusions, and research decisions are treated as Trusted. This is why values such as Tg, dielectric constant, thermal conductivity, tensile strength, XRD peaks, and TGA temperatures are governed the same way as PL/Fe chemistry data.
+
+The default is fail-safe: only content that is positively recognized as low-risk Ambient project/config/workflow state may auto-save as Ambient. Durable content that cannot be confidently classified as Ambient is routed to Trusted review rather than silently auto-saved. A future model-backed semantic classifier may refine uncertain cases, but its absence must not weaken this safety boundary.
+
+## Ambient state keys and supersession
+
+State-like Ambient memories may carry `metadata.semantic_key`, for example:
+
+```text
+origin-mcp.origin.repository_path
+memory-gateway.rerank.selected_model
+```
+
+When `capture_memory` receives a newer active Ambient value with the same semantic key, the previous value is archived and its claims are marked `superseded`. Normal recall only searches active memories, so stale paths/branches/models/configuration do not outrank the current value. Legacy V2 Alpha Ambient path/state records without a semantic key are matched conservatively by state role and can be superseded on the next capture.
+
+## Secret redaction before persistence
+
+All service-backed writes and all `capture_memory` paths run through a recursive credential scanner before persistence. It scans string content and nested fields including summary, claims, evidence, source-ref excerpts, entities, metadata, confirmation payloads, and audit metadata. Detected credential values are replaced with `[REDACTED]` before SQLite/FTS indexing.
+
+The scanner covers labeled passwords/tokens/API keys, Bearer/Authorization values, common `sk-` and GitHub token shapes, JWTs, AWS access keys, private-key blocks, URL passwords, cookies/sessions, and connection-string credentials. This is defense in depth: agents should still avoid sending credentials to `capture_memory` intentionally.
+
 ## Memory Lifecycle Status
 
 Each `ResearchMemory` has a memory-level lifecycle status independent from claim verification status:
@@ -113,6 +134,18 @@ Confirmation payloads are sanitized before storage and should include:
   "confirmed_by": "user"
 }
 ```
+
+## Conversation source anchors
+
+When a client can provide stable provenance identifiers, `capture_memory` accepts:
+
+- `source_client`
+- `conversation_id`
+- `message_id`
+- `session_id`
+- `source_timestamp`
+
+These are stored on conversation `SourceRef` / evidence metadata. If only the default `source_context="current conversation"` is available, the source is an assertion anchor rather than a reopenable transcript. `open_source_ref` reports `kind=conversation_anchor` and `resolvable=false` until the client or a future Memory Bridge provides an archived/exported conversation source.
 
 ## Verification Status
 

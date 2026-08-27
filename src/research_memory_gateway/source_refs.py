@@ -22,6 +22,21 @@ class SourceResolver:
                 "metadata": source_ref.metadata,
             }
 
+        if source_ref.source_type == "conversation" and source_ref.source_id:
+            return {
+                "kind": "conversation_anchor",
+                "resolvable": False,
+                "source_id": source_ref.source_id,
+                "message_range": source_ref.message_range,
+                "timestamp": source_ref.timestamp,
+                "excerpt": source_ref.excerpt,
+                "metadata": source_ref.metadata,
+                "message": (
+                    "Conversation provenance is anchored but cannot be reopened unless the "
+                    "client or a Memory Bridge provides a resolvable conversation export."
+                ),
+            }
+
         if not source_ref.path:
             return {"kind": "missing", "message": "source_ref has no path, url, or doi"}
 
