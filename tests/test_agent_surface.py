@@ -819,6 +819,12 @@ def test_agent_tools_publish_mcp_annotations(tmp_path) -> None:
     assert tools["get_project_state"].annotations.readOnlyHint is True
     assert tools["capture_memory"].annotations.readOnlyHint is False
     assert tools["capture_memory"].annotations.destructiveHint is False
+    assert tools["capture_memory"].inputSchema["properties"]["importance"]["enum"] == [
+        "auto",
+        "low",
+        "normal",
+        "high",
+    ]
 
 
 def test_admin_surface_keeps_legacy_tools_without_agent_tools(tmp_path) -> None:

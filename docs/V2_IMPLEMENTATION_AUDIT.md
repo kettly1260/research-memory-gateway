@@ -20,7 +20,7 @@
 | Phase 7：短 Skill/Prompt | 完成 | Agent Skill/System Prompt 已改为主动 recall/capture/verify 规则，不暴露内部 taxonomy/schema。 |
 | Phase 8：Benchmark 资产 | 完成 | 30 条 Recall、71 条 Capture；scorer 检查漏测、重复/未知 case、阈值、延迟和 token 记录，并支持 `--require-pass`；另有 8 条可幂等写入隔离数据库的固定 Recall corpus。 |
 | Phase 9：ChatGPT 接入验收 | 外部阻塞 | Workspace 中只有一个空白未发布 Agent，且可用 app 中没有 Research Memory Gateway。必须先注册 Streamable HTTP custom MCP app、挂载到 Agent，并经用户确认发布后才能记录真实结果。 |
-| Phase 10：跨客户端验收 | 进行中 | Codex R01 真实 pilot 已自主 recall 并命中正确记忆；30/71 全量结果仍未产生。优化后的 R02 因 Codex 模型服务网络超时未形成结果。Cherry Studio、KiloCode 尚未执行。 |
+| Phase 10：跨客户端验收 | 进行中 | Codex 已记录 R01/R02 正召回、R23 Recall 负样本、C63 Capture 正样本和 C60 Capture 负样本；当前 smoke 结果均符合预期，但 30/71 全量结果仍未产生。Cherry Studio、KiloCode 尚未执行。 |
 | Conversation archive bridge | 未完成 | 当前可保存 conversation anchor，但没有可重新打开原始会话的客户端/session archive bridge。 |
 | V2.3/V3 | 按计划暂缓 | Automatic ingestion、EverOS/Reflection 不属于当前 V2.0 P0。 |
 
@@ -47,11 +47,14 @@
 7. 修复 Agent 把 cwd/repository path 错当 project 时的零命中：project 过滤无结果后回退全局检索，并返回 `project_filter_fallback`。
 8. 保存真实 Codex R01 pilot JSONL；该结果证明单次自主调用，不替代 30 条 Recall 验收。
 9. 重新核验 ChatGPT Workspace Agent/app 状态，并记录 custom MCP 尚未注册的外部阻塞。
+10. 增补 Codex Recall/Capture 正负 smoke 结果，并确认 Capture 需要允许非只读 MCP 调用。
+11. 将 `capture_memory.importance` 发布为 MCP enum，避免 Agent 生成实现不接受的 `medium`。
 
 ## 下一验收动作
 
 1. 恢复 Codex 模型服务连通性后，用精简工具上下文跑完 30 Recall / 71 Capture。
 2. 注册 ChatGPT custom MCP app，挂载并发布 Workspace Agent 后执行相同数据集。
-3. 保存每个客户端的完整 Recall/Capture JSONL，使用 `--require-pass` 评分。
-4. 复核 false positive、错误 tier 与错误 memory，而不只看总分。
-5. 达标后再决定把 hardening 提交合入并发布到 `origin/main`。
+3. 用户明确授权将 benchmark 中的具体科研实验文本发送给外部模型后，再执行对应 Capture cases。
+4. 保存每个客户端的完整 Recall/Capture JSONL，使用 `--require-pass` 评分。
+5. 复核 false positive、错误 tier 与错误 memory，而不只看总分。
+6. 达标后再决定把 hardening 提交合入并发布到 `origin/main`。

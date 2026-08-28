@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
@@ -56,7 +56,7 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         message_id: str | None = None,
         session_id: str | None = None,
         source_timestamp: str | None = None,
-        importance: str = "auto",
+        importance: Literal["auto", "low", "normal", "high"] = "auto",
         user_confirmed: bool = False,
     ) -> dict[str, Any]:
         """Capture durable reusable information with a low-cost agent-facing schema.
@@ -70,7 +70,8 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         memory for review. Set user_confirmed=true only when the user explicitly asked to
         remember/save this specific information. Do not intentionally send credentials. When
         available, pass the client/conversation/message/session/timestamp fields so provenance
-        can be anchored beyond the generic "current conversation" label.
+        can be anchored beyond the generic "current conversation" label. Leave importance=auto
+        unless priority is known; the other allowed values are low, normal, and high.
         """
         return capture_memory_impl(
             service,

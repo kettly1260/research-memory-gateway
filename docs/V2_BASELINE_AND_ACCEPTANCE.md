@@ -166,6 +166,13 @@ Target gates:
   treated as a complete benchmark pass.
 - A later optimized Codex attempt was blocked by model-service transport timeouts before any model
   result or tool choice was produced.
+- A successful retry added R02 and R23 Recall coverage plus C63 and C60 Capture coverage. The two
+  Recall positives/negative and the Capture positive/negative all matched the expected behavior.
+- Codex must permit reviewed non-read-only MCP calls for Capture. With the default `never` approval
+  policy it chose `capture_memory` but the client blocked execution. `--approve-for-me` allowed the
+  isolated benchmark write.
+- The C63 run exposed an invalid first argument (`importance=medium`). The Agent Surface now
+  publishes `importance` as the enum `auto | low | normal | high`, matching gateway validation.
 - ChatGPT Workspace currently has one blank unpublished Agent and no available Research Memory
   Gateway app. Real ChatGPT testing is blocked until the custom MCP is registered and attached.
 

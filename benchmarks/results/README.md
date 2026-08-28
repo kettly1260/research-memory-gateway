@@ -14,6 +14,23 @@ Status recorded on 2026-08-28 (Asia/Shanghai).
   description explicitly says not to use cwd/repository paths as project labels.
 - This is one successful pilot result, not the complete 30-case Recall acceptance run.
 
+The follow-up smoke set added:
+
+- R02: autonomous Recall, correct HEPES 20 mM memory, no project fallback required.
+- R23: general SQLite FTS5 question answered without a false-positive Recall.
+- C63: stable reply-style preference captured as Ambient memory.
+- C60: transient pause message correctly ignored without Capture.
+
+The first C63 execution showed that Codex blocks non-read-only MCP calls when its approval policy
+is `never`. The successful run used `--approve-for-me`. It also exposed that the tool schema allowed
+arbitrary `importance` strings even though the implementation accepts only `auto`, `low`, `normal`,
+and `high`; the Agent first sent `medium`, then corrected itself. The Agent Surface now publishes
+the four allowed values as a JSON Schema enum.
+
+Research-content Capture cases such as C01 were not sent to the external model after execution
+approval rejected the transfer of specific private experiment details. Continuing those cases
+requires explicit user authorization for that benchmark data disclosure.
+
 An optimized R02 attempt disabled unrelated Codex plugin/app/browser/computer/image/multi-agent
 features and used an ephemeral client. It produced no benchmark row because the client repeatedly
 timed out, fell back from WebSocket to HTTPS, then remained unable to reach the model service. The
