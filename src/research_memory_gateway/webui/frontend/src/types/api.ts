@@ -268,3 +268,79 @@ export interface StatsResponse {
   type_distribution: Record<string, number>
   project_distribution: Record<string, number>
 }
+
+// ─── Conversation Memory Types ───
+
+export interface ConversationStatusResponse {
+  enabled: boolean
+  error?: string
+  documents: number
+  sections: number
+  embeddings: number
+  sections_with_embedding: number
+  sections_without_embedding: number
+  vector_coverage: number
+  embedding_model?: string | null
+  embedding_version?: string | null
+  embedding_dimension?: number | null
+}
+
+export interface ConversationSourceAnchor {
+  ordinal?: number
+  message_id?: string
+  turn_id?: string
+  [key: string]: unknown
+}
+
+export interface ConversationSearchResultItem {
+  section_id: string
+  conversation_id: string
+  vault_path: string
+  heading_path: string[]
+  title: string
+  content: string
+  lexical_score: number | null
+  vector_score: number | null
+  final_score: number
+  score_type: 'lexical' | 'vector' | 'hybrid'
+  date?: string
+  projects?: string[]
+  source_anchors?: ConversationSourceAnchor[]
+  parent_thread_id?: string
+  thread_source?: string
+}
+
+export interface ConversationSearchResponse {
+  query: string
+  count: number
+  fallback_to_lexical: boolean
+  fallback_reason?: string | null
+  results: ConversationSearchResultItem[]
+}
+
+export interface ConversationRecallItem {
+  conversation_id: string
+  vault_path: string
+  heading: string
+  content: string
+  score: number
+  source_anchors: ConversationSourceAnchor[]
+  parent_thread_id: string
+  thread_source: string
+}
+
+export interface ConversationRecallResponse {
+  query: string
+  token_budget: number
+  fallback_to_lexical: boolean
+  fallback_reason?: string | null
+  context_char_budget: number
+  context: string
+  items: ConversationRecallItem[]
+}
+
+export interface ConversationReadResponse {
+  path: string
+  heading?: string | null
+  content: string
+}

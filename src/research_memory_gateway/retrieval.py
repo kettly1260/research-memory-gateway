@@ -43,6 +43,7 @@ class EmbeddingClient:
     last_error: str | None = None
     last_status_code: int | None = None
     last_vector_dimensions: int | None = None
+    _client: Any = None
 
     @property
     def enabled(self) -> bool:
@@ -119,19 +120,35 @@ class EmbeddingClient:
         configured = self._url()
         candidates = [configured]
         if self.config.endpoint_path in {"/embeddings", "embeddings"} and self.base_url:
-            alternate = f"{self.base_url}/v1/embeddings"
-            if alternate not in candidates:
-                candidates.append(alternate)
+            base = self.base_url.rstrip("/")
+            if not base.endswith("/v1"):
+                alternate = f"{base}/v1/embeddings"
+                if alternate not in candidates:
+                    candidates.append(alternate)
         return candidates
+
+    def _get_client(self) -> Any:
+        if self._client is None or getattr(self._client, "is_closed", False):
+            self._client = httpx.Client(timeout=self.config.timeout_seconds)
+        return self._client
+
+    def close(self) -> None:
+        if self._client is not None:
+            if hasattr(self._client, "close"):
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+            self._client = None
 
     def _post_json(self, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any] | None:
         attempts = max(1, self.config.max_retries + 1)
         last_exception: Exception | None = None
         for attempt in range(attempts):
+            client = self._get_client()
             for url in self._candidate_urls():
                 try:
-                    with httpx.Client(timeout=self.config.timeout_seconds) as client:
-                        response = client.post(url, json=payload, headers=headers)
+                    response = client.post(url, json=payload, headers=headers)
                     self.last_status_code = response.status_code
                     if response.status_code == HTTPStatus.NOT_FOUND and url != self._candidate_urls()[-1]:
                         continue
@@ -142,6 +159,8 @@ class EmbeddingClient:
                     return data
                 except (httpx.HTTPError, ValueError) as exc:
                     last_exception = exc
+                    if isinstance(exc, (httpx.RequestError, httpx.TimeoutException)):
+                        self.close()
             if attempt + 1 < attempts:
                 time.sleep(min(0.1 * (attempt + 1), 0.5))
 

@@ -11,12 +11,18 @@ from .recall import get_project_state as get_project_state_impl
 from .recall import recall_memory as recall_memory_impl
 from .verify import verify_memory as verify_memory_impl
 
-AGENT_TOOL_NAMES = (
+CORE_AGENT_TOOL_NAMES = (
     "recall_memory",
     "capture_memory",
     "verify_memory",
     "get_project_state",
 )
+CONVERSATION_TOOL_NAMES = (
+    "conversation_search",
+    "conversation_read",
+    "conversation_recall",
+)
+AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES
 
 
 def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
@@ -106,3 +112,56 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         a free-text recall query.
         """
         return get_project_state_impl(service, project=project, limit=limit)
+
+    if getattr(service.config, "conversation_archive", None) and service.config.conversation_archive.enabled:
+        register_conversation_tools(mcp, service)
+
+
+def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def conversation_search(
+        query: str,
+        project: str | None = None,
+        conversation_id: str | None = None,
+        parent_thread_id: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Search across conversation Markdown archives using hybrid lexical and vector ranking.
+
+        Returns path, title, heading, excerpt, scores, date, project, conversation ID, and parent thread ID.
+        """
+        return service.conversation_retrieval.search(
+            query=query,
+            project=project,
+            conversation_id=conversation_id,
+            parent_thread_id=parent_thread_id,
+            limit=limit,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def conversation_read(file_path: str, heading: str | None = None) -> dict[str, Any]:
+        """Read a verified conversation archive note or specific heading section.
+
+        Path must be strictly within configured staging or canonical vault roots.
+        """
+        return service.conversation_retrieval.read(file_path=file_path, heading=heading)
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def conversation_recall(
+        query: str,
+        token_budget: int = 1500,
+        project: str | None = None,
+        conversation_id: str | None = None,
+        parent_thread_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve and format relevant conversation excerpts for direct agent context.
+
+        Respects token budget and preserves source anchors and provenance links.
+        """
+        return service.conversation_retrieval.recall(
+            query=query,
+            token_budget=token_budget,
+            project=project,
+            conversation_id=conversation_id,
+            parent_thread_id=parent_thread_id,
+        )

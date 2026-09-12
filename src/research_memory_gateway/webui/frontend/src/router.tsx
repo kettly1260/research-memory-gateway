@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 
 const Dashboard = lazy(() => import('./pages/Dashboard').then((module) => ({ default: module.Dashboard })))
 const Memories = lazy(() => import('./pages/Memories').then((module) => ({ default: module.Memories })))
+const Conversations = lazy(() => import('./pages/Conversations').then((module) => ({ default: module.Conversations })))
 const MemoryDetail = lazy(() => import('./pages/MemoryDetail').then((module) => ({ default: module.MemoryDetail })))
 const MemoryNew = lazy(() => import('./pages/MemoryNew').then((module) => ({ default: module.MemoryNew })))
 const Proposals = lazy(() => import('./pages/Proposals').then((module) => ({ default: module.Proposals })))
@@ -46,6 +47,12 @@ const memoriesRoute = createRoute({
   getParentRoute: () => authRoute,
   path: '/memories',
   component: lazyRoute(Memories),
+})
+
+const conversationsRoute = createRoute({
+  getParentRoute: () => authRoute,
+  path: '/conversations',
+  component: lazyRoute(Conversations),
 })
 
 const memoryNewRoute = createRoute({
@@ -108,6 +115,7 @@ const routeTree = rootRoute.addChildren([
     memoryNewRoute,
     memoryDetailRoute,
     memoriesRoute,
+    conversationsRoute,
     proposalsRoute,
     configRoute,
     securityRoute,

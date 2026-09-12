@@ -59,6 +59,30 @@ class ResearchMemoryService:
         self.write_policy = MemoryWritePolicy(config.memory)
         self.source_resolver = SourceResolver(config)
         self.proposals: dict[str, SaveProposal] = {}
+        self._conversation_retrieval = None
+
+    @property
+    def conversation_retrieval(self):
+        if self._conversation_retrieval is None:
+            from .conversations.index import ConversationIndexDatabase
+            from .conversations.retrieval import ConversationRetrievalService
+            index_path = self.config.conversation_archive.resolve_index_path()
+            staging_dir = self.config.conversation_archive.resolve_staging_dir()
+            allowed_roots = [staging_dir]
+            if self.config.conversation_archive.vault_root:
+                try:
+                    vault_root = self.config.conversation_archive.resolve_vault_root(confirmed=True)
+                    allowed_roots.append(vault_root)
+                except Exception:
+                    pass
+            emb_client = getattr(self.backend, "embedding_client", None)
+            index_db = ConversationIndexDatabase(index_path, embedding_client=emb_client)
+            self._conversation_retrieval = ConversationRetrievalService(
+                index_db=index_db,
+                allowed_roots=allowed_roots,
+                embedding_client=emb_client,
+            )
+        return self._conversation_retrieval
 
     def propose_save(
         self,

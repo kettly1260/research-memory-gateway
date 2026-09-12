@@ -141,6 +141,92 @@ class ExportConfig(BaseModel):
     json_dir: str = "./exports/json"
 
 
+class ConversationArchiveConfig(BaseModel):
+    enabled: bool = False
+    staging_dir: str = "./exports/conversation-staging"
+    vault_root: str | None = None
+    canonical_subdir: str = "90_System/AI-Memory"
+    # Deprecated compatibility field. Production conversation manifests are
+    # archive-local: <conversation_root>/.ai-memory/manifest.sqlite.
+    manifest_path: str = "./data/conversation-imports.sqlite"
+    index_path: str = "./data/conversation-index.sqlite"
+    require_explicit_vault_confirmation: bool = True
+    copy_embedded_images: bool = False
+
+    def resolve_staging_dir(self, base_dir: str | Path | None = None) -> Path:
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.staging_dir)
+        resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+        if not path.is_absolute():
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                raise PermissionError(f"staging_dir escapes base directory: {self.staging_dir}")
+        return resolved
+
+    def resolve_vault_root(self, *, confirmed: bool = False) -> Path:
+        if not self.vault_root:
+            raise ValueError("vault_root is not configured")
+        if self.require_explicit_vault_confirmation and not confirmed:
+            raise PermissionError("Explicit confirmation is required to access canonical vault_root")
+        vault = Path(self.vault_root).resolve()
+        if not vault.exists() or not vault.is_dir():
+            raise FileNotFoundError(
+                f"Canonical vault_root does not exist: {vault}. Automatic creation of empty vault is forbidden."
+            )
+        return vault
+
+    def resolve_canonical_root(self, *, confirmed: bool = False) -> Path:
+        vault = self.resolve_vault_root(confirmed=confirmed)
+        subdir = Path(self.canonical_subdir)
+        canonical = (vault / subdir).resolve() if not subdir.is_absolute() else subdir.resolve()
+        try:
+            canonical.relative_to(vault)
+        except ValueError:
+            raise PermissionError(f"canonical_subdir escapes vault root: {self.canonical_subdir}")
+        return canonical
+
+    def resolve_manifest_path(self, base_dir: str | Path | None = None) -> Path:
+        """Resolve the deprecated global manifest path for compatibility only."""
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.manifest_path)
+        resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+        if not path.is_absolute():
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                raise PermissionError(f"manifest_path escapes base directory: {self.manifest_path}")
+        return resolved
+
+    def resolve_archive_manifest_path(self, conversation_root: str | Path) -> Path:
+        """Resolve the production archive-local manifest ledger path."""
+        root = Path(conversation_root).resolve()
+        return root / ".ai-memory" / "manifest.sqlite"
+
+    def resolve_index_path(self, base_dir: str | Path | None = None) -> Path:
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.index_path)
+        resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+        if not path.is_absolute():
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                raise PermissionError(f"index_path escapes base directory: {self.index_path}")
+        return resolved
+
+
+def validate_safe_path(target_path: str | Path, allowed_roots: Sequence[str | Path]) -> Path:
+    target = Path(target_path).resolve()
+    resolved_roots = [Path(root).resolve() for root in allowed_roots]
+    for root in resolved_roots:
+        try:
+            target.relative_to(root)
+            return target
+        except ValueError:
+            continue
+    raise PermissionError(f"Target path {target} is outside allowed roots: {resolved_roots}")
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
@@ -149,6 +235,7 @@ class AppConfig(BaseModel):
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     export: ExportConfig = Field(default_factory=ExportConfig)
     webui: WebUIConfig = Field(default_factory=WebUIConfig)
+    conversation_archive: ConversationArchiveConfig = Field(default_factory=ConversationArchiveConfig)
 
 
 def load_config(path: str | Path) -> AppConfig:

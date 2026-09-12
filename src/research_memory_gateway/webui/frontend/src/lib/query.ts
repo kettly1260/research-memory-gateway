@@ -29,6 +29,12 @@ export const queryKeys = {
     backfillJob: (id: string) => ['retrieval', 'backfill', id] as const,
   },
   audit: ['audit'] as const,
+  conversations: {
+    status: ['conversations', 'status'] as const,
+    search: (params?: Record<string, string | undefined>) => ['conversations', 'search', params] as const,
+    recall: (params?: Record<string, string | undefined>) => ['conversations', 'recall', params] as const,
+    read: (params?: Record<string, string | undefined>) => ['conversations', 'read', params] as const,
+  },
 }
 
 // ─── Memory Queries ───
@@ -356,5 +362,51 @@ export function useConnections() {
     queryKey: ['security', 'connections'] as const,
     queryFn: () => api.connections.list(),
     refetchInterval: 5000, // refresh every 5s for active connection monitoring
+  })
+}
+
+// ─── Conversation Queries ───
+
+export function useConversationStatus() {
+  return useQuery({
+    queryKey: queryKeys.conversations.status,
+    queryFn: () => api.conversations.status(),
+    retry: false,
+  })
+}
+
+export function useConversationSearch(params: {
+  query: string
+  project?: string
+  conversation_id?: string
+  parent_thread_id?: string
+  limit?: string
+}, enabled: boolean = true) {
+  return useQuery({
+    queryKey: queryKeys.conversations.search(params as Record<string, string | undefined>),
+    queryFn: () => api.conversations.search(params),
+    enabled: enabled && !!params.query.trim(),
+  })
+}
+
+export function useConversationRecall(params: {
+  query: string
+  token_budget?: string
+  project?: string
+  conversation_id?: string
+  parent_thread_id?: string
+}, enabled: boolean = true) {
+  return useQuery({
+    queryKey: queryKeys.conversations.recall(params as Record<string, string | undefined>),
+    queryFn: () => api.conversations.recall(params),
+    enabled: enabled && !!params.query.trim(),
+  })
+}
+
+export function useConversationRead(params: { file_path: string; heading?: string }, enabled: boolean = false) {
+  return useQuery({
+    queryKey: queryKeys.conversations.read(params as Record<string, string | undefined>),
+    queryFn: () => api.conversations.read(params),
+    enabled: enabled && !!params.file_path,
   })
 }

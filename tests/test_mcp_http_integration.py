@@ -51,6 +51,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
             host=config.server.host,
             port=port,
             log_level="error",
+            timeout_graceful_shutdown=0,
         )
     )
     thread = Thread(target=server.run, daemon=True)

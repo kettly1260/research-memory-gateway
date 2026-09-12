@@ -89,6 +89,10 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/export", api_export, methods=["POST"]),
         Route("/admin/api/audit", api_audit_events, methods=["GET"]),
         Route("/admin/api/stats", api_stats, methods=["GET"]),
+        Route("/admin/api/conversations/status", api_conversations_status, methods=["GET"]),
+        Route("/admin/api/conversations/search", api_conversations_search, methods=["GET"]),
+        Route("/admin/api/conversations/recall", api_conversations_recall, methods=["GET"]),
+        Route("/admin/api/conversations/read", api_conversations_read, methods=["GET"]),
         *security_routes(),
         Mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "dist" / "assets"), name="admin-assets"),
         Route("/admin/favicon.svg", serve_favicon, methods=["GET"]),
@@ -603,6 +607,115 @@ async def api_stats(request: Request) -> Response:
         "type_distribution": type_counts,
         "project_distribution": project_counts,
     })
+
+
+async def api_conversations_status(request: Request) -> Response:
+    state = request.app.state.webui
+    if not getattr(state.config, "conversation_archive", None) or not state.config.conversation_archive.enabled:
+        return JSONResponse(
+            {
+                "enabled": False,
+                "error": "conversation_archive_disabled",
+                "documents": 0,
+                "sections": 0,
+                "embeddings": 0,
+                "sections_with_embedding": 0,
+                "sections_without_embedding": 0,
+                "vector_coverage": 0.0,
+                "embedding_model": None,
+                "embedding_version": None,
+                "embedding_dimension": None,
+            },
+            status_code=404,
+        )
+    try:
+        retrieval = state.service.conversation_retrieval
+        stats = retrieval.index_db.stats()
+        return JSONResponse({"enabled": True, **stats})
+    except Exception as exc:
+        return JSONResponse(
+            {
+                "enabled": True,
+                "error": str(exc),
+                "documents": 0,
+                "sections": 0,
+                "embeddings": 0,
+                "sections_with_embedding": 0,
+                "sections_without_embedding": 0,
+                "vector_coverage": 0.0,
+                "embedding_model": None,
+                "embedding_version": None,
+                "embedding_dimension": None,
+            },
+            status_code=500,
+        )
+
+
+async def api_conversations_search(request: Request) -> Response:
+    state = request.app.state.webui
+    if not getattr(state.config, "conversation_archive", None) or not state.config.conversation_archive.enabled:
+        return JSONResponse({"error": "conversation_archive_disabled"}, status_code=404)
+    query = request.query_params.get("query", "").strip()
+    if not query:
+        return JSONResponse({"error": "missing_query", "query": "", "count": 0, "results": []}, status_code=400)
+    project = request.query_params.get("project") or None
+    conversation_id = request.query_params.get("conversation_id") or None
+    parent_thread_id = request.query_params.get("parent_thread_id") or None
+    limit = bounded_int(request.query_params.get("limit"), 1, 100, 10)
+    try:
+        res = state.service.conversation_retrieval.search(
+            query=query,
+            project=project,
+            conversation_id=conversation_id,
+            parent_thread_id=parent_thread_id,
+            limit=limit,
+        )
+        return JSONResponse(res)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_conversations_recall(request: Request) -> Response:
+    state = request.app.state.webui
+    if not getattr(state.config, "conversation_archive", None) or not state.config.conversation_archive.enabled:
+        return JSONResponse({"error": "conversation_archive_disabled"}, status_code=404)
+    query = request.query_params.get("query", "").strip()
+    if not query:
+        return JSONResponse({"error": "missing_query"}, status_code=400)
+    token_budget = bounded_int(request.query_params.get("token_budget"), 1, 100000, 1500)
+    project = request.query_params.get("project") or None
+    conversation_id = request.query_params.get("conversation_id") or None
+    parent_thread_id = request.query_params.get("parent_thread_id") or None
+    try:
+        res = state.service.conversation_retrieval.recall(
+            query=query,
+            token_budget=token_budget,
+            project=project,
+            conversation_id=conversation_id,
+            parent_thread_id=parent_thread_id,
+        )
+        return JSONResponse(res)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_conversations_read(request: Request) -> Response:
+    state = request.app.state.webui
+    if not getattr(state.config, "conversation_archive", None) or not state.config.conversation_archive.enabled:
+        return JSONResponse({"error": "conversation_archive_disabled"}, status_code=404)
+    file_path = request.query_params.get("file_path")
+    if not file_path:
+        return JSONResponse({"error": "missing_file_path"}, status_code=400)
+    heading = request.query_params.get("heading") or None
+    try:
+        data = state.service.conversation_retrieval.read(file_path, heading=heading)
+        return JSONResponse(data)
+    except (ValueError, PermissionError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=403)
+    except FileNotFoundError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 async def _memory_list(request: Request) -> list[ResearchMemory]:

@@ -87,3 +87,18 @@ webui:
   # Set only for first bootstrap, then remove the plaintext value from config.yaml.
   initial_password: null
   session_max_age_seconds: 43200
+
+conversation_archive:
+  # Keep disabled by default. Does not alter runtime behaviors until explicitly enabled.
+  enabled: false
+  # Staging directory for unconfirmed imports or testing
+  staging_dir: ./exports/conversation-staging
+  # Canonical Obsidian Vault root. Set to null until explicitly confirmed.
+  vault_root: null
+  canonical_subdir: 90_System/AI-Memory
+  # Import manifest is archive-local and is always stored at
+  # <conversation_root>/.ai-memory/manifest.sqlite.
+  index_path: ./data/conversation-index.sqlite
+  # Enforce confirmation before writing to vault_root; forbids auto-creating empty vault roots.
+  require_explicit_vault_confirmation: true
+  copy_embedded_images: false

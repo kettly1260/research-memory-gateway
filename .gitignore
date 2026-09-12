@@ -8,7 +8,13 @@ __pycache__/
 data/
 exports/
 config.yaml
+config.rollout.yaml
+config.conversation-production.yaml
+scratch/
 *.db
 *.db-*
+*.sqlite
+*.sqlite-*
+.tmp/
 /node_modules/
 /package-lock.json

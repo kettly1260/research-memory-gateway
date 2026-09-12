@@ -186,6 +186,10 @@ import type {
   ProposalDetail,
   ProposalsListResponse,
   SaveProposal,
+  ConversationStatusResponse,
+  ConversationSearchResponse,
+  ConversationRecallResponse,
+  ConversationReadResponse,
 } from '@/types/api'
 
 export const api = {
@@ -411,6 +415,34 @@ export const api = {
   connections: {
     list() {
       return request<{ items: Array<{ key_id: string; key_name: string | null; client_ip: string; client_info: string | null; request_count: number; last_request_at: string }> }>('/security/connections')
+    },
+  },
+
+  // ─── Conversations ───
+  conversations: {
+    status() {
+      return request<ConversationStatusResponse>('/conversations/status')
+    },
+    search(params: {
+      query: string
+      project?: string
+      conversation_id?: string
+      parent_thread_id?: string
+      limit?: string
+    }) {
+      return request<ConversationSearchResponse>('/conversations/search', { params })
+    },
+    recall(params: {
+      query: string
+      token_budget?: string
+      project?: string
+      conversation_id?: string
+      parent_thread_id?: string
+    }) {
+      return request<ConversationRecallResponse>('/conversations/recall', { params })
+    },
+    read(params: { file_path: string; heading?: string }) {
+      return request<ConversationReadResponse>('/conversations/read', { params })
     },
   },
 }
