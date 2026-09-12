@@ -2,7 +2,7 @@
 
 任务日期：2026-09-12  
 执行项目：`G:\LLM\memory`  
-目标版本：`v0.2.0`（若远端已存在该 tag，则顺延到下一个未占用的 `v0.2.x`）  
+目标版本：`v0.2.1`（`v0.2.0` 已发布 tag，但 CI 因无上限 `mcp>=1.2.0` 被 fresh resolve 到 MCP 2.x 后在 pytest collection 阶段失败；`v0.2.1` 固定 `mcp>=1.2.0,<2`）
 执行性质：**Conversation Memory 使用层补齐 + 正式发布**；不是继续做 322-session 数据 rollout。
 
 ---

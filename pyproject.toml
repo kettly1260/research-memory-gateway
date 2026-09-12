@@ -1,11 +1,11 @@
 [project]
 name = "research-memory-gateway"
-version = "0.2.0"
+version = "0.2.1"
 description = "A lightweight evidence-first MCP gateway for cross-tool scientific research memory."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "mcp>=1.2.0",
+  "mcp>=1.2.0,<2",
   "pydantic>=2.7.0",
   "pyyaml>=6.0.0",
   "httpx>=0.27.0",

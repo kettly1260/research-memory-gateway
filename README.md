@@ -646,7 +646,7 @@ Docker Compose 示意：
 ```yaml
 services:
   research-memory-gateway:
-    image: ghcr.io/kettly1260/research-memory-gateway:v0.2.0
+    image: ghcr.io/kettly1260/research-memory-gateway:v0.2.1
     container_name: research-memory-gateway
     restart: unless-stopped
     ports:
