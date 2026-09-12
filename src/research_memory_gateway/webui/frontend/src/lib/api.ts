@@ -428,6 +428,8 @@ export const api = {
       project?: string
       conversation_id?: string
       parent_thread_id?: string
+      source_system?: string
+      thread_source?: string
       limit?: string
     }) {
       return request<ConversationSearchResponse>('/conversations/search', { params })
@@ -438,6 +440,8 @@ export const api = {
       project?: string
       conversation_id?: string
       parent_thread_id?: string
+      source_system?: string
+      thread_source?: string
     }) {
       return request<ConversationRecallResponse>('/conversations/recall', { params })
     },

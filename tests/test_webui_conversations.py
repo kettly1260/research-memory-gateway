@@ -20,6 +20,7 @@ from test_webui import login_webui
 NOTE_UV = """---
 type: ai-conversation
 source: codex
+thread_source: user
 conversation_id: 019e3ad1-05d6-7382-972f-0d377e6092c6
 created: '2026-05-18'
 updated: '2026-05-18'
@@ -290,3 +291,197 @@ def test_conversations_api_unauthenticated_returns_401(tmp_path: Path, monkeypat
     assert client.get("/admin/api/conversations/search?query=test").status_code == 401
     assert client.get("/admin/api/conversations/recall?query=test").status_code == 401
     assert client.get(f"/admin/api/conversations/read?file_path={note_uv.as_posix()}").status_code == 401
+
+
+NOTE_SUBAGENT = """---
+type: ai-conversation
+source: codex
+source_system: codex
+thread_source: subagent
+parent_thread_id: 019e3ad1-05d6-7382-972f-0d377e6092c6
+agent_path: subagent/analyst
+model_name: gpt-5.6-sol
+source_originator: Codex Desktop
+source_surface: desktop
+source_version: 0.153.4
+conversation_id: 019e3ad1-subagent-001
+created: '2026-05-19'
+updated: '2026-05-19'
+---
+
+# Subagent Analysis Session
+
+## 分析结论
+
+<!-- source ordinal=1 message_id=msg-sub-1 turn_id=turn-1 -->
+### 助手
+
+Subagent evaluation confirms byproduct yield is below 1.2%.
+"""
+
+NOTE_CHATGPT = """---
+type: ai-conversation
+source_system: chatgpt
+thread_source: user
+model_name: gpt-4o
+conversation_id: chatgpt-session-001
+created: '2026-06-01'
+updated: '2026-06-01'
+---
+
+# ChatGPT Brainstorm Session
+
+## 讨论摘要
+
+### 用户
+
+Brainstorming bandgap materials and absorption thresholds.
+"""
+
+
+def test_conversations_api_source_identity_and_filters(tmp_path: Path, monkeypatch) -> None:
+    client, _, staging_dir, _, _, mock_emb = setup_conversation_env(tmp_path, monkeypatch, archive_enabled=True, embedding_enabled=True)
+    login_webui(client)
+
+    # Add subagent and chatgpt notes
+    note_sub = staging_dir / "note_sub.md"
+    note_sub.write_text(NOTE_SUBAGENT, encoding="utf-8")
+    note_gpt = staging_dir / "note_gpt.md"
+    note_gpt.write_text(NOTE_CHATGPT, encoding="utf-8")
+
+    index_path = tmp_path / "conversation_idx.sqlite"
+    idx = ConversationIndexDatabase(index_path, embedding_client=mock_emb)
+    idx.index_file(note_sub)
+    idx.index_file(note_gpt)
+
+    # 1. Status distribution check
+    res_status = client.get("/admin/api/conversations/status")
+    assert res_status.status_code == 200
+    status_data = res_status.json()
+    assert "source_system_distribution" in status_data
+    assert status_data["source_system_distribution"].get("codex", 0) >= 2
+    assert status_data["source_system_distribution"].get("chatgpt", 0) >= 1
+    assert "thread_source_distribution" in status_data
+    assert status_data["thread_source_distribution"].get("subagent", 0) >= 1
+    assert status_data["thread_source_distribution"].get("user", 0) >= 1
+
+    # 2. Search result returns source_system and thread_source
+    res_search = client.get("/admin/api/conversations/search?query=byproduct")
+    assert res_search.status_code == 200
+    search_data = res_search.json()
+    assert search_data["count"] >= 1
+    sub_item = next(it for it in search_data["results"] if it["conversation_id"] == "019e3ad1-subagent-001")
+    assert sub_item["source_system"] == "codex"
+    assert sub_item["thread_source"] == "subagent"
+    assert sub_item["parent_thread_id"] == "019e3ad1-05d6-7382-972f-0d377e6092c6"
+    assert sub_item["agent_path"] == "subagent/analyst"
+    assert sub_item["model_name"] == "gpt-5.6-sol"
+    assert sub_item["source_originator"] == "Codex Desktop"
+
+    # 3. Filter by source_system
+    res_codex = client.get("/admin/api/conversations/search?query=yield&source_system=codex")
+    assert res_codex.status_code == 200
+    assert res_codex.json()["count"] >= 1
+    for it in res_codex.json()["results"]:
+        assert it["source_system"] == "codex"
+
+    res_chatgpt = client.get("/admin/api/conversations/search?query=bandgap&source_system=chatgpt")
+    assert res_chatgpt.status_code == 200
+    assert res_chatgpt.json()["count"] >= 1
+    for it in res_chatgpt.json()["results"]:
+        assert it["source_system"] == "chatgpt"
+
+    # 4. Filter by thread_source
+    res_sub_only = client.get("/admin/api/conversations/search?query=yield&thread_source=subagent")
+    assert res_sub_only.status_code == 200
+    assert res_sub_only.json()["count"] >= 1
+    assert all(it["thread_source"] == "subagent" for it in res_sub_only.json()["results"])
+
+    # 5. Recall API includes source identity
+    res_recall = client.get("/admin/api/conversations/recall?query=byproduct")
+    assert res_recall.status_code == 200
+    recall_data = res_recall.json()
+    assert len(recall_data["items"]) >= 1
+    rec_sub = next(it for it in recall_data["items"] if it["conversation_id"] == "019e3ad1-subagent-001")
+    assert rec_sub["source_system"] == "codex"
+    assert rec_sub["thread_source"] == "subagent"
+    assert rec_sub["parent_thread_id"] == "019e3ad1-05d6-7382-972f-0d377e6092c6"
+
+    # 6. Read API returns metadata dictionary
+    res_read = client.get(f"/admin/api/conversations/read?file_path={note_sub.as_posix()}")
+    assert res_read.status_code == 200
+    read_meta = res_read.json().get("metadata", {})
+    assert read_meta.get("source_system") == "codex"
+    assert read_meta.get("thread_source") == "subagent"
+    assert read_meta.get("parent_thread_id") == "019e3ad1-05d6-7382-972f-0d377e6092c6"
+    assert read_meta.get("model_name") == "gpt-5.6-sol"
+
+
+def test_conversations_additive_index_migration(tmp_path: Path) -> None:
+    import sqlite3
+    old_db_path = tmp_path / "old_index.sqlite"
+    # Create an old schema database without source identity columns
+    conn = sqlite3.connect(str(old_db_path))
+    conn.execute(
+        """
+        CREATE TABLE conversation_documents (
+            id TEXT PRIMARY KEY,
+            vault_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            created_date TEXT NOT NULL,
+            projects_json TEXT,
+            topics_json TEXT,
+            indexed_at TEXT NOT NULL,
+            parent_thread_id TEXT,
+            thread_source TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE conversation_sections (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            vault_path TEXT NOT NULL,
+            heading_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            source_anchors_json TEXT,
+            projects_json TEXT,
+            date TEXT,
+            embedding_identity TEXT,
+            parent_thread_id TEXT,
+            thread_source TEXT,
+            indexed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO conversation_documents (
+            id, vault_path, title, file_hash, created_date, projects_json, topics_json, indexed_at, parent_thread_id, thread_source
+        ) VALUES ('doc-old-1', '/vault/old.md', 'Old Doc', 'hash1', '2026-01-01', '[]', '[]', '2026-01-01', '', 'user')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Now open with ConversationIndexDatabase; it should migrate additively without failure
+    idx = ConversationIndexDatabase(old_db_path)
+    stats = idx.stats()
+    assert stats["documents"] == 1
+    assert stats["source_system_distribution"] == {"codex": 1}
+    assert stats["thread_source_distribution"] == {"user": 1}
+
+    # Verify column existence
+    conn = sqlite3.connect(str(old_db_path))
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(conversation_documents)")
+    cols = [r[1] for r in cursor.fetchall()]
+    assert "source_system" in cols
+    assert "source_originator" in cols
+    assert "model_name" in cols
+    conn.close()

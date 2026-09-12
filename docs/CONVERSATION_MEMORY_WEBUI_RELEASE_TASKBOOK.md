@@ -378,6 +378,117 @@ source anchors
 excerpt
 ```
 
+### 6.2.1 来源身份必须是一等字段（Release Blocker）
+
+当前 35-session pilot 已暴露一个实际可用性问题：WebUI 虽然在结果底部显示
+`thread_source`，但用户无法一眼判断“这是 Codex / 其他 Agent / 哪种客户端产生的会话”。
+
+这不是单纯 UI 文案问题。Codex 原始 `session_meta` 已包含比当前 index/UI 更丰富的来源信息，例如：
+
+```text
+originator      = Codex Desktop
+source          = vscode
+thread_source   = user / subagent / guardian_review
+model_provider  = custom
+cli_version     = 0.153.4
+base_instructions.provenance.model = gpt-5.6-sol
+```
+
+而当前 Markdown 仅稳定保存 `source: codex`、`thread_source`、`parent_thread_id` 等；
+conversation index 目前也只把 `thread_source` / `parent_thread_id` 作为一等字段。
+
+在 v0.2.x 发布前必须补齐一个**通用 Source Identity 层**，避免未来接入 ChatGPT / Claude /
+Gemini / Cursor 等来源后全部混在一起。
+
+建议 canonical 字段（命名可小幅调整，但语义必须保持）：
+
+```text
+source_system      codex / chatgpt / claude / gemini / cursor / unknown
+source_originator  Codex Desktop / ...
+source_surface     vscode / desktop / web / cli / api / ...
+source_version     0.153.4 / ...
+model_provider     custom / openai / anthropic / google / ...
+model_name         gpt-5.6-sol / ...
+thread_source      user / subagent / guardian_review / ...
+parent_thread_id
+agent_path
+```
+
+其中：
+
+- `source_system` 是用户最关心的“这段历史来自哪个 Agent/平台”。
+- `thread_source` 只描述该平台内部的线程角色，**不能拿它代替来源平台**。
+- 对现有 Codex export，`source_system` 必须稳定为 `codex`。
+- `thread_source=user` 在 UI 中不要直接翻译成“用户”，应显示为“主会话 / Root session”；
+  `subagent` 显示“子 Agent”；`guardian_review` 显示“Guardian Review”。
+
+实现要求：
+
+1. `NormalizedConversation` 提供上述可恢复 source identity 属性。
+2. `ObsidianConversationWriter` 将可恢复字段写入 machine-managed frontmatter。
+3. `ConversationIndexDatabase` 用 additive migration 增加必要字段；不得破坏现有 DB。
+4. `SearchResult` / WebUI API 返回来源身份字段。
+5. Search 结果标题附近必须显示醒目的来源 badge，例如：
+
+```text
+[CODEX] [主会话]
+[CODEX] [子 Agent] Parent: 01a08c1c...
+[CODEX] [Guardian Review]
+```
+
+而不是只在卡片最底部显示 `(user)` / `(subagent)`。
+
+6. Search 至少增加：
+
+```text
+source_system filter
+thread_source filter
+```
+
+可选增加：
+
+```text
+model_name filter
+source_originator filter
+```
+
+7. Conversation Detail 顶部显示完整来源元数据；不要要求用户打开 Markdown frontmatter 才能判断来源。
+8. Status 区至少返回并展示：
+
+```text
+source_system_distribution
+thread_source_distribution
+```
+
+例如当前 35-session pilot 的 thread role 应能明确看出主会话 / subagent / guardian 的数量，
+而来源平台应明确标识为 Codex。
+
+9. Recall item 明细同样显示来源平台 + thread role，防止用户把 guardian/subagent 内容误认为主会话。
+
+### 6.2.2 现有 35 场的兼容迁移
+
+当前已写入的 Markdown frontmatter 已有：
+
+```text
+source: codex
+thread_source
+parent_thread_id
+```
+
+因此至少可以在不读取 raw ZIP 的情况下，为旧 note 恢复：
+
+```text
+source_system = codex
+thread_source
+parent_thread_id
+```
+
+更丰富的 `originator/source_surface/source_version/model_name` 若旧 Markdown 未保存，不得猜测。
+Windows pilot 可通过同一 immutable raw ZIP 做一次受控 metadata refresh；NAS 自包含重建时则直接从 raw ZIP
+按新 parser/writer 生成完整来源身份。
+
+禁止为了补来源字段把旧数据伪装成已知值。
+
 明确区分：
 
 ```text
@@ -480,6 +591,11 @@ tests/test_webui_conversations.py
 9. read allowed path PASS。
 10. read outside allowed root FAIL。
 11. unauthenticated API -> 401。
+12. Codex note/search result 返回 `source_system=codex`。
+13. `thread_source=user` 在 API 保持机器值 `user`，前端显示“主会话 / Root session”。
+14. subagent/guardian_review 的 parent lineage 和来源 badge 正确。
+15. `source_system` filter 只返回指定来源。
+16. additive index migration 不破坏旧 conversation index。
 
 ### 7.2 MCP regression
 

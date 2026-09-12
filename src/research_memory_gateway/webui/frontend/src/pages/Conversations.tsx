@@ -5,6 +5,7 @@ import {
   BookOpen,
   Check,
   Copy,
+  Cpu,
   FileText,
   Layers,
   MessagesSquare,
@@ -43,6 +44,35 @@ import {
 import type { ConversationSearchResultItem } from '@/types/api'
 import { toast } from 'sonner'
 
+function formatThreadRole(role?: string, t?: (key: string) => string): string {
+  if (!role) return t ? t('conversations.roleUnknown') : 'Unknown'
+  if (role === 'user') return t ? t('conversations.roleUser') : '主会话'
+  if (role === 'subagent') return t ? t('conversations.roleSubagent') : '子 Agent'
+  if (role === 'guardian_review') return t ? t('conversations.roleGuardianReview') : 'Guardian Review'
+  return role
+}
+
+function formatRoleBadgeLabel(role?: string, parentThreadId?: string, t?: (key: string) => string): string {
+  const roleLabel = formatThreadRole(role, t)
+  if (role === 'subagent' && parentThreadId) {
+    return `${roleLabel} (Parent: ${parentThreadId.slice(0, 8)}...)`
+  }
+  return roleLabel
+}
+
+function getRoleBadgeClass(role?: string): string {
+  if (role === 'user') {
+    return 'text-[10px] px-1.5 py-0 h-4 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+  }
+  if (role === 'subagent') {
+    return 'text-[10px] px-1.5 py-0 h-4 bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30'
+  }
+  if (role === 'guardian_review') {
+    return 'text-[10px] px-1.5 py-0 h-4 bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30'
+  }
+  return 'text-[10px] px-1.5 py-0 h-4'
+}
+
 export function Conversations() {
   const { t } = useTranslation()
 
@@ -55,11 +85,15 @@ export function Conversations() {
   const [searchProject, setSearchProject] = React.useState('')
   const [searchCid, setSearchCid] = React.useState('')
   const [searchPid, setSearchPid] = React.useState('')
+  const [searchSourceSystem, setSearchSourceSystem] = React.useState('')
+  const [searchThreadSource, setSearchThreadSource] = React.useState('')
   const [activeSearch, setActiveSearch] = React.useState<{
     query: string
     project?: string
     conversation_id?: string
     parent_thread_id?: string
+    source_system?: string
+    thread_source?: string
   } | null>(null)
 
   const searchQuery = useConversationSearch(
@@ -79,6 +113,8 @@ export function Conversations() {
       project: searchProject.trim() || undefined,
       conversation_id: searchCid.trim() || undefined,
       parent_thread_id: searchPid.trim() || undefined,
+      source_system: searchSourceSystem.trim() || undefined,
+      thread_source: searchThreadSource.trim() || undefined,
     })
   }
 
@@ -88,12 +124,16 @@ export function Conversations() {
   const [recallProject, setRecallProject] = React.useState('')
   const [recallCid, setRecallCid] = React.useState('')
   const [recallPid, setRecallPid] = React.useState('')
+  const [recallSourceSystem, setRecallSourceSystem] = React.useState('')
+  const [recallThreadSource, setRecallThreadSource] = React.useState('')
   const [activeRecall, setActiveRecall] = React.useState<{
     query: string
     token_budget?: string
     project?: string
     conversation_id?: string
     parent_thread_id?: string
+    source_system?: string
+    thread_source?: string
   } | null>(null)
 
   const recallQuery = useConversationRecall(
@@ -114,6 +154,8 @@ export function Conversations() {
       project: recallProject.trim() || undefined,
       conversation_id: recallCid.trim() || undefined,
       parent_thread_id: recallPid.trim() || undefined,
+      source_system: recallSourceSystem.trim() || undefined,
+      thread_source: recallThreadSource.trim() || undefined,
     })
   }
 
@@ -266,6 +308,30 @@ export function Conversations() {
         </Card>
       </div>
 
+      {/* ─── Source & Role Distribution ─── */}
+      {status && (status.source_system_distribution || status.thread_source_distribution) && (
+        <Card className="rounded-lg bg-muted/20 border-border/60">
+          <CardContent className="p-3.5 flex flex-wrap items-center justify-between gap-4 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-muted-foreground">{t('conversations.sourcePlatform')}:</span>
+              {Object.entries(status.source_system_distribution || {}).map(([src, count]) => (
+                <Badge key={src} variant="default" className="font-mono text-xs uppercase px-2 py-0.5 bg-blue-600/15 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                  {src}: {count}
+                </Badge>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-muted-foreground">{t('conversations.threadRole')}:</span>
+              {Object.entries(status.thread_source_distribution || {}).map(([role, count]) => (
+                <Badge key={role} variant="secondary" className={`font-mono text-xs px-2 py-0.5 ${getRoleBadgeClass(role)}`}>
+                  {formatThreadRole(role, t)}: {count}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ─── Main Tabs: Search & Recall Preview ─── */}
       <Tabs defaultValue="search" className="space-y-4">
         <TabsList>
@@ -311,7 +377,7 @@ export function Conversations() {
                 </div>
 
                 {/* Optional Filters */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 pt-1 text-xs">
                   <Input
                     value={searchProject}
                     onChange={(e) => setSearchProject(e.target.value)}
@@ -328,6 +394,18 @@ export function Conversations() {
                     value={searchPid}
                     onChange={(e) => setSearchPid(e.target.value)}
                     placeholder={t('conversations.parentThreadIdFilter')}
+                    className="h-8 text-xs"
+                  />
+                  <Input
+                    value={searchSourceSystem}
+                    onChange={(e) => setSearchSourceSystem(e.target.value)}
+                    placeholder={t('conversations.sourceSystemFilter')}
+                    className="h-8 text-xs"
+                  />
+                  <Input
+                    value={searchThreadSource}
+                    onChange={(e) => setSearchThreadSource(e.target.value)}
+                    placeholder={t('conversations.threadSourceFilter')}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -409,7 +487,20 @@ export function Conversations() {
                         </div>
 
                         {/* Title & Heading */}
-                        <div>
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant="default" className="text-[10px] px-1.5 py-0 h-4 font-bold uppercase bg-blue-600/15 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                              {item.source_system || 'codex'}
+                            </Badge>
+                            <Badge variant="secondary" className={getRoleBadgeClass(item.thread_source)}>
+                              {formatRoleBadgeLabel(item.thread_source, item.parent_thread_id, t)}
+                            </Badge>
+                            {item.model_name && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 font-mono text-muted-foreground">
+                                {item.model_name}
+                              </Badge>
+                            )}
+                          </div>
                           <h3 className="text-sm font-semibold text-foreground">
                             {item.title || 'Untitled Session'}
                           </h3>
@@ -427,21 +518,19 @@ export function Conversations() {
 
                         {/* Identifiers & Details Row */}
                         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-muted-foreground border-t border-border/40">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <span>ID:</span>
                             <code className="font-mono bg-muted/60 px-1 py-0.5 rounded">
                               {item.conversation_id.slice(0, 8)}...
                             </code>
-                            {item.parent_thread_id && (
-                              <>
-                                <span className="ml-1">Parent:</span>
-                                <code className="font-mono bg-muted/60 px-1 py-0.5 rounded">
-                                  {item.parent_thread_id.slice(0, 8)}
-                                </code>
-                              </>
+                            {item.source_originator && (
+                              <span>{item.source_originator}</span>
                             )}
-                            {item.thread_source && (
-                              <span className="capitalize">({item.thread_source})</span>
+                            {item.source_surface && (
+                              <span className="capitalize">({item.source_surface})</span>
+                            )}
+                            {item.source_version && (
+                              <span className="font-mono">v{item.source_version}</span>
                             )}
                           </div>
                           <span className="truncate max-w-[300px]">{item.vault_path}</span>
@@ -517,7 +606,7 @@ export function Conversations() {
                 </div>
 
                 {/* Optional Filters */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2 pt-1 text-xs">
                   <Input
                     value={recallProject}
                     onChange={(e) => setRecallProject(e.target.value)}
@@ -534,6 +623,18 @@ export function Conversations() {
                     value={recallPid}
                     onChange={(e) => setRecallPid(e.target.value)}
                     placeholder={t('conversations.parentThreadIdFilter')}
+                    className="h-8 text-xs"
+                  />
+                  <Input
+                    value={recallSourceSystem}
+                    onChange={(e) => setRecallSourceSystem(e.target.value)}
+                    placeholder={t('conversations.sourceSystemFilter')}
+                    className="h-8 text-xs"
+                  />
+                  <Input
+                    value={recallThreadSource}
+                    onChange={(e) => setRecallThreadSource(e.target.value)}
+                    placeholder={t('conversations.threadSourceFilter')}
                     className="h-8 text-xs"
                   />
                 </div>
@@ -626,48 +727,70 @@ export function Conversations() {
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
-                    <TableBody>
-                      {recallQuery.data.items.map((item, idx) => (
-                        <TableRow key={`${item.conversation_id}-${idx}`}>
-                          <TableCell className="text-center font-mono text-xs">{idx + 1}</TableCell>
-                          <TableCell>
-                            <div className="font-medium text-xs">{item.heading}</div>
-                            <div className="text-[11px] text-muted-foreground font-mono truncate max-w-[280px]">
-                              {item.conversation_id}
-                            </div>
-                          </TableCell>
-                          <TableCell className="font-mono text-xs">{item.score.toFixed(3)}</TableCell>
-                          <TableCell>
-                            {item.source_anchors && item.source_anchors.length > 0 ? (
-                              <Badge variant="secondary" className="text-[10px] font-mono">
-                                {item.source_anchors.map((a) => `ord:${a.ordinal ?? '?'}`).join(', ')}
-                              </Badge>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => {
-                                setSelectedResult({
-                                  section_id: `${item.conversation_id}-${idx}`,
-                                  conversation_id: item.conversation_id,
-                                  vault_path: item.vault_path,
-                                  heading_path: [item.heading],
-                                  title: item.heading,
-                                  content: item.content,
-                                  lexical_score: null,
-                                  vector_score: null,
-                                  final_score: item.score,
-                                  score_type: 'hybrid',
-                                  source_anchors: item.source_anchors,
-                                })
-                                setReadFullNote(false)
-                              }}
-                            >
+                      <TableBody>
+                        {recallQuery.data.items.map((item, idx) => (
+                          <TableRow key={`${item.conversation_id}-${idx}`}>
+                            <TableCell className="text-center font-mono text-xs">{idx + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap items-center gap-1 mb-1">
+                                <Badge variant="default" className="text-[9px] px-1 py-0 font-bold uppercase bg-blue-600/15 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                                  {item.source_system || 'codex'}
+                                </Badge>
+                                <Badge variant="secondary" className={getRoleBadgeClass(item.thread_source)}>
+                                  {formatRoleBadgeLabel(item.thread_source, item.parent_thread_id, t)}
+                                </Badge>
+                                {item.model_name && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono text-muted-foreground">
+                                    {item.model_name}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="font-medium text-xs">{item.heading}</div>
+                              <div className="text-[11px] text-muted-foreground font-mono truncate max-w-[280px]">
+                                {item.conversation_id}
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">{item.score.toFixed(3)}</TableCell>
+                            <TableCell>
+                              {item.source_anchors && item.source_anchors.length > 0 ? (
+                                <Badge variant="secondary" className="text-[10px] font-mono">
+                                  {item.source_anchors.map((a) => `ord:${a.ordinal ?? '?'}`).join(', ')}
+                                </Badge>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => {
+                                  setSelectedResult({
+                                    section_id: `${item.conversation_id}-${idx}`,
+                                    conversation_id: item.conversation_id,
+                                    vault_path: item.vault_path,
+                                    heading_path: [item.heading],
+                                    title: item.heading,
+                                    content: item.content,
+                                    lexical_score: null,
+                                    vector_score: null,
+                                    final_score: item.score,
+                                    score_type: 'hybrid',
+                                    source_anchors: item.source_anchors,
+                                    parent_thread_id: item.parent_thread_id,
+                                    thread_source: item.thread_source,
+                                    source_system: item.source_system,
+                                    source_originator: item.source_originator,
+                                    source_surface: item.source_surface,
+                                    source_version: item.source_version,
+                                    model_provider: item.model_provider,
+                                    model_name: item.model_name,
+                                    agent_path: item.agent_path,
+                                  })
+                                  setReadFullNote(false)
+                                }}
+                              >
                               <BookOpen className="size-3.5 mr-1" />
                               {t('conversations.readNote')}
                             </Button>
@@ -686,19 +809,93 @@ export function Conversations() {
       {/* ─── D. Conversation Detail / Reader Drawer ─── */}
       <Sheet open={!!selectedResult} onOpenChange={(open) => { if (!open) setSelectedResult(null) }}>
         <SheetContent side="right" className="w-[90vw] sm:max-w-2xl overflow-y-auto p-6 space-y-4">
-          <SheetHeader className="p-0 pb-2 border-b">
-            <div className="flex items-center justify-between pr-8">
-              <SheetTitle className="text-lg font-bold">
-                {selectedResult?.title || 'Conversation Detail'}
-              </SheetTitle>
-            </div>
-            <SheetDescription className="font-mono text-xs text-muted-foreground break-all">
-              {selectedResult?.conversation_id}
-            </SheetDescription>
-          </SheetHeader>
+            <SheetHeader className="p-0 pb-2 border-b">
+              <div className="flex items-center justify-between pr-8">
+                <SheetTitle className="text-lg font-bold">
+                  {selectedResult?.title || 'Conversation Detail'}
+                </SheetTitle>
+              </div>
+              <SheetDescription className="font-mono text-xs text-muted-foreground break-all">
+                {selectedResult?.conversation_id}
+              </SheetDescription>
+            </SheetHeader>
 
-          {/* Path & Controls */}
-          <div className="space-y-3 text-xs">
+            {/* Source Identity Card */}
+            <Card className="rounded-lg bg-muted/20 border-border/60">
+              <CardHeader className="py-2.5 px-3 border-b border-border/40">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 font-semibold text-xs text-foreground">
+                    <Cpu className="size-3.5 text-primary" />
+                    {t('conversations.sourceIdentity')}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0 h-4 font-bold uppercase bg-blue-600/15 text-blue-700 dark:text-blue-300 border-blue-500/30">
+                      {selectedResult?.source_system || readQuery.data?.metadata?.source_system || 'codex'}
+                    </Badge>
+                    <Badge variant="secondary" className={getRoleBadgeClass(selectedResult?.thread_source || readQuery.data?.metadata?.thread_source)}>
+                      {formatRoleBadgeLabel(
+                        selectedResult?.thread_source || readQuery.data?.metadata?.thread_source,
+                        selectedResult?.parent_thread_id || readQuery.data?.metadata?.parent_thread_id,
+                        t
+                      )}
+                    </Badge>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="p-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                <div>
+                  <span className="text-muted-foreground">{t('conversations.sourcePlatform')}: </span>
+                  <span className="font-mono font-medium">{selectedResult?.source_system || readQuery.data?.metadata?.source_system || 'codex'}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">{t('conversations.threadRole')}: </span>
+                  <span className="font-medium">{formatThreadRole(selectedResult?.thread_source || readQuery.data?.metadata?.thread_source, t)}</span>
+                </div>
+                {(selectedResult?.parent_thread_id || readQuery.data?.metadata?.parent_thread_id) && (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">{t('conversations.parentThread')}: </span>
+                    <code className="font-mono text-[10px] bg-background/80 px-1 py-0.5 rounded border">
+                      {selectedResult?.parent_thread_id || readQuery.data?.metadata?.parent_thread_id}
+                    </code>
+                  </div>
+                )}
+                {(selectedResult?.agent_path || readQuery.data?.metadata?.agent_path) && (
+                  <div className="col-span-2">
+                    <span className="text-muted-foreground">{t('conversations.agentPath')}: </span>
+                    <code className="font-mono text-[10px] bg-background/80 px-1 py-0.5 rounded border">
+                      {selectedResult?.agent_path || readQuery.data?.metadata?.agent_path}
+                    </code>
+                  </div>
+                )}
+                {(selectedResult?.model_name || readQuery.data?.metadata?.model_name) && (
+                  <div>
+                    <span className="text-muted-foreground">{t('conversations.model')}: </span>
+                    <span className="font-mono font-medium">{selectedResult?.model_name || readQuery.data?.metadata?.model_name}</span>
+                  </div>
+                )}
+                {(selectedResult?.source_originator || readQuery.data?.metadata?.source_originator) && (
+                  <div>
+                    <span className="text-muted-foreground">{t('conversations.originator')}: </span>
+                    <span>{selectedResult?.source_originator || readQuery.data?.metadata?.source_originator}</span>
+                  </div>
+                )}
+                {(selectedResult?.source_surface || readQuery.data?.metadata?.source_surface) && (
+                  <div>
+                    <span className="text-muted-foreground">{t('conversations.surface')}: </span>
+                    <span className="capitalize">{selectedResult?.source_surface || readQuery.data?.metadata?.source_surface}</span>
+                  </div>
+                )}
+                {(selectedResult?.source_version || readQuery.data?.metadata?.source_version) && (
+                  <div>
+                    <span className="text-muted-foreground">{t('conversations.clientVersion')}: </span>
+                    <span className="font-mono">{selectedResult?.source_version || readQuery.data?.metadata?.source_version}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Path & Controls */}
+            <div className="space-y-3 text-xs">
             <div className="p-2.5 rounded-lg bg-muted/40 border border-border/60 space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground font-medium">{t('conversations.filePath')}:</span>

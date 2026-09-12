@@ -661,6 +661,8 @@ async def api_conversations_search(request: Request) -> Response:
     project = request.query_params.get("project") or None
     conversation_id = request.query_params.get("conversation_id") or None
     parent_thread_id = request.query_params.get("parent_thread_id") or None
+    source_system = request.query_params.get("source_system") or None
+    thread_source = request.query_params.get("thread_source") or None
     limit = bounded_int(request.query_params.get("limit"), 1, 100, 10)
     try:
         res = state.service.conversation_retrieval.search(
@@ -668,6 +670,8 @@ async def api_conversations_search(request: Request) -> Response:
             project=project,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
             limit=limit,
         )
         return JSONResponse(res)
@@ -686,6 +690,8 @@ async def api_conversations_recall(request: Request) -> Response:
     project = request.query_params.get("project") or None
     conversation_id = request.query_params.get("conversation_id") or None
     parent_thread_id = request.query_params.get("parent_thread_id") or None
+    source_system = request.query_params.get("source_system") or None
+    thread_source = request.query_params.get("thread_source") or None
     try:
         res = state.service.conversation_retrieval.recall(
             query=query,
@@ -693,6 +699,8 @@ async def api_conversations_recall(request: Request) -> Response:
             project=project,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
         )
         return JSONResponse(res)
     except Exception as exc:

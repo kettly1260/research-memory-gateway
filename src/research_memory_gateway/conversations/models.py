@@ -95,6 +95,14 @@ class NormalizedConversation:
 
     @property
     def parent_thread_id(self) -> str:
+        pid = self.session_meta.get("parent_thread_id")
+        if pid:
+            return str(pid)
+        src = self.session_meta.get("source")
+        if isinstance(src, dict):
+            spawn = src.get("subagent", {}).get("thread_spawn", {})
+            if isinstance(spawn, dict) and spawn.get("parent_thread_id"):
+                return str(spawn["parent_thread_id"])
         return str(self.session_meta.get("parent_thread_id") or "")
 
     @property
@@ -103,4 +111,58 @@ class NormalizedConversation:
 
     @property
     def agent_path(self) -> str:
+        ap = self.session_meta.get("agent_path")
+        if ap:
+            return str(ap)
+        src = self.session_meta.get("source")
+        if isinstance(src, dict):
+            spawn = src.get("subagent", {}).get("thread_spawn", {})
+            if isinstance(spawn, dict) and spawn.get("agent_path"):
+                return str(spawn["agent_path"])
         return str(self.session_meta.get("agent_path") or "")
+
+    @property
+    def source_system(self) -> str:
+        explicit = self.session_meta.get("source_system")
+        if explicit:
+            return str(explicit)
+        return "codex"
+
+    @property
+    def source_originator(self) -> str:
+        return str(self.session_meta.get("originator") or self.session_meta.get("source_originator") or "")
+
+    @property
+    def source_surface(self) -> str:
+        explicit = self.session_meta.get("source_surface")
+        if explicit:
+            return str(explicit)
+        src = self.session_meta.get("source")
+        if isinstance(src, str):
+            return src
+        if isinstance(src, dict):
+            orig = str(self.session_meta.get("originator") or "").lower()
+            if "desktop" in orig:
+                return "desktop"
+            return "subagent"
+        return ""
+
+    @property
+    def source_version(self) -> str:
+        return str(self.session_meta.get("cli_version") or self.session_meta.get("source_version") or "")
+
+    @property
+    def model_provider(self) -> str:
+        return str(self.session_meta.get("model_provider") or "")
+
+    @property
+    def model_name(self) -> str:
+        explicit = self.session_meta.get("model_name") or self.session_meta.get("model")
+        if explicit:
+            return str(explicit)
+        base_inst = self.session_meta.get("base_instructions")
+        if isinstance(base_inst, dict):
+            prov = base_inst.get("provenance")
+            if isinstance(prov, dict) and prov.get("model"):
+                return str(prov["model"])
+        return ""

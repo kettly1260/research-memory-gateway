@@ -283,6 +283,8 @@ export interface ConversationStatusResponse {
   embedding_model?: string | null
   embedding_version?: string | null
   embedding_dimension?: number | null
+  source_system_distribution?: Record<string, number>
+  thread_source_distribution?: Record<string, number>
 }
 
 export interface ConversationSourceAnchor {
@@ -308,6 +310,13 @@ export interface ConversationSearchResultItem {
   source_anchors?: ConversationSourceAnchor[]
   parent_thread_id?: string
   thread_source?: string
+  source_system?: string
+  source_originator?: string
+  source_surface?: string
+  source_version?: string
+  model_provider?: string
+  model_name?: string
+  agent_path?: string
 }
 
 export interface ConversationSearchResponse {
@@ -327,6 +336,13 @@ export interface ConversationRecallItem {
   source_anchors: ConversationSourceAnchor[]
   parent_thread_id: string
   thread_source: string
+  source_system?: string
+  source_originator?: string
+  source_surface?: string
+  source_version?: string
+  model_provider?: string
+  model_name?: string
+  agent_path?: string
 }
 
 export interface ConversationRecallResponse {
@@ -339,8 +355,26 @@ export interface ConversationRecallResponse {
   items: ConversationRecallItem[]
 }
 
+export interface ConversationReadMetadata {
+  source?: string
+  source_system?: string
+  source_originator?: string
+  source_surface?: string
+  source_version?: string
+  model_provider?: string
+  model_name?: string
+  thread_source?: string
+  parent_thread_id?: string
+  agent_path?: string
+  conversation_id?: string
+  created?: string
+  updated?: string
+  completion_status?: string
+}
+
 export interface ConversationReadResponse {
   path: string
   heading?: string | null
   content: string
+  metadata?: ConversationReadMetadata
 }

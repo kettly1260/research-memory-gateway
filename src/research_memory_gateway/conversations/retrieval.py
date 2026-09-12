@@ -27,6 +27,13 @@ class HybridSearchResult:
     source_anchors: list[dict[str, str]] = field(default_factory=list)
     parent_thread_id: str = ""
     thread_source: str = ""
+    source_system: str = "codex"
+    source_originator: str = ""
+    source_surface: str = ""
+    source_version: str = ""
+    model_provider: str = ""
+    model_name: str = ""
+    agent_path: str = ""
 
 
 @dataclass
@@ -39,6 +46,13 @@ class RecallContextItem:
     source_anchors: list[dict[str, str]] = field(default_factory=list)
     parent_thread_id: str = ""
     thread_source: str = ""
+    source_system: str = "codex"
+    source_originator: str = ""
+    source_surface: str = ""
+    source_version: str = ""
+    model_provider: str = ""
+    model_name: str = ""
+    agent_path: str = ""
 
 
 class ConversationRetrievalService:
@@ -61,6 +75,8 @@ class ConversationRetrievalService:
         project: str | None = None,
         conversation_id: str | None = None,
         parent_thread_id: str | None = None,
+        source_system: str | None = None,
+        thread_source: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         lexical_candidates = self.index_db.search_fts(
@@ -68,6 +84,8 @@ class ConversationRetrievalService:
             limit=limit * 2,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
         )
 
         vector_candidates: list[SearchResult] = []
@@ -83,6 +101,8 @@ class ConversationRetrievalService:
                         limit=limit * 2,
                         conversation_id=conversation_id,
                         parent_thread_id=parent_thread_id,
+                        source_system=source_system,
+                        thread_source=thread_source,
                     )
                 else:
                     fallback_to_lexical = True
@@ -148,6 +168,13 @@ class ConversationRetrievalService:
                     source_anchors=base.source_anchors,
                     parent_thread_id=base.parent_thread_id,
                     thread_source=base.thread_source,
+                    source_system=base.source_system,
+                    source_originator=base.source_originator,
+                    source_surface=base.source_surface,
+                    source_version=base.source_version,
+                    model_provider=base.model_provider,
+                    model_name=base.model_name,
+                    agent_path=base.agent_path,
                 )
             )
 
@@ -168,11 +195,30 @@ class ConversationRetrievalService:
             raise FileNotFoundError(f"File not found: {safe_path}")
 
         text = safe_path.read_text(encoding="utf-8")
+        from .vault_writer import parse_frontmatter
+        fm, _ = parse_frontmatter(text)
+        metadata = {
+            "source": fm.get("source"),
+            "source_system": fm.get("source_system") or (fm.get("source") if fm.get("source") == "codex" else "") or "codex",
+            "source_originator": fm.get("source_originator") or "",
+            "source_surface": fm.get("source_surface") or "",
+            "source_version": fm.get("source_version") or "",
+            "model_provider": fm.get("model_provider") or "",
+            "model_name": fm.get("model_name") or "",
+            "thread_source": fm.get("thread_source") or "",
+            "parent_thread_id": fm.get("parent_thread_id") or "",
+            "agent_path": fm.get("agent_path") or "",
+            "conversation_id": fm.get("conversation_id") or "",
+            "created": fm.get("created") or "",
+            "updated": fm.get("updated") or "",
+            "completion_status": fm.get("completion_status") or "",
+        }
         if not heading:
             return {
                 "path": str(safe_path),
                 "heading": None,
                 "content": text,
+                "metadata": metadata,
             }
 
         # 若指定了 heading，提取对应部分
@@ -200,6 +246,7 @@ class ConversationRetrievalService:
             "path": str(safe_path),
             "heading": heading,
             "content": "\n".join(matched_lines) if matched_lines else text,
+            "metadata": metadata,
         }
 
     def recall(
@@ -210,12 +257,16 @@ class ConversationRetrievalService:
         project: str | None = None,
         conversation_id: str | None = None,
         parent_thread_id: str | None = None,
+        source_system: str | None = None,
+        thread_source: str | None = None,
     ) -> dict[str, Any]:
         search_res = self.search(
             query,
             project=project,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
             limit=8,
         )
         items = search_res.get("results", [])
@@ -268,6 +319,13 @@ class ConversationRetrievalService:
                     source_anchors=anchors,
                     parent_thread_id=item.get("parent_thread_id", ""),
                     thread_source=item.get("thread_source", ""),
+                    source_system=item.get("source_system", "codex"),
+                    source_originator=item.get("source_originator", ""),
+                    source_surface=item.get("source_surface", ""),
+                    source_version=item.get("source_version", ""),
+                    model_provider=item.get("model_provider", ""),
+                    model_name=item.get("model_name", ""),
+                    agent_path=item.get("agent_path", ""),
                 )
             )
 

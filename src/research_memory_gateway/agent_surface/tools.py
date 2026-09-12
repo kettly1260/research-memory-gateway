@@ -124,6 +124,8 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
         project: str | None = None,
         conversation_id: str | None = None,
         parent_thread_id: str | None = None,
+        source_system: str | None = None,
+        thread_source: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         """Search across conversation Markdown archives using hybrid lexical and vector ranking.
@@ -135,6 +137,8 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
             project=project,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
             limit=limit,
         )
 
@@ -153,6 +157,8 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
         project: str | None = None,
         conversation_id: str | None = None,
         parent_thread_id: str | None = None,
+        source_system: str | None = None,
+        thread_source: str | None = None,
     ) -> dict[str, Any]:
         """Retrieve and format relevant conversation excerpts for direct agent context.
 
@@ -164,4 +170,6 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
             project=project,
             conversation_id=conversation_id,
             parent_thread_id=parent_thread_id,
+            source_system=source_system,
+            thread_source=thread_source,
         )

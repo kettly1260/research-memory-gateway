@@ -380,6 +380,8 @@ export function useConversationSearch(params: {
   project?: string
   conversation_id?: string
   parent_thread_id?: string
+  source_system?: string
+  thread_source?: string
   limit?: string
 }, enabled: boolean = true) {
   return useQuery({
@@ -395,6 +397,8 @@ export function useConversationRecall(params: {
   project?: string
   conversation_id?: string
   parent_thread_id?: string
+  source_system?: string
+  thread_source?: string
 }, enabled: boolean = true) {
   return useQuery({
     queryKey: queryKeys.conversations.recall(params as Record<string, string | undefined>),
