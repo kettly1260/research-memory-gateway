@@ -168,7 +168,12 @@ class ImportManifest:
         managed_sha = managed_output_sha256 or ""
         manual_sha = manual_region_sha256 or ""
 
-        if output.is_file():
+        try:
+            output_is_file = output.is_file()
+        except (OSError, ValueError):
+            output_is_file = False
+
+        if output_is_file:
             try:
                 if not output_sha:
                     output_sha = _sha256_file(output)

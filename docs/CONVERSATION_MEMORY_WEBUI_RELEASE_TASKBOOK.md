@@ -2,7 +2,7 @@
 
 任务日期：2026-09-12  
 执行项目：`G:\LLM\memory`  
-目标版本：`v0.2.1`（`v0.2.0` 已发布 tag，但 CI 因无上限 `mcp>=1.2.0` 被 fresh resolve 到 MCP 2.x 后在 pytest collection 阶段失败；`v0.2.1` 固定 `mcp>=1.2.0,<2`）
+目标版本：`v0.2.2`（`v0.2.0` 因 MCP 2.x 无上限约束导致 CI collection 失败；`v0.2.1` 修复依赖并通过 CI/GHCR，但 NAS 原生实写暴露 Linux 255-byte 文件名限制；`v0.2.2` 追加 UTF-8 字节预算文件名与 manifest fail-closed 修复）
 执行性质：**Conversation Memory 使用层补齐 + 正式发布**；不是继续做 322-session 数据 rollout。
 
 ---

@@ -11,6 +11,7 @@ from research_memory_gateway.conversations.models import (
 from research_memory_gateway.conversations.vault_writer import (
     AUTOGEN_BEGIN,
     AUTOGEN_END,
+    MAX_FILENAME_BYTES,
     ObsidianConversationWriter,
 )
 
@@ -80,6 +81,39 @@ def test_writer_preserves_manual_section_and_emits_candidate(tmp_path: Path) -> 
     candidate_path = writer.write_candidate(conv)
     assert candidate_path.name.endswith(".candidate.md")
     assert candidate_path.exists()
+    assert out_path.exists()
+
+
+def test_writer_caps_multibyte_filename_by_utf8_bytes(tmp_path: Path) -> None:
+    writer = ObsidianConversationWriter(tmp_path / "vault")
+    ref = ExportSessionRef(
+        conversation_id="019ea2ad-9a74-75c2-bf10-4246ca00ab25",
+        title="使用学术研究套件阅读博士课题并查找文献验证高水平论文投稿可行性" * 12,
+        cwd="D:/Partition/F/Study",
+        updated_at="2026-06-07T10:00:00Z",
+        source_entry="files/0001/rollout.jsonl",
+        source_size_bytes=100,
+        source_sha256="abc",
+    )
+    conv = NormalizedConversation(
+        ref=ref,
+        archive_path="archive.zip",
+        archive_sha256="hash",
+        created_at="2026-06-07T10:00:00Z",
+        session_meta={},
+        messages=[
+            NormalizedMessage(
+                ordinal=1,
+                timestamp="2026-06-07T10:00:00Z",
+                role="user",
+                text="long title regression",
+            )
+        ],
+    )
+
+    out_path = writer.write(conv)
+    assert len(out_path.name.encode("utf-8")) <= MAX_FILENAME_BYTES
+    assert out_path.name.endswith(" - 019ea2ad.md")
     assert out_path.exists()
 
 
