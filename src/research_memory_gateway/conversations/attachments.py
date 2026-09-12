@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import re
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -16,6 +17,7 @@ URL_PATTERN = re.compile(r'https?://[^\s<>"\')]+')
 DATA_URI_PREFIX_PATTERN = re.compile(r'^(data:([^;,\s]+)(?:;[^,\s]+)*;base64,)')
 ZIP_ENTRY_PATTERN = re.compile(r'\bfiles/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*')
 ARTIFACT_PATTERN = re.compile(r'\b(?:artifact|tool_artifact):[A-Za-z0-9_.-]+')
+WINDOWS_ABSOLUTE_PATH_PATTERN = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 @dataclass
@@ -46,6 +48,21 @@ def _sha256_file(path: Path) -> str:
 def _is_within_allowlist(path: Path, allowlist: Sequence[str | Path]) -> bool:
     if not allowlist:
         return False
+
+    raw_target = str(path)
+    if WINDOWS_ABSOLUTE_PATH_PATTERN.match(raw_target):
+        canonical_target = _canonicalize_path(raw_target)
+        for root in allowlist:
+            raw_root = str(root)
+            if not WINDOWS_ABSOLUTE_PATH_PATTERN.match(raw_root):
+                continue
+            canonical_root = _canonicalize_path(raw_root)
+            if canonical_target == canonical_root or canonical_target.startswith(
+                canonical_root + "/"
+            ):
+                return True
+        return False
+
     resolved_target = path.resolve()
     for root in allowlist:
         try:
@@ -443,6 +460,28 @@ class AttachmentInventory:
                 size_bytes=fallback_size,
                 content_hash=fallback_hash,
                 status="unresolved",
+                resolved_path=None,
+                observed_locators=[clean_path_str],
+            )
+
+        # A Windows absolute locator can be explicitly allowlisted while this
+        # inventory is running on Linux (for example when NAS indexes an
+        # archive exported on Windows).  Treat it as a known-but-unavailable
+        # local path; never reinterpret ``D:\\...`` as a relative POSIX path
+        # and attempt to read/hash a coincidentally named file.
+        if WINDOWS_ABSOLUTE_PATH_PATTERN.match(clean_path_str) and os.name != "nt":
+            return AttachmentInventoryRecord(
+                conversation_id=conversation_id,
+                message_id=message_id,
+                tool_call_id=tool_call_id,
+                source_ordinal=ordinal,
+                locator_type="local_path",
+                original_locator=clean_path_str[:500],
+                canonical_locator=canonical_loc,
+                mime_or_extension=ext,
+                size_bytes=fallback_size,
+                content_hash=fallback_hash,
+                status="missing",
                 resolved_path=None,
                 observed_locators=[clean_path_str],
             )
