@@ -22,6 +22,7 @@ def make_export(
     *,
     extra_user_text: str = "",
     title: str = "Prototype Conversation",
+    extra_tail_records: list[dict] | None = None,
 ) -> tuple[Path, str]:
     conversation_id = "11111111-2222-3333-4444-555555555555"
     records = [
@@ -124,6 +125,8 @@ def make_export(
             },
         },
     ]
+    if extra_tail_records:
+        records.extend(extra_tail_records)
     raw = b"\n".join(
         json.dumps(record, ensure_ascii=False).encode("utf-8") for record in records
     ) + b"\n"
@@ -280,7 +283,35 @@ def test_pipeline_continued_conversation_reuses_original_path_when_title_changes
 
     archive_v2, _ = make_export(
         second_dir,
-        extra_user_text="This conversation continued with new content.",
+        extra_tail_records=[
+            {
+                "timestamp": "2026-09-10T01:10:00Z",
+                "ordinal": 9,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "msg-user-2",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Follow-up: why did the first run fail?"}
+                    ],
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "turn-2"},
+                },
+            },
+            {
+                "timestamp": "2026-09-10T01:10:05Z",
+                "ordinal": 10,
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "id": "msg-assistant-2",
+                    "role": "assistant",
+                    "phase": "final_answer",
+                    "content": [{"type": "output_text", "text": "Continuation answer."}],
+                    "internal_chat_message_metadata_passthrough": {"turn_id": "turn-2"},
+                },
+            },
+        ],
         title="Renamed After Continuation",
     )
     second_pipeline = ConversationIngestionPipeline(
@@ -291,11 +322,11 @@ def test_pipeline_continued_conversation_reuses_original_path_when_title_changes
     second = second_pipeline.run([conversation_id])
 
     assert second[0].status == "written"
-    assert second[0].reason == "source_changed"
+    assert second[0].reason == "source_continued"
     assert Path(second[0].output_path) == original_path.resolve()
     assert original_path.exists()
     updated_text = original_path.read_text(encoding="utf-8")
-    assert "This conversation continued with new content." in updated_text
+    assert "Follow-up: why did the first run fail?" in updated_text
     assert "manual continuity note" in updated_text
     assert len(list(output_root.rglob("*.md"))) == 1
     record = manifest.get_record(conversation_id)

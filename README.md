@@ -573,6 +573,35 @@ python scripts/conversation_cli.py validate
 python scripts/smoke_bge_m3.py
 ```
 
+### Multi-source identity & dedup（v0.2.4）
+
+```powershell
+# 8. 只读身份/去重一致性审计（pending candidates、别名、孤儿记录、重复输出路径）
+python scripts/conversation_cli.py dedup-audit --dir "path/to/conversation-root" --json-report audit.json
+
+# 9. 列出重复评审候选
+python scripts/conversation_cli.py dedup-list --dir "path/to/conversation-root" --status pending
+
+# 10. 查看单个候选两侧的指纹与证据
+python scripts/conversation_cli.py dedup-show 3 --dir "path/to/conversation-root"
+
+# 11. 人工裁决（必须显式二选一；--confirm-same 保留两份 source note，仅做逻辑归并）
+python scripts/conversation_cli.py dedup-resolve 3 --confirm-same --dir "path/to/conversation-root"
+python scripts/conversation_cli.py dedup-resolve 3 --reject --dir "path/to/conversation-root"
+
+# 12. 查看某会话的 source/canonical 身份与 snapshot 历史
+python scripts/conversation_cli.py identity-show "conversation-id" --dir "path/to/conversation-root"
+
+# 13. 对既有 manifest 执行幂等的 legacy -> v2 identity 迁移
+python scripts/conversation_cli.py migrate-identity --dir "path/to/conversation-root"
+```
+
+每条 conversation 的 provenance 由 `(source_system, account-namespace hash,
+provider conversation/thread/branch id)` 唯一标识（deterministic `srcv1_<sha256>`），
+同逻辑会话跨平台重复导出时只进入 `possible_duplicate` 评审队列，
+跨 source 相似度永不自动合并。`conversation_recall` 默认按 confirmed canonical
+collapse 跨源重复段（`collapse_canonical=false` 可审计回看源级结果）。
+
 Conversation import manifests use one archive-local contract: every staging or
 canonical conversation root owns its rebuildable ledger at
 `<conversation_root>/.ai-memory/manifest.sqlite`. The legacy

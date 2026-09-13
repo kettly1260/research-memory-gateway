@@ -12,6 +12,7 @@ from research_memory_gateway.config import AppConfig, load_config
 from research_memory_gateway.retrieval import EmbeddingClient
 from .attachments import AttachmentInventory
 from .codex_export import CodexExportReader
+from .identity_store import ConversationIdentityStore, load_legacy_import_rows
 from .index import ConversationIndexDatabase
 from .manifest import ImportManifest
 from .pipeline import ConversationIngestionPipeline
@@ -53,8 +54,11 @@ def _record_manifest_indexing(
     metadata = idx.index_metadata_for_file(path)
     if not metadata:
         return
+    # The legacy ledger is keyed by the bare provider conversation id; the
+    # documents.id may be a v0.2.4 source key for multi-source notes.
+    record_key = metadata.get("legacy_conversation_id") or metadata["conversation_id"]
     ImportManifest(manifest_path).record_indexing(
-        metadata["conversation_id"],
+        record_key,
         index_source_hash=metadata["index_source_hash"],
         last_indexed_at=metadata["last_indexed_at"],
         embedding_model=metadata["embedding_model"],
@@ -76,7 +80,8 @@ def _manifest_index_is_stale(
     metadata = idx.index_metadata_for_file(path)
     if not metadata:
         return False
-    record = ImportManifest(manifest_path).get_record(metadata["conversation_id"])
+    record_key = metadata.get("legacy_conversation_id") or metadata["conversation_id"]
+    record = ImportManifest(manifest_path).get_record(record_key)
     if not record:
         return False
     return bool(
@@ -440,6 +445,320 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_identity_root(cfg: AppConfig, dir_value: str | None) -> Path:
+    """Resolve the conversation root whose archive-local manifest holds identity tables."""
+    if dir_value:
+        return Path(dir_value).resolve()
+    return cfg.conversation_archive.resolve_staging_dir()
+
+
+def _candidate_display(store: ConversationIdentityStore, candidate) -> dict[str, Any]:
+    def side(source_key: str) -> dict[str, Any]:
+        record = store.get_source_record(source_key)
+        if record is None:
+            return {"source_key": source_key, "missing": True}
+        return {
+            "source_key": record.source_key,
+            "canonical_conversation_id": record.canonical_conversation_id,
+            "source_system": record.source_system,
+            "source_conversation_id": record.source_conversation_id,
+            "output_path": record.output_path,
+            "message_count": record.message_count,
+            "ordered_message_hash": record.ordered_message_hash,
+            "message_set_hash": record.message_set_hash,
+            "first_seen_at": record.first_seen_at,
+            "last_seen_at": record.last_seen_at,
+        }
+
+    return {
+        "candidate_id": candidate.candidate_id,
+        "candidate_type": candidate.candidate_type,
+        "status": candidate.status,
+        "score": candidate.score,
+        "evidence": candidate.evidence(),
+        "created_at": candidate.created_at,
+        "reviewed_at": candidate.reviewed_at,
+        "left": side(candidate.left_source_key),
+        "right": side(candidate.right_source_key),
+    }
+
+
+def cmd_dedup_audit(args: argparse.Namespace) -> int:
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    store = ConversationIdentityStore(manifest_path)
+
+    candidates = store.list_candidates()
+    pending = [c for c in candidates if c.status == "pending"]
+    aliases: list[dict[str, str]] = []
+    with store._connect() as connection:
+        for row in connection.execute(
+            "SELECT alias_canonical_id, active_canonical_id, created_at, reason FROM canonical_aliases"
+        ).fetchall():
+            aliases.append(dict(row))
+    orphans = store.list_orphan_source_records()
+    duplicate_paths = store.duplicate_output_paths()
+    source_key_collisions = store.source_key_collision_count()
+
+    # Canonical id collisions: two different active canonical rows pointing at
+    # the same derived uuid5 would indicate the derivation broke.
+    canonical_ids: dict[str, int] = {}
+    with store._connect() as connection:
+        for row in connection.execute(
+            "SELECT canonical_conversation_id, COUNT(*) FROM conversation_source_records GROUP BY 1"
+        ).fetchall():
+            canonical_ids[row[0]] = int(row[1])
+    canonical_collisions = [
+        {"canonical_conversation_id": cid, "source_records": n}
+        for cid, n in sorted(canonical_ids.items())
+        if n > 1
+    ]
+    # Same canonical group must not contain two records claiming one output path.
+    report = {
+        "manifest_path": str(manifest_path),
+        "identity_stats": store.identity_stats(),
+        "pending_candidates": [c.candidate_id for c in pending],
+        "pending_candidate_count": len(pending),
+        "candidate_count": len(candidates),
+        "canonical_aliases": aliases,
+        "orphan_source_records": [r.source_key for r in orphans],
+        "duplicate_output_paths": [
+            {"output_path": path, "count": n} for path, n in duplicate_paths
+        ],
+        "source_key_collisions": source_key_collisions,
+        "canonical_collisions": canonical_collisions,
+    }
+    if getattr(args, "json_report", None):
+        Path(args.json_report).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_dedup_list(args: argparse.Namespace) -> int:
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    store = ConversationIdentityStore(manifest_path)
+    candidates = store.list_candidates(
+        status=getattr(args, "status", None),
+        source_system=getattr(args, "source_system", None),
+        candidate_type=getattr(args, "candidate_type", None),
+    )
+    payload = {
+        "count": len(candidates),
+        "candidates": [_candidate_display(store, c) for c in candidates],
+    }
+    if getattr(args, "json_report", None):
+        Path(args.json_report).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_dedup_show(args: argparse.Namespace) -> int:
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    store = ConversationIdentityStore(manifest_path)
+    candidate = store.get_candidate(int(args.candidate_id))
+    if candidate is None:
+        print(f"Error: Unknown candidate id: {args.candidate_id}", file=sys.stderr)
+        return 1
+    payload = _candidate_display(store, candidate)
+    if getattr(args, "json_report", None):
+        Path(args.json_report).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _refresh_index_canonical_metadata(
+    cfg: AppConfig,
+    *,
+    source_keys: list[str],
+    canonical_conversation_id: str,
+) -> bool:
+    """Point indexed documents/sections at the winning canonical id.
+
+    Metadata-only update: contents, vectors and paths are untouched.  Returns
+    True when the index database was found and updated.
+    """
+    try:
+        db_path = cfg.conversation_archive.resolve_index_path()
+    except (PermissionError, ValueError):
+        return False
+    if not db_path.exists():
+        return False
+    with sqlite3.connect(db_path) as conn:
+        for source_key in source_keys:
+            for table in ("conversation_documents", "conversation_sections"):
+                try:
+                    conn.execute(
+                        f"UPDATE {table} SET canonical_conversation_id = ? WHERE source_key = ?",
+                        (canonical_conversation_id, source_key),
+                    )
+                except sqlite3.OperationalError:
+                    return False
+    return True
+
+
+def cmd_dedup_resolve(args: argparse.Namespace) -> int:
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    confirm_same = getattr(args, "confirm_same", False)
+    reject = getattr(args, "reject", False)
+    if confirm_same == reject:
+        print(
+            "Error: dedup-resolve requires exactly one explicit decision: --confirm-same or --reject",
+            file=sys.stderr,
+        )
+        return 2
+    store = ConversationIdentityStore(manifest_path)
+    candidate = store.get_candidate(int(args.candidate_id))
+    if candidate is None:
+        print(f"Error: Unknown candidate id: {args.candidate_id}", file=sys.stderr)
+        return 1
+
+    if reject:
+        updated = store.resolve_candidate(
+            candidate.candidate_id, decision="rejected", note=getattr(args, "note", "") or ""
+        )
+        payload = {
+            "candidate_id": updated.candidate_id,
+            "decision": "rejected",
+            "status": updated.status,
+            "note": "Source records and canonical conversations were left unchanged.",
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    # --confirm-same: link both source records under one active canonical.
+    left = store.get_source_record(candidate.left_source_key)
+    right = store.get_source_record(candidate.right_source_key)
+    if left is None or right is None:
+        print("Error: Both candidate source records must exist.", file=sys.stderr)
+        return 1
+    winner_key = getattr(args, "winner_source_key", None) or ""
+    if winner_key:
+        if winner_key not in {left.source_key, right.source_key}:
+            print(
+                f"Error: --winner-source-key must be one of the candidate sides: "
+                f"{left.source_key}, {right.source_key}",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        # Deterministic default: the first-seen record wins; ties break on key.
+        winner_key = sorted(
+            [left, right], key=lambda r: (r.first_seen_at, r.source_key)
+        )[0].source_key
+    # Persist the review decision first (also writes the dedup_decisions row).
+    store.resolve_candidate(
+        candidate.candidate_id, decision="confirmed_same", note=getattr(args, "note", "") or ""
+    )
+    winner_canonical = store.link_sources_to_canonical(
+        left.source_key,
+        right.source_key,
+        winner_source_key=winner_key,
+    )
+    index_updated = _refresh_index_canonical_metadata(
+        cfg,
+        source_keys=[left.source_key, right.source_key],
+        canonical_conversation_id=winner_canonical,
+    )
+    payload = {
+        "candidate_id": candidate.candidate_id,
+        "decision": "confirmed_same",
+        "winner_source_key": winner_key,
+        "active_canonical_conversation_id": winner_canonical,
+        "loser_alias_resolved": True,
+        "source_records_removed": 0,
+        "markdown_notes_removed": 0,
+        "index_canonical_metadata_updated": index_updated,
+        "note": "Both source notes remain on disk; the loser canonical resolves via alias.",
+    }
+    if getattr(args, "json_report", None):
+        Path(args.json_report).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_identity_show(args: argparse.Namespace) -> int:
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    store = ConversationIdentityStore(manifest_path)
+    key = args.conversation_or_source_key
+    if key.startswith("srcv1_"):
+        records = [r for r in [store.get_source_record(key)] if r is not None]
+    else:
+        records = store.find_source_records_by_conversation(key)
+    if not records:
+        print(f"Error: No source records found for: {key}", file=sys.stderr)
+        return 1
+    payload: dict[str, Any] = {"query": key, "source_record_count": len(records), "records": []}
+    for record in records:
+        canonical = store.resolve_canonical(record.canonical_conversation_id)
+        payload["records"].append(
+            {
+                "source_key": record.source_key,
+                "source_system": record.source_system,
+                "source_conversation_id": record.source_conversation_id,
+                "source_thread_id": record.source_thread_id,
+                "source_branch_id": record.source_branch_id,
+                "canonical_conversation_id": record.canonical_conversation_id,
+                "active_canonical_conversation_id": canonical.canonical_conversation_id
+                if canonical
+                else "",
+                "output_path": record.output_path,
+                "message_count": record.message_count,
+                "normalized_transcript_sha256": record.normalized_transcript_sha256,
+                "ordered_message_hash": record.ordered_message_hash,
+                "message_set_hash": record.message_set_hash,
+                "fingerprint_version": record.fingerprint_version,
+                "parser_version": record.parser_version,
+                "schema_version": record.schema_version,
+                "first_seen_at": record.first_seen_at,
+                "last_seen_at": record.last_seen_at,
+                "snapshots": [s.__dict__ for s in store.list_snapshots(record.source_key)],
+            }
+        )
+    if getattr(args, "json_report", None):
+        Path(args.json_report).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_migrate_identity(args: argparse.Namespace) -> int:
+    """Run the additive legacy -> v2 identity migration on one manifest DB."""
+    cfg = _load_app_config(args.config)
+    root = _resolve_identity_root(cfg, getattr(args, "dir", None))
+    manifest_path = cfg.conversation_archive.resolve_archive_manifest_path(root)
+    if not manifest_path.exists():
+        print(f"Error: Manifest database not found: {manifest_path}", file=sys.stderr)
+        return 1
+    store = ConversationIdentityStore(manifest_path)
+    legacy_rows = load_legacy_import_rows(manifest_path)
+    report = store.migrate_legacy_imports(legacy_rows)
+    print(json.dumps(report.__dict__, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_search(args: argparse.Namespace) -> int:
     cfg = _load_app_config(args.config)
     try:
@@ -469,6 +788,10 @@ def cmd_search(args: argparse.Namespace) -> int:
         project=args.project,
         conversation_id=args.conversation_id,
         parent_thread_id=getattr(args, "parent_thread_id", None),
+        source_system=getattr(args, "source_system", None),
+        canonical_conversation_id=getattr(args, "canonical_conversation_id", None),
+        source_key=getattr(args, "source_key", None),
+        source_conversation_id=getattr(args, "source_conversation_id", None),
         limit=args.limit,
     )
     if getattr(args, "json_report", None):
@@ -579,6 +902,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--project", help="Filter by project")
     p_search.add_argument("--conversation-id", help="Filter by conversation ID")
     p_search.add_argument("--parent-thread-id", help="Filter by parent thread ID")
+    p_search.add_argument("--source-system", help="Filter by source system")
+    p_search.add_argument("--canonical-conversation-id", help="Filter by canonical conversation ID")
+    p_search.add_argument("--source-key", help="Filter by source key")
+    p_search.add_argument("--source-conversation-id", help="Filter by source conversation ID")
     p_search.add_argument("--limit", type=int, default=10, help="Max results")
     p_search.add_argument("--json-report", help="Output path for JSON report")
     p_search.set_defaults(func=cmd_search)
@@ -589,6 +916,58 @@ def build_parser() -> argparse.ArgumentParser:
     p_val.add_argument("--staging-dir", help="Path to staging notes folder")
     p_val.add_argument("--json-report", help="Output path for JSON report")
     p_val.set_defaults(func=cmd_validate)
+
+    # 8. dedup-audit (v0.2.4)
+    p_audit2 = subparsers.add_parser("dedup-audit", help="Read-only identity/dedup consistency audit")
+    p_audit2.add_argument("--config", help="Path to config.yaml")
+    p_audit2.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_audit2.add_argument("--json-report", help="Output path for JSON report")
+    p_audit2.set_defaults(func=cmd_dedup_audit)
+
+    # 9. dedup-list
+    p_list = subparsers.add_parser("dedup-list", help="List duplicate review candidates")
+    p_list.add_argument("--config", help="Path to config.yaml")
+    p_list.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_list.add_argument("--status", choices=["pending", "confirmed_same", "rejected"], help="Filter by status")
+    p_list.add_argument("--source-system", help="Filter by source system")
+    p_list.add_argument("--candidate-type", help="Filter by candidate type")
+    p_list.add_argument("--json-report", help="Output path for JSON report")
+    p_list.set_defaults(func=cmd_dedup_list)
+
+    # 10. dedup-show
+    p_show = subparsers.add_parser("dedup-show", help="Show one duplicate candidate in detail")
+    p_show.add_argument("candidate_id", type=int, help="Candidate id")
+    p_show.add_argument("--config", help="Path to config.yaml")
+    p_show.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_show.add_argument("--json-report", help="Output path for JSON report")
+    p_show.set_defaults(func=cmd_dedup_show)
+
+    # 11. dedup-resolve
+    p_resolve = subparsers.add_parser("dedup-resolve", help="Confirm or reject a duplicate candidate")
+    p_resolve.add_argument("candidate_id", type=int, help="Candidate id")
+    resolve_group = p_resolve.add_mutually_exclusive_group(required=True)
+    resolve_group.add_argument("--confirm-same", action="store_true", help="Explicitly confirm the pair is the same conversation")
+    resolve_group.add_argument("--reject", action="store_true", help="Explicitly reject the pair (records stay independent)")
+    p_resolve.add_argument("--winner-source-key", default="", help="With --confirm-same: which source keeps the active canonical (default: first seen)")
+    p_resolve.add_argument("--note", default="", help="Optional review note stored with the decision")
+    p_resolve.add_argument("--config", help="Path to config.yaml")
+    p_resolve.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_resolve.add_argument("--json-report", help="Output path for JSON report")
+    p_resolve.set_defaults(func=cmd_dedup_resolve)
+
+    # 12. identity-show
+    p_ident = subparsers.add_parser("identity-show", help="Show source/canonical identity for a conversation")
+    p_ident.add_argument("conversation_or_source_key", help="Bare conversation id or srcv1_ source key")
+    p_ident.add_argument("--config", help="Path to config.yaml")
+    p_ident.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_ident.add_argument("--json-report", help="Output path for JSON report")
+    p_ident.set_defaults(func=cmd_identity_show)
+
+    # 13. migrate-identity
+    p_migrate = subparsers.add_parser("migrate-identity", help="Run additive legacy -> v2 identity migration")
+    p_migrate.add_argument("--config", help="Path to config.yaml")
+    p_migrate.add_argument("--dir", help="Conversation root containing .ai-memory/manifest.sqlite")
+    p_migrate.set_defaults(func=cmd_migrate_identity)
 
     return parser
 

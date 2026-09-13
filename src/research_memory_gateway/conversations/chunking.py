@@ -50,6 +50,7 @@ class HeadingChunker:
         *,
         embedding_model: str = "",
         embedding_version: str = "v1",
+        chunk_key: str = "",
     ) -> tuple[dict[str, Any], list[ConversationChunk]]:
         target = Path(path)
         text = target.read_text(encoding="utf-8")
@@ -58,6 +59,7 @@ class HeadingChunker:
             vault_path=str(target.resolve()),
             embedding_model=embedding_model,
             embedding_version=embedding_version,
+            chunk_key=chunk_key,
         )
 
     def chunk_text(
@@ -67,6 +69,7 @@ class HeadingChunker:
         vault_path: str = "",
         embedding_model: str = "",
         embedding_version: str = "v1",
+        chunk_key: str = "",
     ) -> tuple[dict[str, Any], list[ConversationChunk]]:
         frontmatter: dict[str, Any] = {}
         body = text
@@ -80,6 +83,10 @@ class HeadingChunker:
                 body = parts[2]
 
         conversation_id = str(frontmatter.get("conversation_id") or "")
+        # v0.2.4: chunk ids may be scoped by source key so that two platforms
+        # reusing the same bare provider id never overwrite each other's
+        # sections.  Default stays the legacy conversation id.
+        id_scope = chunk_key or conversation_id
         projects = list(frontmatter.get("projects") or [])
         date = str(frontmatter.get("created") or "")
 
@@ -119,7 +126,7 @@ class HeadingChunker:
                 content_hash = _sha256_text(norm_sub)
                 emb_id = compute_embedding_identity(norm_sub, embedding_model, embedding_version)
                 chunk = ConversationChunk(
-                    chunk_id=f"{conversation_id}#{chunk_counter}",
+                    chunk_id=f"{id_scope}#{chunk_counter}",
                     conversation_id=conversation_id,
                     vault_path=vault_path,
                     heading_path=list(current_headings),

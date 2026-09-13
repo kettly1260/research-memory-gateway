@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .identity import ConversationSourceIdentity
 
 
 PARSER_VERSION = "codex-export-v1.3"
 SCHEMA_VERSION = "ai-conversation-v1"
+
+# v0.2.4: the global constants above describe the Codex exporter.  Each reader
+# exposes its own parser/schema version; PARSER_VERSION stays as a
+# compatibility alias for existing callers and tests.
+CODEX_PARSER_VERSION = PARSER_VERSION
+CODEX_SCHEMA_VERSION = SCHEMA_VERSION
 
 
 @dataclass(frozen=True)
@@ -20,6 +29,28 @@ class ExportSessionRef:
     relative_rollout_path: str = ""
     source_instance: Any = None
     session_index_entry: dict[str, Any] = field(default_factory=dict)
+    # v0.2.4 source identity.  ``conversation_id`` remains the legacy bare
+    # provider id for compatibility; new identity lookups must use
+    # source_conversation_id + source_system + account namespace instead.
+    source_system: str = "codex"
+    source_account_namespace_hash: str = ""
+    source_thread_id: str = ""
+    source_branch_id: str = ""
+
+    @property
+    def source_conversation_id(self) -> str:
+        return self.conversation_id
+
+    def source_identity(self) -> "ConversationSourceIdentity":
+        from .identity import ConversationSourceIdentity
+
+        return ConversationSourceIdentity(
+            source_system=self.source_system or "codex",
+            source_account_namespace_hash=self.source_account_namespace_hash,
+            source_conversation_id=self.source_conversation_id,
+            source_thread_id=self.source_thread_id,
+            source_branch_id=self.source_branch_id,
+        )
 
 
 @dataclass(frozen=True)

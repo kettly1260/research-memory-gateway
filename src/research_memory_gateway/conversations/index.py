@@ -36,6 +36,12 @@ class SearchResult:
     model_provider: str = ""
     model_name: str = ""
     agent_path: str = ""
+    # v0.2.4 canonical identity layer
+    source_key: str = ""
+    canonical_conversation_id: str = ""
+    source_conversation_id: str = ""
+    source_thread_id: str = ""
+    source_branch_id: str = ""
 
 
 def _utc_now() -> str:
@@ -278,16 +284,52 @@ class ConversationIndexDatabase:
         path: str | Path,
         *,
         dry_run: bool = False,
+        identity_lookup: Any = None,
     ) -> int:
         target = Path(path)
         if not target.exists():
             raise FileNotFoundError(f"Markdown file not found: {target}")
 
         model_name = self.embedding_client.model if (self.embedding_client and self.embedding_client.enabled) else ""
-        frontmatter, chunks = self.chunker.chunk_file(
-            target,
+        text = target.read_text(encoding="utf-8")
+        from .vault_writer import parse_frontmatter
+
+        parsed_fm, _ = parse_frontmatter(text)
+        conv_id = str(parsed_fm.get("conversation_id") or "")
+
+        # v0.2.4 canonical identity: prefer note frontmatter, then fall back
+        # to the identity store mapping so legacy notes without the new
+        # frontmatter still get correct source/canonical metadata.
+        source_key = str(parsed_fm.get("source_key") or "")
+        canonical_id = str(parsed_fm.get("canonical_conversation_id") or "")
+        source_conversation_id = str(parsed_fm.get("source_conversation_id") or conv_id)
+        source_thread_id = str(parsed_fm.get("source_thread_id") or "")
+        source_branch_id = str(parsed_fm.get("source_branch_id") or "")
+        if identity_lookup is not None and (not source_key or not canonical_id):
+            try:
+                mapped = identity_lookup(conv_id) or {}
+            except Exception:
+                mapped = {}
+            source_key = source_key or str(mapped.get("source_key") or "")
+            canonical_id = canonical_id or str(mapped.get("canonical_conversation_id") or "")
+            source_conversation_id = source_conversation_id or str(mapped.get("source_conversation_id") or "")
+            source_thread_id = source_thread_id or str(mapped.get("source_thread_id") or "")
+            source_branch_id = source_branch_id or str(mapped.get("source_branch_id") or "")
+
+        vault_resolved = str(target.resolve())
+        with self._connect() as conn:
+            existing_row = conn.execute(
+                "SELECT id FROM conversation_documents WHERE vault_path = ?",
+                (vault_resolved,),
+            ).fetchone()
+        existing_doc_id = existing_row["id"] if existing_row is not None else ""
+        doc_id = existing_doc_id or source_key or conv_id
+        frontmatter, chunks = self.chunker.chunk_text(
+            text,
+            vault_path=vault_resolved,
             embedding_model=model_name,
             embedding_version=self.embedding_version,
+            chunk_key=doc_id,
         )
         if not chunks:
             return 0
@@ -295,7 +337,8 @@ class ConversationIndexDatabase:
         if dry_run:
             return len(chunks)
 
-        conv_id = str(frontmatter.get("conversation_id") or chunks[0].conversation_id)
+        if not conv_id:
+            conv_id = chunks[0].conversation_id.split("#", 1)[0]
         parent_thread_id = str(frontmatter.get("parent_thread_id") or "")
         thread_source = str(frontmatter.get("thread_source") or "")
         source_system = str(frontmatter.get("source_system") or (frontmatter.get("source") if frontmatter.get("source") == "codex" else "") or "codex")
@@ -310,15 +353,16 @@ class ConversationIndexDatabase:
         now = _utc_now()
 
         with self._connect() as conn:
-            # 1. 记录 document
             conn.execute(
                 """
                 INSERT INTO conversation_documents(
                     id, vault_path, title, file_hash, created_date,
                     projects_json, topics_json, parent_thread_id, thread_source,
                     source_system, source_originator, source_surface, source_version,
-                    model_provider, model_name, agent_path, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    model_provider, model_name, agent_path, indexed_at,
+                    source_key, canonical_conversation_id, source_conversation_id,
+                    source_thread_id, source_branch_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     vault_path=excluded.vault_path,
                     title=excluded.title,
@@ -335,11 +379,16 @@ class ConversationIndexDatabase:
                     model_provider=excluded.model_provider,
                     model_name=excluded.model_name,
                     agent_path=excluded.agent_path,
-                    indexed_at=excluded.indexed_at
+                    indexed_at=excluded.indexed_at,
+                    source_key=COALESCE(NULLIF(excluded.source_key, ''), conversation_documents.source_key),
+                    canonical_conversation_id=COALESCE(NULLIF(excluded.canonical_conversation_id, ''), conversation_documents.canonical_conversation_id),
+                    source_conversation_id=COALESCE(NULLIF(excluded.source_conversation_id, ''), conversation_documents.source_conversation_id),
+                    source_thread_id=COALESCE(NULLIF(excluded.source_thread_id, ''), conversation_documents.source_thread_id),
+                    source_branch_id=COALESCE(NULLIF(excluded.source_branch_id, ''), conversation_documents.source_branch_id)
                 """,
                 (
-                    conv_id,
-                    str(target.resolve()),
+                    doc_id,
+                    vault_resolved,
                     chunks[0].title,
                     file_hash,
                     str(frontmatter.get("created") or ""),
@@ -355,12 +404,22 @@ class ConversationIndexDatabase:
                     model_name,
                     agent_path,
                     now,
+                    source_key,
+                    canonical_id,
+                    source_conversation_id,
+                    source_thread_id,
+                    source_branch_id,
                 ),
             )
 
-            # 2. 删除旧的 sections & fts
-            conn.execute("DELETE FROM conversation_sections WHERE conversation_id = ?", (conv_id,))
-            conn.execute("DELETE FROM conversation_sections_fts WHERE conversation_id = ?", (conv_id,))
+            # 2. 删除旧的 sections & fts（按 vault_path 定位，裸 conversation_id
+            #    在多来源场景可能被两个平台复用，不能作为删除键）
+            conn.execute(
+                "DELETE FROM conversation_sections_fts WHERE id IN "
+                "(SELECT id FROM conversation_sections WHERE vault_path = ?)",
+                (vault_resolved,),
+            )
+            conn.execute("DELETE FROM conversation_sections WHERE vault_path = ?", (vault_resolved,))
 
             # 3. 写入新的 sections & fts
             for chunk in chunks:
@@ -372,12 +431,14 @@ class ConversationIndexDatabase:
                         content, content_hash, chunk_index, source_anchors_json,
                         projects_json, date, embedding_identity, parent_thread_id, thread_source,
                         source_system, source_originator, source_surface, source_version,
-                        model_provider, model_name, agent_path, indexed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        model_provider, model_name, agent_path, indexed_at,
+                        source_key, canonical_conversation_id, source_conversation_id,
+                        source_thread_id, source_branch_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chunk.chunk_id,
-                        chunk.conversation_id,
+                        conv_id,
                         chunk.vault_path,
                         heading_str,
                         chunk.title,
@@ -398,6 +459,11 @@ class ConversationIndexDatabase:
                         model_name,
                         agent_path,
                         now,
+                        source_key,
+                        canonical_id,
+                        source_conversation_id,
+                        source_thread_id,
+                        source_branch_id,
                     ),
                 )
                 conn.execute(
@@ -405,7 +471,7 @@ class ConversationIndexDatabase:
                     INSERT INTO conversation_sections_fts(id, conversation_id, parent_thread_id, heading_path, content)
                     VALUES (?, ?, ?, ?, ?)
                     """,
-                    (chunk.chunk_id, chunk.conversation_id, parent_thread_id, heading_str, chunk.content),
+                    (chunk.chunk_id, conv_id, parent_thread_id, heading_str, chunk.content),
                 )
 
                 # 4. 向量 embedding 处理（仅在启用且 identity 未命中时调用）
@@ -519,16 +585,20 @@ class ConversationIndexDatabase:
 
     def index_metadata_for_file(self, path: str | Path) -> dict[str, Any]:
         target = Path(path).resolve()
+        target_str = str(target)
         with self._connect() as conn:
             doc = conn.execute(
-                "SELECT id, file_hash, indexed_at FROM conversation_documents WHERE vault_path = ?",
-                (str(target),),
+                "SELECT id, file_hash, indexed_at, source_conversation_id FROM conversation_documents WHERE vault_path = ?",
+                (target_str,),
             ).fetchone()
             if doc is None:
                 return {}
+            # Sections are located by vault_path: with multi-source identity
+            # the documents.id may be a source key while sections keep the
+            # legacy bare conversation id.
             sections = conn.execute(
-                "SELECT content_hash FROM conversation_sections WHERE conversation_id = ? ORDER BY chunk_index",
-                (doc["id"],),
+                "SELECT content_hash FROM conversation_sections WHERE vault_path = ? ORDER BY chunk_index",
+                (target_str,),
             ).fetchall()
             emb = None
             if self.embedding_client and self.embedding_client.enabled and self.embedding_client.model:
@@ -541,26 +611,26 @@ class ConversationIndexDatabase:
                       ON e.embedding_identity = s.embedding_identity
                      AND e.model = ?
                      AND e.version = ?
-                    WHERE s.conversation_id = ?
+                    WHERE s.vault_path = ?
                     """,
-                    (model_name, self.embedding_version, doc["id"]),
+                    (model_name, self.embedding_version, target_str),
                 ).fetchall()
                 section_count = conn.execute(
-                    "SELECT COUNT(*) AS n FROM conversation_sections WHERE conversation_id = ?",
-                    (doc["id"],),
+                    "SELECT COUNT(*) AS n FROM conversation_sections WHERE vault_path = ?",
+                    (target_str,),
                 ).fetchone()["n"]
                 active_count = conn.execute(
                     """
                     SELECT COUNT(*) AS n
                     FROM conversation_sections s
-                    WHERE s.conversation_id = ?
+                    WHERE s.vault_path = ?
                       AND EXISTS (
                         SELECT 1 FROM conversation_embeddings e
                         WHERE e.embedding_identity = s.embedding_identity
                           AND e.model = ? AND e.version = ?
                       )
                     """,
-                    (doc["id"], model_name, self.embedding_version),
+                    (target_str, model_name, self.embedding_version),
                 ).fetchone()["n"]
                 if active_count != section_count:
                     raise ValueError(
@@ -574,6 +644,7 @@ class ConversationIndexDatabase:
                 emb = active_rows[0]
         return {
             "conversation_id": doc["id"],
+            "legacy_conversation_id": doc["source_conversation_id"] or doc["id"],
             "index_source_hash": doc["file_hash"],
             "last_indexed_at": doc["indexed_at"],
             "content_section_hashes": [row["content_hash"] for row in sections],
@@ -642,6 +713,9 @@ class ConversationIndexDatabase:
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
     ) -> list[SearchResult]:
         clean_q = query.strip()
         if not clean_q:
@@ -656,6 +730,8 @@ class ConversationIndexDatabase:
                    s.parent_thread_id, s.thread_source,
                    s.source_system, s.source_originator, s.source_surface, s.source_version,
                    s.model_provider, s.model_name, s.agent_path,
+                   s.source_key, s.canonical_conversation_id, s.source_conversation_id,
+                   s.source_thread_id, s.source_branch_id,
                    fts.rank AS rank_score
             FROM conversation_sections_fts fts
             JOIN conversation_sections s ON s.id = fts.id
@@ -674,6 +750,15 @@ class ConversationIndexDatabase:
         if thread_source:
             sql += " AND s.thread_source = ?"
             params.append(thread_source)
+        if canonical_conversation_id:
+            sql += " AND s.canonical_conversation_id = ?"
+            params.append(canonical_conversation_id)
+        if source_key:
+            sql += " AND s.source_key = ?"
+            params.append(source_key)
+        if source_conversation_id:
+            sql += " AND s.source_conversation_id = ?"
+            params.append(source_conversation_id)
 
         sql += " ORDER BY fts.rank LIMIT ?"
         params.append(limit)
@@ -683,31 +768,7 @@ class ConversationIndexDatabase:
             try:
                 cursor = conn.execute(sql, params)
                 for row in cursor.fetchall():
-                    headings = [h.strip() for h in (row["heading_path"] or "").split(">") if h.strip()]
-                    results.append(
-                        SearchResult(
-                            section_id=row["id"],
-                            conversation_id=row["conversation_id"],
-                            vault_path=row["vault_path"],
-                            heading_path=headings,
-                            title=row["title"] or "",
-                            content=row["content"],
-                            score=abs(float(row["rank_score"])),
-                            score_type="lexical",
-                            date=row["date"] or "",
-                            projects=json.loads(row["projects_json"] or "[]"),
-                            source_anchors=json.loads(row["source_anchors_json"] or "[]"),
-                            parent_thread_id=row["parent_thread_id"] or "",
-                            thread_source=row["thread_source"] or "",
-                            source_system=row["source_system"] or "codex",
-                            source_originator=row["source_originator"] or "",
-                            source_surface=row["source_surface"] or "",
-                            source_version=row["source_version"] or "",
-                            model_provider=row["model_provider"] or "",
-                            model_name=row["model_name"] or "",
-                            agent_path=row["agent_path"] or "",
-                        )
-                    )
+                    results.append(_search_result_from_row(row, score=abs(float(row["rank_score"])), score_type="lexical"))
             except sqlite3.OperationalError:
                 return []
         return results
@@ -721,6 +782,9 @@ class ConversationIndexDatabase:
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
     ) -> list[SearchResult]:
         if not query_vector:
             return []
@@ -736,6 +800,8 @@ class ConversationIndexDatabase:
                    s.parent_thread_id, s.thread_source,
                    s.source_system, s.source_originator, s.source_surface, s.source_version,
                    s.model_provider, s.model_name, s.agent_path,
+                   s.source_key, s.canonical_conversation_id, s.source_conversation_id,
+                   s.source_thread_id, s.source_branch_id,
                    e.vector, e.dimension
             FROM conversation_embeddings e
             JOIN conversation_sections s
@@ -758,6 +824,15 @@ class ConversationIndexDatabase:
         if thread_source:
             conditions.append("s.thread_source = ?")
             params.append(thread_source)
+        if canonical_conversation_id:
+            conditions.append("s.canonical_conversation_id = ?")
+            params.append(canonical_conversation_id)
+        if source_key:
+            conditions.append("s.source_key = ?")
+            params.append(source_key)
+        if source_conversation_id:
+            conditions.append("s.source_conversation_id = ?")
+            params.append(source_conversation_id)
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
 
@@ -774,32 +849,36 @@ class ConversationIndexDatabase:
 
         results: list[SearchResult] = []
         for sim, row in top:
-            headings = [h.strip() for h in (row["heading_path"] or "").split(">") if h.strip()]
             results.append(
-                SearchResult(
-                    section_id=row["id"],
-                    conversation_id=row["conversation_id"],
-                    vault_path=row["vault_path"],
-                    heading_path=headings,
-                    title=row["title"] or "",
-                    content=row["content"],
-                    score=float(sim),
-                    score_type="vector",
-                    date=row["date"] or "",
-                    projects=json.loads(row["projects_json"] or "[]"),
-                    source_anchors=json.loads(row["source_anchors_json"] or "[]"),
-                    parent_thread_id=row["parent_thread_id"] or "",
-                    thread_source=row["thread_source"] or "",
-                    source_system=row["source_system"] or "codex",
-                    source_originator=row["source_originator"] or "",
-                    source_surface=row["source_surface"] or "",
-                    source_version=row["source_version"] or "",
-                    model_provider=row["model_provider"] or "",
-                    model_name=row["model_name"] or "",
-                    agent_path=row["agent_path"] or "",
-                )
+                _search_result_from_row(row, score=float(sim), score_type="vector")
             )
         return results
+
+    def resolve_conversation_ambiguity(self, conversation_id: str) -> list[dict[str, str]]:
+        """Distinct (source_system, source_key) owners of one bare provider id.
+
+        Empty when the id is unknown or unambiguous.  Multi-source search
+        callers use this to refuse silently picking the wrong conversation.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT COALESCE(NULLIF(source_system, ''), 'codex') AS source_system,
+                       COALESCE(NULLIF(source_key, ''), id) AS source_key,
+                       COALESCE(NULLIF(canonical_conversation_id, ''), '') AS canonical_conversation_id
+                FROM conversation_documents
+                WHERE id = ? OR source_conversation_id = ?
+                """,
+                (conversation_id, conversation_id),
+            ).fetchall()
+        return [
+            {
+                "source_system": row["source_system"],
+                "source_key": row["source_key"],
+                "canonical_conversation_id": row["canonical_conversation_id"],
+            }
+            for row in rows
+        ]
 
     def rebuild_from_markdown(self, markdown_paths: Sequence[str | Path]) -> int:
         with self._connect() as conn:
@@ -837,6 +916,17 @@ def _migrate_index_db(conn: sqlite3.Connection) -> None:
         ("conversation_index_runs", "skipped_files", "INTEGER NOT NULL DEFAULT 0"),
         ("conversation_index_runs", "cache_reused_chunks", "INTEGER NOT NULL DEFAULT 0"),
         ("conversation_index_runs", "failed_chunks", "INTEGER NOT NULL DEFAULT 0"),
+        # v0.2.4 additive canonical identity columns
+        ("conversation_documents", "source_key", "TEXT"),
+        ("conversation_documents", "canonical_conversation_id", "TEXT"),
+        ("conversation_documents", "source_conversation_id", "TEXT"),
+        ("conversation_documents", "source_thread_id", "TEXT"),
+        ("conversation_documents", "source_branch_id", "TEXT"),
+        ("conversation_sections", "source_key", "TEXT"),
+        ("conversation_sections", "canonical_conversation_id", "TEXT"),
+        ("conversation_sections", "source_conversation_id", "TEXT"),
+        ("conversation_sections", "source_thread_id", "TEXT"),
+        ("conversation_sections", "source_branch_id", "TEXT"),
     ]:
         cursor = conn.execute(f"PRAGMA table_info({tbl})")
         cols = {row[1] for row in cursor.fetchall()}
@@ -909,6 +999,37 @@ def _migrate_index_db(conn: sqlite3.Connection) -> None:
             FROM conversation_sections
             """
         )
+
+
+def _search_result_from_row(row: sqlite3.Row, *, score: float, score_type: str) -> SearchResult:
+    headings = [h.strip() for h in (row["heading_path"] or "").split(">") if h.strip()]
+    return SearchResult(
+        section_id=row["id"],
+        conversation_id=row["conversation_id"],
+        vault_path=row["vault_path"],
+        heading_path=headings,
+        title=row["title"] or "",
+        content=row["content"],
+        score=score,
+        score_type=score_type,
+        date=row["date"] or "",
+        projects=json.loads(row["projects_json"] or "[]"),
+        source_anchors=json.loads(row["source_anchors_json"] or "[]"),
+        parent_thread_id=row["parent_thread_id"] or "",
+        thread_source=row["thread_source"] or "",
+        source_system=row["source_system"] or "codex",
+        source_originator=row["source_originator"] or "",
+        source_surface=row["source_surface"] or "",
+        source_version=row["source_version"] or "",
+        model_provider=row["model_provider"] or "",
+        model_name=row["model_name"] or "",
+        agent_path=row["agent_path"] or "",
+        source_key=row["source_key"] or "" if "source_key" in row.keys() else "",
+        canonical_conversation_id=row["canonical_conversation_id"] or "" if "canonical_conversation_id" in row.keys() else "",
+        source_conversation_id=row["source_conversation_id"] or "" if "source_conversation_id" in row.keys() else "",
+        source_thread_id=row["source_thread_id"] or "" if "source_thread_id" in row.keys() else "",
+        source_branch_id=row["source_branch_id"] or "" if "source_branch_id" in row.keys() else "",
+    )
 
 
 def _format_fts_query(query: str) -> str:

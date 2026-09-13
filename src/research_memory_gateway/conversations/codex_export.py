@@ -8,7 +8,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
+from .identity import codex_legacy_namespace_hash
 from .models import (
+    CODEX_PARSER_VERSION,
+    CODEX_SCHEMA_VERSION,
     AttachmentRef,
     ExportSessionRef,
     NormalizedConversation,
@@ -58,7 +61,16 @@ def _timestamp_from_epoch(value: Any) -> str:
 
 
 class CodexExportReader:
-    """Read a Codex session export ZIP without extracting or modifying it."""
+    """Read a Codex session export ZIP without extracting or modifying it.
+
+    Implements the platform-agnostic ``ConversationExportReader`` protocol:
+    each reader owns its ``source_system``, ``parser_version`` and
+    ``schema_version``; pipeline code must not assume a global Codex constant.
+    """
+
+    source_system = "codex"
+    parser_version = CODEX_PARSER_VERSION
+    schema_version = CODEX_SCHEMA_VERSION
 
     def __init__(self, archive_path: str | Path) -> None:
         self.archive_path = Path(archive_path)
@@ -98,9 +110,14 @@ class CodexExportReader:
                     relative_rollout_path=str(item.get("relativeRolloutPath") or ""),
                     source_instance=item.get("sourceInstance"),
                     session_index_entry=dict(item.get("sessionIndexEntry") or {}),
+                    source_system=self.source_system,
+                    source_account_namespace_hash=codex_legacy_namespace_hash(),
                 )
             )
         return refs
+
+    def list_sessions(self) -> list[ExportSessionRef]:
+        return self.sessions()
 
     def get_session_ref(self, conversation_id: str) -> ExportSessionRef:
         for ref in self.sessions():

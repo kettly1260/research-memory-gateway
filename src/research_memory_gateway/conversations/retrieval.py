@@ -34,6 +34,11 @@ class HybridSearchResult:
     model_provider: str = ""
     model_name: str = ""
     agent_path: str = ""
+    source_key: str = ""
+    canonical_conversation_id: str = ""
+    source_conversation_id: str = ""
+    source_thread_id: str = ""
+    source_branch_id: str = ""
 
 
 @dataclass
@@ -53,6 +58,13 @@ class RecallContextItem:
     model_provider: str = ""
     model_name: str = ""
     agent_path: str = ""
+    source_key: str = ""
+    canonical_conversation_id: str = ""
+    source_conversation_id: str = ""
+    source_thread_id: str = ""
+    source_branch_id: str = ""
+    canonical_collapsed: bool = False
+    collapsed_source_keys: list[str] = field(default_factory=list)
 
 
 class ConversationRetrievalService:
@@ -77,8 +89,35 @@ class ConversationRetrievalService:
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
+        # Multi-source ambiguity guard: a bare provider conversation id may be
+        # reused by several source systems.  Refuse silently picking one.
+        if (
+            conversation_id
+            and not source_key
+            and not canonical_conversation_id
+            and not source_conversation_id
+        ):
+            owners = self.index_db.resolve_conversation_ambiguity(conversation_id)
+            if len(owners) > 1:
+                return {
+                    "query": query,
+                    "count": 0,
+                    "ambiguous_conversation_id": True,
+                    "ambiguous_matches": owners,
+                    "message": (
+                        "conversation_id matches multiple source records; "
+                        "disambiguate with source_system, source_key or canonical_conversation_id"
+                    ),
+                    "fallback_to_lexical": False,
+                    "fallback_reason": None,
+                    "results": [],
+                }
+
         lexical_candidates = self.index_db.search_fts(
             query,
             limit=limit * 2,
@@ -86,6 +125,9 @@ class ConversationRetrievalService:
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
         )
 
         vector_candidates: list[SearchResult] = []
@@ -103,6 +145,9 @@ class ConversationRetrievalService:
                         parent_thread_id=parent_thread_id,
                         source_system=source_system,
                         thread_source=thread_source,
+                        canonical_conversation_id=canonical_conversation_id,
+                        source_key=source_key,
+                        source_conversation_id=source_conversation_id,
                     )
                 else:
                     fallback_to_lexical = True
@@ -175,6 +220,11 @@ class ConversationRetrievalService:
                     model_provider=base.model_provider,
                     model_name=base.model_name,
                     agent_path=base.agent_path,
+                    source_key=base.source_key,
+                    canonical_conversation_id=base.canonical_conversation_id,
+                    source_conversation_id=base.source_conversation_id,
+                    source_thread_id=base.source_thread_id,
+                    source_branch_id=base.source_branch_id,
                 )
             )
 
@@ -209,6 +259,11 @@ class ConversationRetrievalService:
             "parent_thread_id": fm.get("parent_thread_id") or "",
             "agent_path": fm.get("agent_path") or "",
             "conversation_id": fm.get("conversation_id") or "",
+            "source_key": fm.get("source_key") or "",
+            "canonical_conversation_id": fm.get("canonical_conversation_id") or "",
+            "source_conversation_id": fm.get("source_conversation_id") or fm.get("conversation_id") or "",
+            "source_thread_id": fm.get("source_thread_id") or "",
+            "source_branch_id": fm.get("source_branch_id") or "",
             "created": fm.get("created") or "",
             "updated": fm.get("updated") or "",
             "completion_status": fm.get("completion_status") or "",
@@ -259,6 +314,10 @@ class ConversationRetrievalService:
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
+        collapse_canonical: bool = True,
     ) -> dict[str, Any]:
         search_res = self.search(
             query,
@@ -267,9 +326,14 @@ class ConversationRetrievalService:
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
             limit=8,
         )
         items = search_res.get("results", [])
+        if collapse_canonical:
+            items = self._collapse_canonical_items(items)
 
         # Conservative approximation: 2 chars/token.  The budget applies to
         # the final Agent context, including headings, source display, anchors
@@ -289,12 +353,15 @@ class ConversationRetrievalService:
             anchors_text = ""
             if anchors:
                 anchors_text = " (" + ", ".join(f"ordinal {a.get('ordinal')}" for a in anchors) + ")"
-            short_id = item["conversation_id"][:8]
+            canonical_id = item.get("canonical_conversation_id") or ""
+            short_id = (canonical_id or item["conversation_id"])[:8]
+            source_tag = (item.get("source_system") or "codex").upper()
             source_display = Path(item["vault_path"]).name or item["vault_path"]
             prefixes = [
-                f"### [{short_id}] {heading_display}{anchors_text}\nSource: {source_display}\n\n",
-                f"[{short_id}] {heading_display}\n",
-                f"[{short_id}] ",
+                f"### [{short_id}|{source_tag}] {heading_display}{anchors_text}\nSource: {source_display}\n\n",
+                f"### [{short_id}|{source_tag}] {heading_display}{anchors_text}\n",
+                f"[{short_id}|{source_tag}] {heading_display}\n",
+                f"[{short_id}|{source_tag}] ",
                 "",
             ]
             raw_content = item["content"]
@@ -326,15 +393,59 @@ class ConversationRetrievalService:
                     model_provider=item.get("model_provider", ""),
                     model_name=item.get("model_name", ""),
                     agent_path=item.get("agent_path", ""),
+                    source_key=item.get("source_key", ""),
+                    canonical_conversation_id=item.get("canonical_conversation_id", ""),
+                    source_conversation_id=item.get("source_conversation_id", ""),
+                    source_thread_id=item.get("source_thread_id", ""),
+                    source_branch_id=item.get("source_branch_id", ""),
+                    canonical_collapsed=bool(item.get("canonical_collapsed", False)),
+                    collapsed_source_keys=list(item.get("collapsed_source_keys") or []),
                 )
             )
 
         return {
             "query": query,
             "token_budget": token_budget,
+            "collapse_canonical": collapse_canonical,
             "fallback_to_lexical": search_res.get("fallback_to_lexical", False),
             "fallback_reason": search_res.get("fallback_reason"),
             "context_char_budget": char_budget,
             "context": context,
             "items": [asdict(r) for r in recalled_items],
         }
+
+    @staticmethod
+    def _collapse_canonical_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Collapse cross-source duplicates of one confirmed canonical group.
+
+        Only groups whose sections come from *multiple distinct source keys*
+        are touched -- a single-source group keeps every section, so plain
+        Codex-only recall ranking is unaffected.  Pending or rejected
+        duplicate pairs never share a canonical id and therefore never
+        collapse.
+        """
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            canonical = item.get("canonical_conversation_id") or ""
+            if canonical:
+                groups.setdefault(canonical, []).append(item)
+        collapsed_ids: set[int] = set()
+        for group in groups.values():
+            source_keys = {item.get("source_key") or item.get("section_id", "") for item in group}
+            if len(source_keys) <= 1:
+                continue
+            best = max(group, key=lambda item: item.get("final_score", 0.0))
+            for item in group:
+                if item is best:
+                    continue
+                collapsed_ids.add(id(item))
+            best.setdefault("canonical_collapsed", True)
+            best["canonical_group_size"] = len(group)
+            best["collapsed_source_keys"] = sorted(
+                item.get("source_key") or ""
+                for item in group
+                if item is not best and item.get("source_key")
+            )
+        if not collapsed_ids:
+            return items
+        return [item for item in items if id(item) not in collapsed_ids]

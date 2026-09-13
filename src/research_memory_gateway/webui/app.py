@@ -631,7 +631,19 @@ async def api_conversations_status(request: Request) -> Response:
     try:
         retrieval = state.service.conversation_retrieval
         stats = retrieval.index_db.stats()
-        return JSONResponse({"enabled": True, **stats})
+        # v0.2.4 identity visibility: best-effort read of the archive-local
+        # identity tables.  Never fails the status endpoint when absent.
+        identity: dict[str, object] | None = None
+        try:
+            staging = state.config.conversation_archive.resolve_staging_dir()
+            manifest_path = state.config.conversation_archive.resolve_archive_manifest_path(staging)
+            if manifest_path.exists():
+                from ..conversations.identity_store import ConversationIdentityStore
+
+                identity = ConversationIdentityStore(manifest_path).identity_stats()
+        except Exception:
+            identity = None
+        return JSONResponse({"enabled": True, **stats, "conversation_identity": identity})
     except Exception as exc:
         return JSONResponse(
             {
@@ -663,6 +675,9 @@ async def api_conversations_search(request: Request) -> Response:
     parent_thread_id = request.query_params.get("parent_thread_id") or None
     source_system = request.query_params.get("source_system") or None
     thread_source = request.query_params.get("thread_source") or None
+    canonical_conversation_id = request.query_params.get("canonical_conversation_id") or None
+    source_key = request.query_params.get("source_key") or None
+    source_conversation_id = request.query_params.get("source_conversation_id") or None
     limit = bounded_int(request.query_params.get("limit"), 1, 100, 10)
     try:
         res = state.service.conversation_retrieval.search(
@@ -672,6 +687,9 @@ async def api_conversations_search(request: Request) -> Response:
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
             limit=limit,
         )
         return JSONResponse(res)
@@ -692,6 +710,10 @@ async def api_conversations_recall(request: Request) -> Response:
     parent_thread_id = request.query_params.get("parent_thread_id") or None
     source_system = request.query_params.get("source_system") or None
     thread_source = request.query_params.get("thread_source") or None
+    canonical_conversation_id = request.query_params.get("canonical_conversation_id") or None
+    source_key = request.query_params.get("source_key") or None
+    source_conversation_id = request.query_params.get("source_conversation_id") or None
+    collapse_canonical = request.query_params.get("collapse_canonical", "true").lower() != "false"
     try:
         res = state.service.conversation_retrieval.recall(
             query=query,
@@ -701,6 +723,10 @@ async def api_conversations_recall(request: Request) -> Response:
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
+            collapse_canonical=collapse_canonical,
         )
         return JSONResponse(res)
     except Exception as exc:

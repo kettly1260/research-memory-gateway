@@ -126,11 +126,19 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
         """Search across conversation Markdown archives using hybrid lexical and vector ranking.
 
-        Returns path, title, heading, excerpt, scores, date, project, conversation ID, and parent thread ID.
+        Returns path, title, heading, excerpt, scores, date, project, conversation ID,
+        parent thread ID, plus v0.2.4 source identity fields (source_system,
+        source_key, canonical_conversation_id, source_conversation_id).
+        A bare conversation_id shared by several source systems returns an
+        explicit ambiguous_conversation_id result; disambiguate with
+        source_system / source_key / canonical_conversation_id.
         """
         return service.conversation_retrieval.search(
             query=query,
@@ -139,6 +147,9 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
             limit=limit,
         )
 
@@ -159,10 +170,18 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
         parent_thread_id: str | None = None,
         source_system: str | None = None,
         thread_source: str | None = None,
+        canonical_conversation_id: str | None = None,
+        source_key: str | None = None,
+        source_conversation_id: str | None = None,
+        collapse_canonical: bool = True,
     ) -> dict[str, Any]:
         """Retrieve and format relevant conversation excerpts for direct agent context.
 
         Respects token budget and preserves source anchors and provenance links.
+        By default (collapse_canonical=true) confirmed duplicates of the same
+        canonical conversation from different sources contribute only their
+        best section, so duplicated exports do not fill the context twice.
+        Pass collapse_canonical=false for source-level audit output.
         """
         return service.conversation_retrieval.recall(
             query=query,
@@ -172,4 +191,8 @@ def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) ->
             parent_thread_id=parent_thread_id,
             source_system=source_system,
             thread_source=thread_source,
+            canonical_conversation_id=canonical_conversation_id,
+            source_key=source_key,
+            source_conversation_id=source_conversation_id,
+            collapse_canonical=collapse_canonical,
         )
