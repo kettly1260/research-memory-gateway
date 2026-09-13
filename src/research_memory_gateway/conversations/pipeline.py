@@ -7,6 +7,7 @@ from .attachments import AttachmentInventory
 from .decisions import (
     CONFLICT,
     DRY_RUN,
+    HYDRATE,
     INDEX,
     NEW_SOURCE,
     REBUILD,
@@ -135,7 +136,15 @@ class ConversationIngestionPipeline:
 
             if decision.action == SKIP:
                 results.append(
-                    self._apply_skip(ref, decision, att_hash=att_hash, legacy_record=legacy_record)
+                    self._apply_skip(
+                        ref, decision, fingerprints=fingerprints,
+                        att_hash=att_hash, legacy_record=legacy_record,
+                    )
+                )
+                continue
+            if decision.action == HYDRATE:
+                results.append(
+                    self._apply_hydrate(ref, decision, fingerprints=fingerprints)
                 )
                 continue
             if decision.action == INDEX:
@@ -231,6 +240,7 @@ class ConversationIngestionPipeline:
         ref: ExportSessionRef,
         decision: SourceImportDecision,
         *,
+        fingerprints: TranscriptFingerprints,
         att_hash: str = "",
         legacy_record: dict | None,
     ) -> IngestionResult:
@@ -247,7 +257,7 @@ class ConversationIngestionPipeline:
                     record.source_key,
                     archive_sha256=archive_sha,
                     source_entry_sha256=entry_sha,
-                    fingerprints=self._stored_fingerprint_stub(record),
+                    fingerprints=fingerprints,
                 )
         elif decision.reason == "source_packaging_changed":
             store.mark_seen(
@@ -259,7 +269,7 @@ class ConversationIngestionPipeline:
                 record.source_key,
                 archive_sha256=archive_sha,
                 source_entry_sha256=ref.source_sha256,
-                fingerprints=self._stored_fingerprint_stub(record),
+                fingerprints=fingerprints,
             )
             if legacy_record is not None:
                 self._sync_legacy_record(
@@ -269,15 +279,35 @@ class ConversationIngestionPipeline:
                     status=str(legacy_record.get("status") or "written"),
                 )
         elif decision.reason == "stale_snapshot":
-            # Record the sighting of the older snapshot but never adopt it:
-            # the stored newer version and note stay untouched.
+            # Record the sighting of the older snapshot exactly as it arrived
+            # (its own entry hash and its own fingerprints) but never adopt
+            # it: the stored newer version and note stay untouched.
             store.record_snapshot(
                 record.source_key,
                 archive_sha256=archive_sha,
                 source_entry_sha256=ref.source_sha256,
-                fingerprints=self._stored_fingerprint_stub(record),
+                fingerprints=fingerprints,
             )
             store.mark_seen(record.source_key, archive_sha256=archive_sha)
+        return IngestionResult(ref.conversation_id, "skipped", decision.reason, decision.output_path)
+
+    def _apply_hydrate(
+        self,
+        ref: ExportSessionRef,
+        decision: SourceImportDecision,
+        *,
+        fingerprints: TranscriptFingerprints,
+    ) -> IngestionResult:
+        """First-sight hydration of a migrated legacy record (metadata only)."""
+        record = decision.source_record
+        if record is None:
+            return IngestionResult(ref.conversation_id, "skipped", decision.reason, decision.output_path)
+        self.identity_store.hydrate_source_record(
+            record.source_key,
+            fingerprints=fingerprints,
+            archive_sha256=self.reader.archive_sha256,
+            source_entry_sha256=ref.source_sha256,
+        )
         return IngestionResult(ref.conversation_id, "skipped", decision.reason, decision.output_path)
 
     def _apply_write(
@@ -400,11 +430,24 @@ class ConversationIngestionPipeline:
             else:
                 # output_missing / failed_retryable / attachment_changed /
                 # parser_upgrade / forced reimport on an unchanged entry.
-                store.mark_seen(
-                    record.source_key,
-                    archive_sha256=archive_sha,
-                    last_source_entry_sha256=entry_sha,
-                )
+                if record.fingerprint_version == 0:
+                    # The rewritten/refreshed note gives us a verifiable
+                    # transcript for a migrated-but-unhydrated record: hydrate
+                    # identity metadata together with the write.
+                    self.identity_store.hydrate_source_record(
+                        record.source_key,
+                        fingerprints=fingerprints,
+                        archive_sha256=archive_sha,
+                        source_entry_sha256=entry_sha,
+                        parser_version=parser_version,
+                        schema_version=schema_version,
+                    )
+                else:
+                    store.mark_seen(
+                        record.source_key,
+                        archive_sha256=archive_sha,
+                        last_source_entry_sha256=entry_sha,
+                    )
             store.set_output_path(record.source_key, str(path))
 
         prior_record = legacy_record or {}
@@ -489,17 +532,3 @@ class ConversationIngestionPipeline:
             "schema_version": schema_version,
             "fingerprint_version": fingerprints.fingerprint_version,
         }
-
-    def _stored_fingerprint_stub(self, record: SourceRecord) -> TranscriptFingerprints:
-        """Minimal fingerprint view reconstructed from stored record hashes."""
-        return TranscriptFingerprints(
-            fingerprint_version=record.fingerprint_version,
-            ordered_message_hash=record.ordered_message_hash,
-            message_set_hash=record.message_set_hash,
-            normalized_transcript_sha256=record.normalized_transcript_sha256,
-            message_count=record.message_count,
-            tool_event_set_hash="",
-            attachment_inventory_hash="",
-            message_fingerprints=(),
-            message_roles=(),
-        )

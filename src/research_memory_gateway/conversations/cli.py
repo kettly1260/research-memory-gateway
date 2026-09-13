@@ -650,29 +650,18 @@ def cmd_dedup_resolve(args: argparse.Namespace) -> int:
     if left is None or right is None:
         print("Error: Both candidate source records must exist.", file=sys.stderr)
         return 1
-    winner_key = getattr(args, "winner_source_key", None) or ""
-    if winner_key:
-        if winner_key not in {left.source_key, right.source_key}:
-            print(
-                f"Error: --winner-source-key must be one of the candidate sides: "
-                f"{left.source_key}, {right.source_key}",
-                file=sys.stderr,
-            )
-            return 1
-    else:
-        # Deterministic default: the first-seen record wins; ties break on key.
-        winner_key = sorted(
-            [left, right], key=lambda r: (r.first_seen_at, r.source_key)
-        )[0].source_key
-    # Persist the review decision first (also writes the dedup_decisions row).
-    store.resolve_candidate(
-        candidate.candidate_id, decision="confirmed_same", note=getattr(args, "note", "") or ""
-    )
-    winner_canonical = store.link_sources_to_canonical(
-        left.source_key,
-        right.source_key,
-        winner_source_key=winner_key,
-    )
+    try:
+        # Decision + canonical link happen in one identity-store transaction;
+        # repeated confirms are idempotent no-ops, rejected candidates refuse.
+        result = store.confirm_candidate_link(
+            candidate.candidate_id,
+            winner_source_key=getattr(args, "winner_source_key", "") or "",
+            note=getattr(args, "note", "") or "",
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    winner_canonical = result["active_canonical_conversation_id"]
     index_updated = _refresh_index_canonical_metadata(
         cfg,
         source_keys=[left.source_key, right.source_key],
@@ -681,7 +670,8 @@ def cmd_dedup_resolve(args: argparse.Namespace) -> int:
     payload = {
         "candidate_id": candidate.candidate_id,
         "decision": "confirmed_same",
-        "winner_source_key": winner_key,
+        "outcome": result["outcome"],
+        "winner_source_key": result["winner_source_key"],
         "active_canonical_conversation_id": winner_canonical,
         "loser_alias_resolved": True,
         "source_records_removed": 0,

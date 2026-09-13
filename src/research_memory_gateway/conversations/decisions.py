@@ -19,6 +19,7 @@ from typing import Any
 
 from .identity import (
     FINGERPRINT_VERSION,
+    FINGERPRINT_VERSION_UNHYDRATED,
     TranscriptFingerprints,
     canonical_conversation_id_for,
     sequence_relation,
@@ -34,6 +35,8 @@ SKIP = "skip"
 CONFLICT = "conflict"
 INDEX = "index"
 DRY_RUN = "dry_run"
+# Metadata-only first-sight hydration of a migrated legacy record.
+HYDRATE = "hydrate"
 
 
 @dataclass(frozen=True)
@@ -228,6 +231,14 @@ def decide_source_import(
         )
         if integrity is not None:
             return _with_identity(integrity, record)
+        if record.fingerprint_version == FINGERPRINT_VERSION_UNHYDRATED:
+            # Migrated legacy record seen again with the very same source
+            # entry: hydrate identity metadata only (no Markdown rewrite, no
+            # path change).  The continuation/stale/divergence state machine
+            # stays disabled until this has happened.
+            return _with_identity(
+                SourceImportDecision(HYDRATE, "identity_hydrated", output_path), record
+            )
         stale = _index_stale(
             trusted_legacy, output_path, check_index=check_index
         )
@@ -241,6 +252,19 @@ def decide_source_import(
         return _with_identity(SourceImportDecision(SKIP, reason, output_path), record)
 
     # Different raw entry hash: compare normalized transcripts.
+    if record.fingerprint_version == FINGERPRINT_VERSION_UNHYDRATED:
+        # Without a stored fingerprint sequence we cannot distinguish a
+        # continuation from a stale or diverged export.  Fail closed instead
+        # of guessing (an empty sequence would masquerade as a strict prefix).
+        return _with_identity(
+            SourceImportDecision(
+                CONFLICT,
+                "fingerprints_unhydrated",
+                output_path,
+                detail={"fingerprint_version": record.fingerprint_version},
+            ),
+            record,
+        )
     if record.fingerprint_version != FINGERPRINT_VERSION:
         return _with_identity(
             SourceImportDecision(

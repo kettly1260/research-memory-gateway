@@ -28,6 +28,7 @@ from typing import Any, Sequence
 
 from .identity import (
     FINGERPRINT_VERSION,
+    FINGERPRINT_VERSION_UNHYDRATED,
     ConversationSourceIdentity,
     TranscriptFingerprints,
     canonical_conversation_id_for,
@@ -312,29 +313,34 @@ class ConversationIdentityStore:
 
     def resolve_canonical(self, canonical_id: str) -> CanonicalConversation | None:
         """Resolve a canonical id through any alias/merge chain to the active one."""
-        seen: set[str] = set()
-        current = canonical_id
         with self._connect() as connection:
-            while current and current not in seen:
-                seen.add(current)
-                row = connection.execute(
-                    "SELECT * FROM canonical_conversations WHERE canonical_conversation_id = ?",
+            return self._resolve_canonical_in_conn(connection, canonical_id)
+
+    def _resolve_canonical_in_conn(
+        self, connection: sqlite3.Connection, canonical_id: str
+    ) -> CanonicalConversation | None:
+        seen: set[str] = set()
+        current = normalize_component(canonical_id)
+        while current and current not in seen:
+            seen.add(current)
+            row = connection.execute(
+                "SELECT * FROM canonical_conversations WHERE canonical_conversation_id = ?",
+                (current,),
+            ).fetchone()
+            if row is None:
+                alias = connection.execute(
+                    "SELECT active_canonical_id FROM canonical_aliases WHERE alias_canonical_id = ?",
                     (current,),
                 ).fetchone()
-                if row is None:
-                    alias = connection.execute(
-                        "SELECT active_canonical_id FROM canonical_aliases WHERE alias_canonical_id = ?",
-                        (current,),
-                    ).fetchone()
-                    if alias is None:
-                        return None
-                    current = alias["active_canonical_id"]
-                    continue
-                canonical = _canonical_from_row(row)
-                if canonical.status == "merged" and canonical.merged_into_id:
-                    current = canonical.merged_into_id
-                    continue
-                return canonical
+                if alias is None:
+                    return None
+                current = alias["active_canonical_id"]
+                continue
+            canonical = _canonical_from_row(row)
+            if canonical.status == "merged" and canonical.merged_into_id:
+                current = canonical.merged_into_id
+                continue
+            return canonical
         return None
 
     # -- source records -------------------------------------------------------
@@ -466,6 +472,106 @@ class ConversationIdentityStore:
         assert record is not None
         return record
 
+    def hydrate_source_record(
+        self,
+        source_key: str,
+        *,
+        fingerprints: TranscriptFingerprints,
+        archive_sha256: str,
+        source_entry_sha256: str,
+        parser_version: str = "",
+        schema_version: str = "",
+    ) -> bool:
+        """Fill in fingerprints for a migrated-but-unhydrated record.
+
+        Metadata-only: never rewrites Markdown, never touches the output
+        path.  Runs once (version 0 -> versioned); a repeat call on an
+        already-hydrated record is a safe no-op and never regresses.
+        """
+        now = _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT fingerprint_version FROM conversation_source_records WHERE source_key = ?",
+                (source_key,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown source record: {source_key}")
+            if row["fingerprint_version"] != FINGERPRINT_VERSION_UNHYDRATED:
+                return False
+            connection.execute(
+                """
+                UPDATE conversation_source_records SET
+                    last_seen_archive_sha256 = ?,
+                    last_source_entry_sha256 = ?,
+                    normalized_transcript_sha256 = ?,
+                    ordered_message_hash = ?,
+                    message_set_hash = ?,
+                    message_count = ?,
+                    fingerprint_version = ?,
+                    parser_version = CASE WHEN ? != '' THEN ? ELSE parser_version END,
+                    schema_version = CASE WHEN ? != '' THEN ? ELSE schema_version END,
+                    last_seen_at = ?
+                WHERE source_key = ?
+                """,
+                (
+                    _norm(archive_sha256),
+                    _norm(source_entry_sha256),
+                    fingerprints.normalized_transcript_sha256,
+                    fingerprints.ordered_message_hash,
+                    fingerprints.message_set_hash,
+                    int(fingerprints.message_count),
+                    int(fingerprints.fingerprint_version),
+                    _norm(parser_version),
+                    _norm(parser_version),
+                    _norm(schema_version),
+                    _norm(schema_version),
+                    now,
+                    source_key,
+                ),
+            )
+            # Hydrate the migration-era snapshot row for this entry (its
+            # fingerprint fields were recorded as unknown).
+            connection.execute(
+                """
+                UPDATE conversation_source_snapshots SET
+                    normalized_transcript_sha256 = ?,
+                    ordered_message_hash = ?,
+                    message_set_hash = ?,
+                    message_count = ?,
+                    fingerprint_version = ?
+                WHERE source_key = ? AND source_entry_sha256 = ?
+                  AND fingerprint_version = ?
+                """,
+                (
+                    fingerprints.normalized_transcript_sha256,
+                    fingerprints.ordered_message_hash,
+                    fingerprints.message_set_hash,
+                    int(fingerprints.message_count),
+                    int(fingerprints.fingerprint_version),
+                    source_key,
+                    _norm(source_entry_sha256),
+                    FINGERPRINT_VERSION_UNHYDRATED,
+                ),
+            )
+            connection.execute(
+                "DELETE FROM conversation_message_fingerprints WHERE source_key = ?",
+                (source_key,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO conversation_message_fingerprints(
+                    source_key, ordinal, message_fingerprint, role
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (source_key, ordinal, fp, role)
+                    for ordinal, (fp, role) in enumerate(
+                        zip(fingerprints.message_fingerprints, fingerprints.message_roles)
+                    )
+                ],
+            )
+        return True
+
     def update_source_content(
         self,
         source_key: str,
@@ -569,26 +675,57 @@ class ConversationIdentityStore:
         source_entry_sha256: str,
         fingerprints: TranscriptFingerprints,
     ) -> bool:
-        """Insert or refresh one export-version sighting.  True when inserted."""
+        """Insert or refresh one export-version sighting.  True when inserted.
+
+        An existing snapshot row recorded as unhydrated (fingerprint_version
+        0) gets its fingerprint fields backfilled from the incoming, verifiably
+        identical entry -- this is what makes migration-era snapshots catch up
+        instead of staying empty forever.
+        """
         now = _utc_now()
         with self._connect() as connection:
             existing = connection.execute(
                 """
-                SELECT snapshot_id FROM conversation_source_snapshots
+                SELECT snapshot_id, fingerprint_version FROM conversation_source_snapshots
                 WHERE source_key = ? AND source_entry_sha256 = ?
                 """,
                 (source_key, _norm(source_entry_sha256)),
             ).fetchone()
             if existing is not None:
-                connection.execute(
-                    """
-                    UPDATE conversation_source_snapshots
-                    SET last_seen_at = ?, seen_count = seen_count + 1,
-                        source_archive_sha256 = ?
-                    WHERE snapshot_id = ?
-                    """,
-                    (now, _norm(archive_sha256), existing["snapshot_id"]),
-                )
+                if existing["fingerprint_version"] == FINGERPRINT_VERSION_UNHYDRATED:
+                    connection.execute(
+                        """
+                        UPDATE conversation_source_snapshots
+                        SET normalized_transcript_sha256 = ?,
+                            ordered_message_hash = ?,
+                            message_set_hash = ?,
+                            message_count = ?,
+                            fingerprint_version = ?,
+                            last_seen_at = ?,
+                            source_archive_sha256 = ?
+                        WHERE snapshot_id = ?
+                        """,
+                        (
+                            fingerprints.normalized_transcript_sha256,
+                            fingerprints.ordered_message_hash,
+                            fingerprints.message_set_hash,
+                            int(fingerprints.message_count),
+                            int(fingerprints.fingerprint_version),
+                            now,
+                            _norm(archive_sha256),
+                            existing["snapshot_id"],
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE conversation_source_snapshots
+                        SET last_seen_at = ?, seen_count = seen_count + 1,
+                            source_archive_sha256 = ?
+                        WHERE snapshot_id = ?
+                        """,
+                        (now, _norm(archive_sha256), existing["snapshot_id"]),
+                    )
                 return False
             connection.execute(
                 """
@@ -764,6 +901,14 @@ class ConversationIdentityStore:
         candidate = self.get_candidate(candidate_id)
         if candidate is None:
             raise KeyError(f"Unknown candidate id: {candidate_id}")
+        if candidate.status == decision:
+            # Idempotent replay: no duplicate decision row, no state change.
+            return candidate
+        if candidate.status in {"confirmed_same", "rejected"}:
+            raise ValueError(
+                f"candidate already decided as {candidate.status}; changing it to "
+                f"{decision} requires an explicit reopen flow (not available in v0.2.4)"
+            )
         now = _utc_now()
         with self._connect() as connection:
             connection.execute(
@@ -838,7 +983,8 @@ class ConversationIdentityStore:
 
         No source record, canonical row or Markdown note is ever deleted.  The
         loser canonical stays resolvable through ``canonical_aliases`` and a
-        ``merged`` row pointing at the winner.
+        ``merged`` row pointing at the winner.  Defensive checks make this
+        idempotent and self-merge-proof even when called directly.
         """
         left = self.get_source_record(left_source_key)
         right = self.get_source_record(right_source_key)
@@ -849,40 +995,157 @@ class ConversationIdentityStore:
             raise KeyError(f"Winner source record does not exist: {winner_source_key}")
         if winner_source_key not in {left_source_key, right_source_key}:
             raise ValueError("winner must be one of the two linked sources")
-        loser_record = right if winner_source_key == left_source_key else left
-        winner_canonical = winner.canonical_conversation_id
-        loser_canonical = loser_record.canonical_conversation_id
-        now = _utc_now()
         with self._connect() as connection:
-            connection.execute(
-                """
-                INSERT INTO canonical_aliases(alias_canonical_id, active_canonical_id, created_at, reason)
-                VALUES (?, ?, ?, 'manual_confirm_same')
-                ON CONFLICT(alias_canonical_id) DO UPDATE SET active_canonical_id = excluded.active_canonical_id
-                """,
-                (loser_canonical, winner_canonical, now),
+            winner_canonical = self._resolve_canonical_in_conn(
+                connection, winner.canonical_conversation_id
             )
-            connection.execute(
-                """
-                UPDATE canonical_conversations
-                SET status = 'merged', merged_into_id = ?, updated_at = ?
-                WHERE canonical_conversation_id = ?
-                """,
-                (winner_canonical, now, loser_canonical),
+            loser_record = right if winner_source_key == left_source_key else left
+            loser_canonical = self._resolve_canonical_in_conn(
+                connection, loser_record.canonical_conversation_id
             )
-            connection.execute(
-                "UPDATE conversation_source_records SET canonical_conversation_id = ?, last_seen_at = ? "
-                "WHERE source_key = ?",
-                (winner_canonical, now, loser_record.source_key),
+            assert winner_canonical is not None and loser_canonical is not None
+            if loser_canonical.canonical_conversation_id == winner_canonical.canonical_conversation_id:
+                # Already linked: idempotent no-op, never self-merge.
+                return winner_canonical.canonical_conversation_id
+            self._link_in_conn(
+                connection,
+                loser_canonical.canonical_conversation_id,
+                winner_canonical.canonical_conversation_id,
             )
-            # Any other source record still pointing at the loser canonical
-            # follows it to the winner so the group stays consistent.
-            connection.execute(
-                "UPDATE conversation_source_records SET canonical_conversation_id = ?, last_seen_at = ? "
-                "WHERE canonical_conversation_id = ? AND source_key != ?",
-                (winner_canonical, now, loser_canonical, loser_record.source_key),
+        return winner_canonical.canonical_conversation_id
+
+    def _link_in_conn(
+        self,
+        connection: sqlite3.Connection,
+        loser_canonical_id: str,
+        winner_canonical_id: str,
+    ) -> None:
+        """Write the alias/merge rows; refuses any self-merge by construction."""
+        if loser_canonical_id == winner_canonical_id:
+            raise ValueError("self-merge refused: loser canonical equals winner canonical")
+        now = _utc_now()
+        connection.execute(
+            """
+            INSERT INTO canonical_aliases(alias_canonical_id, active_canonical_id, created_at, reason)
+            VALUES (?, ?, ?, 'manual_confirm_same')
+            ON CONFLICT(alias_canonical_id) DO UPDATE SET active_canonical_id = excluded.active_canonical_id
+            """,
+            (loser_canonical_id, winner_canonical_id, now),
+        )
+        connection.execute(
+            """
+            UPDATE canonical_conversations
+            SET status = 'merged', merged_into_id = ?, updated_at = ?
+            WHERE canonical_conversation_id = ?
+            """,
+            (winner_canonical_id, now, loser_canonical_id),
+        )
+        connection.execute(
+            "UPDATE conversation_source_records SET canonical_conversation_id = ?, last_seen_at = ? "
+            "WHERE canonical_conversation_id = ?",
+            (winner_canonical_id, now, loser_canonical_id),
+        )
+
+    def confirm_candidate_link(
+        self,
+        candidate_id: int,
+        *,
+        winner_source_key: str = "",
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Record a confirmed_same decision and link the two sources atomically.
+
+        The candidate decision and the canonical link happen inside one SQLite
+        transaction, so a failed link can never leave a permanently-confirmed
+        candidate behind with inconsistent canonical rows.  Repeated confirms
+        are idempotent no-ops; a rejected candidate refuses confirmation.
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM conversation_duplicate_candidates WHERE candidate_id = ?",
+                (candidate_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown candidate id: {candidate_id}")
+            candidate = _candidate_from_row(row)
+            if candidate.status == "rejected":
+                raise ValueError(
+                    "candidate is rejected; confirmation requires an explicit reopen flow "
+                    "(not available in v0.2.4)"
+                )
+            left = connection.execute(
+                "SELECT * FROM conversation_source_records WHERE source_key = ?",
+                (candidate.left_source_key,),
+            ).fetchone()
+            right = connection.execute(
+                "SELECT * FROM conversation_source_records WHERE source_key = ?",
+                (candidate.right_source_key,),
+            ).fetchone()
+            if left is None or right is None:
+                raise KeyError("Both source records must exist before linking")
+            left_record = _source_record_from_row(left)
+            right_record = _source_record_from_row(right)
+            winner_key = normalize_component(winner_source_key) or sorted(
+                [left_record, right_record], key=lambda r: (r.first_seen_at, r.source_key)
+            )[0].source_key
+            if winner_key not in {left_record.source_key, right_record.source_key}:
+                raise ValueError("winner must be one of the two candidate sides")
+            winner_record = left_record if winner_key == left_record.source_key else right_record
+            loser_record = right_record if winner_key == left_record.source_key else left_record
+            winner_canonical = self._resolve_canonical_in_conn(
+                connection, winner_record.canonical_conversation_id
             )
-        return winner_canonical
+            loser_canonical = self._resolve_canonical_in_conn(
+                connection, loser_record.canonical_conversation_id
+            )
+            assert winner_canonical is not None and loser_canonical is not None
+            winner_id = winner_canonical.canonical_conversation_id
+            loser_id = loser_canonical.canonical_conversation_id
+            already_linked = loser_id == winner_id
+            outcome = "no_op" if (already_linked and candidate.status == "confirmed_same") else (
+                "no_op" if already_linked else "linked"
+            )
+            now = _utc_now()
+            if candidate.status == "pending":
+                connection.execute(
+                    """
+                    UPDATE conversation_duplicate_candidates
+                    SET status = 'confirmed_same', reviewed_at = ? WHERE candidate_id = ?
+                    """,
+                    (now, candidate_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO dedup_decisions(
+                        left_source_key, right_source_key, decision, candidate_type, decided_at, note
+                    ) VALUES (?, ?, 'confirmed_same', ?, ?, ?)
+                    """,
+                    (candidate.left_source_key, candidate.right_source_key, candidate.candidate_type, now, _norm(note)),
+                )
+            if not already_linked:
+                self._link_in_conn(connection, loser_id, winner_id)
+            # Post-conditions inside the same transaction.
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM canonical_aliases WHERE alias_canonical_id = ?",
+                    (winner_id,),
+                ).fetchone()[0]
+                == 0
+            ), "self-alias created"
+            winner_row = connection.execute(
+                "SELECT status, merged_into_id FROM canonical_conversations WHERE canonical_conversation_id = ?",
+                (winner_id,),
+            ).fetchone()
+            assert winner_row is not None and winner_row["status"] == "active", "winner canonical must stay active"
+            assert not winner_row["merged_into_id"], "winner canonical must not carry merged_into_id"
+        return {
+            "candidate_id": candidate_id,
+            "decision": "confirmed_same",
+            "outcome": outcome,
+            "winner_source_key": winner_key,
+            "active_canonical_conversation_id": winner_id,
+            "loser_canonical_resolves": True,
+        }
 
     def list_orphan_source_records(self) -> list[SourceRecord]:
         """Active source records whose canonical row is missing or merged-away."""
@@ -1040,10 +1303,14 @@ class ConversationIdentityStore:
                         archive_sha,
                         archive_sha,
                         entry_sha,
-                        _norm(row.get("normalized_transcript_sha256") or ""),
-                        _norm(row.get("ordered_message_hash") or ""),
-                        _norm(row.get("message_set_hash") or ""),
-                        FINGERPRINT_VERSION,
+                        "",
+                        "",
+                        "",
+                        # Migrated legacy records carry no per-message fingerprints
+                        # yet: version 0 explicitly means "unknown", so the
+                        # continuation/stale/divergence state machine stays
+                        # disabled until the first same-entry hydration.
+                        FINGERPRINT_VERSION_UNHYDRATED,
                         parser_version,
                         schema_version,
                         imported_at,
@@ -1060,7 +1327,7 @@ class ConversationIdentityStore:
                         normalized_transcript_sha256, ordered_message_hash,
                         message_set_hash, message_count, fingerprint_version,
                         first_seen_at, last_seen_at, seen_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                    ) VALUES (?, ?, ?, '', '', '', 0, ?, ?, ?, 1)
                     ON CONFLICT(source_key, source_entry_sha256) DO UPDATE SET
                         last_seen_at = excluded.last_seen_at,
                         seen_count = conversation_source_snapshots.seen_count + 1
@@ -1069,11 +1336,7 @@ class ConversationIdentityStore:
                         source_key,
                         archive_sha,
                         entry_sha,
-                        _norm(row.get("normalized_transcript_sha256") or ""),
-                        _norm(row.get("ordered_message_hash") or ""),
-                        _norm(row.get("message_set_hash") or ""),
-                        int(row.get("message_count") or 0),
-                        FINGERPRINT_VERSION,
+                        FINGERPRINT_VERSION_UNHYDRATED,
                         imported_at,
                         imported_at,
                     ),
@@ -1118,7 +1381,7 @@ def _source_record_from_row(row: sqlite3.Row) -> SourceRecord:
         ordered_message_hash=row["ordered_message_hash"] or "",
         message_set_hash=row["message_set_hash"] or "",
         message_count=int(row["message_count"] or 0),
-        fingerprint_version=int(row["fingerprint_version"] or 1),
+        fingerprint_version=int(row["fingerprint_version"] or 0),
         parser_version=row["parser_version"] or "",
         schema_version=row["schema_version"] or "",
         status=row["status"],
@@ -1137,7 +1400,7 @@ def _snapshot_from_row(row: sqlite3.Row) -> SnapshotRecord:
         ordered_message_hash=row["ordered_message_hash"] or "",
         message_set_hash=row["message_set_hash"] or "",
         message_count=int(row["message_count"] or 0),
-        fingerprint_version=int(row["fingerprint_version"] or 1),
+        fingerprint_version=int(row["fingerprint_version"] or 0),
         first_seen_at=row["first_seen_at"],
         last_seen_at=row["last_seen_at"],
         seen_count=int(row["seen_count"] or 1),

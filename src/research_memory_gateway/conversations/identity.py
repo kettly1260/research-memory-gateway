@@ -29,6 +29,11 @@ from typing import Any, Sequence
 
 FINGERPRINT_VERSION = 1
 
+# Migrated-but-unhydrated marker: legacy records carry no per-message
+# fingerprints yet.  Version 0 must never be treated as a valid fingerprint
+# generation -- it explicitly means "fingerprints unknown".
+FINGERPRINT_VERSION_UNHYDRATED = 0
+
 SOURCE_KEY_DOMAIN = "rmg-source-v1"
 SOURCE_KEY_PREFIX = "srcv1"
 ACCOUNT_NAMESPACE_DOMAIN = "rmg-account-ns-v1"
