@@ -1,12 +1,17 @@
-# Conversation Memory Multi-Source Identity & Dedup — v0.2.4 Implementation & Release Report
+# Conversation Memory Multi-Source Identity & Dedup — v0.2.4 Implementation / v0.2.5 Production Release Report
 
 任务书：`CONVERSATION_MEMORY_MULTISOURCE_DEDUP_TASKBOOK_V024.md`
-执行日期：2026-09-13（含独立审计后的 remediation commit）
-执行范围：W0 → W12 + 审计 remediation。**W13（push / tag / GHCR / NAS production migration）未执行，等待用户明确授权。**
+执行日期：2026-09-13（含独立审计、remediation、正式 rehearsal、v0.2.5 hotfix 与 W13 production cutover）
+执行范围：W0 → W13。**最终生产版本为 v0.2.5，NAS production 已完成切换并通过上线验收。**
 
 > **版本状态说明**：`76e0466`（首次 W0-W12 commit）经独立审计判定**尚不能进入 W13**。
 > 其 5 项 release blocker 已在本 remediation commit 中修复，本报告取代此前声称的
 > "76e0466 READY" 结论。
+>
+> v0.2.4 发布候选在正式 NAS canary 中又发现一个 legacy compatibility 缺口：旧 322 份 Markdown
+> 未被重写，因此 `conversation_read()` 仅从 frontmatter 读取新 identity 字段时会返回空
+> `source_key/canonical_conversation_id`。该问题以 v0.2.5 hotfix 修复：read 路径在 frontmatter
+> 缺字段时按 `vault_path` 从 conversation index 回填 identity；最终 production 使用 v0.2.5。
 
 ## 0. Remediation（审计 blocker 修复记录）
 
@@ -21,12 +26,16 @@
 ## 1. 版本与 Git
 
 ```text
-VERSION TARGET: v0.2.4
-baseline SHA:   de1e646（保留）
-first commit:   76e0466（W0-W12 初版，未 amend/reset）
-remediation:    <本 commit>（在 76e0466 之上的新本地 commit）
-remote main:    d6e44f0（= v0.2.3 tag，未 push）
-working tree:   既有未跟踪文件 (.local/, 0, 0) 全程保留，未 stage
+CORE TARGET:        v0.2.4
+FINAL RELEASE:      v0.2.5
+baseline SHA:       de1e646（保留）
+first commit:       76e0466（W0-W12 初版，未 amend/reset）
+remediation:        da85220
+formal rehearsal:   ce64455
+CI stabilization:   23adf3a
+v0.2.5 hotfix:      a97f80b
+release tag:        v0.2.5 -> a97f80b
+working tree:       既有未跟踪文件 (.local/, 0, 0) 全程保留，未 stage
 ```
 
 ## 2. 新增架构层
@@ -71,7 +80,7 @@ source record 存在：
 ## 4. 测试（W10 + remediation）
 
 ```text
-pytest: 249 passed（基线 187 + W10 53 + remediation 7 + formal rehearsal 2），0 failed
+pytest: 250 passed（基线 187 + W10 53 + remediation 7 + formal rehearsal 2 + legacy-read hotfix 1），0 failed
 git diff --check: clean
 frontend: 未修改
 ```
@@ -153,8 +162,10 @@ python scripts/rehearse_conversation_migration.py `
 raw account identifiers 泄露: 否
 secrets / DB / ZIP / NAS config staged: 否
 raw export ZIP 修改: 否（sha256 e1a853e494856163… 与审计记录一致）
-production manifest / index / notes / rollback container 修改: 否
-  （production manifest 无任何 v2 表；legacy 322 行原样；migration 从未在生产执行）
+production Markdown notes 修改: 否（aggregate SHA-256 前后不变）
+production manifest 修改: 是（经授权 W13：legacy 322 -> v2 identity 322/322，原子切换）
+production index 修改: 是（仅 additive identity columns / metadata backfill；sections / embeddings 数量不变）
+rollback container / backups: 保留（v0.2.3 container + pre-v024/pre-v025 manifest + pre-v024 index）
 duplicate source 物理删除: 否
 ```
 
@@ -168,7 +179,7 @@ duplicate source 物理删除: 否
 ## 8. Release blocker 核对（remediation 后）
 
 ```text
-pytest all green                                  PASS (249)
+pytest all green                                  PASS (250)
 git diff --check                                  PASS
 frontend lint/build                               N/A
 legacy migration rehearsal                        PASS（含 fingerprint hydration）
@@ -182,13 +193,203 @@ dedup resolve preserves source notes              PASS
 dedup confirm idempotent / no self-merge          PASS（新增）
 recall canonical collapse tests                   PASS
 no secrets / DB / ZIP / NAS config staged         PASS
-production untouched                              PASS（程序化验证）
+production untouched before authorized W13       PASS（程序化验证）
 ```
 
 ## 9. 结论
 
-**RELEASE READINESS: READY（本地，remediation commit 之后）** — 审计 5 项 blocker 全部修复并有回归测试覆盖；任务书 §23 Definition of Done 20 条满足。
+**FINAL RELEASE STATUS: RELEASED / NAS PRODUCTION PASS（v0.2.5）**。
 
-W13 仍未执行，等待再次独立验收与用户明确授权：
-- 不创建 `v0.2.4` tag；不 push GitHub；不更新 GHCR；
-- 不切 NAS production container；不在 production manifest 上执行首次 schema migration。
+v0.2.4 的多来源 identity/dedup 核心、审计 remediation 与正式 migration rehearsal 均完成；
+随后在 NAS 正式 canary 中发现并修复 legacy `conversation_read()` identity 回填缺口，形成 v0.2.5。
+最终 production cutover 详见 §10。
+
+## 10. W13 最终发布与 NAS production cutover
+
+### 10.1 Git / GitHub / GHCR
+
+```text
+v0.2.4 core/rehearsal release chain:
+  de1e646  docs: record full conversation import stability
+  76e0466  v0.2.4 multi-source core
+  da85220  audit blocker remediation
+  ce64455  formal migration rehearsal
+  23adf3a  stabilize Linux CI test package imports
+
+v0.2.5 hotfix:
+  a97f80b  fix: backfill identity for legacy conversation reads
+
+GitHub main Tests:              PASS
+GitHub main Docker/GHCR:        PASS
+remote tag v0.2.5:              PASS
+tag workflow:                   PASS
+GHCR image:                     ghcr.io/kettly1260/research-memory-gateway:v0.2.5
+OCI revision:                   a97f80b655ee5024abe2d609fb39fa0c54896313
+GHCR digest:                    sha256:2da88e5b4442c9a418d89a82aa8a4112364342653eff9eb7e2e879d091116638
+```
+
+`tests.yml` 只监听 `main` branch，不监听 tag；因此最终 release gate 为：
+
+```text
+main/a97f80b Tests          PASS
+main/a97f80b Docker build   PASS
+tag v0.2.5 Docker workflow  PASS
+```
+
+### 10.2 NAS migration / candidate preparation
+
+NAS 沿用 Windows-off architecture A：所有 runtime data 都是 NAS 本地副本，不依赖 Windows share。
+
+首次尝试直接通过 `/mnt/user` 对 archive-local SQLite 做 production migration 时再次出现 Unraid
+`shfs/FUSE` D-state / request wait。该尝试在完整切换前停止；检测到 partial v2 rows 后，使用
+pre-v024 SQLite backup 恢复到纯 legacy 322 状态，旧 v0.2.3 production 随即恢复在线。
+
+最终采用 rollback-safe candidate 流程：
+
+```text
+pre-v024 manifest backup
+  -> tmpfs migration (322 legacy -> 322 source -> 322 canonical)
+  -> same full export hydration: 322 identity_hydrated / 0 written
+  -> second full export:          322 unchanged / 0 written / 0 conflict / 0 failed
+  -> candidate manifest quick_check=ok
+  -> candidate index additive identity backfill
+  -> canary validation
+  -> short atomic production cutover
+```
+
+9 个 source record 的 `message_count=0` 经确认是合法的“无可指纹化 visible user/assistant message”
+会话；它们均为 `fingerprint_version=1`、fingerprint hashes 非空，snapshot 已 hydrated，且
+message fingerprint row count 与 `message_count` 严格一致。因此 hydration gate 不再错误要求
+`message_count > 0`。
+
+candidate manifest 验收：
+
+```text
+quick_check                 ok
+legacy imports              322
+source records              322
+active canonical            322
+unhydrated                  0
+unhydrated snapshots        0
+message-count mismatch      0
+source-key collisions       0
+duplicate output paths      0
+pending duplicate candidates 0
+```
+
+candidate index 验收：
+
+```text
+quick_check                 ok
+documents                   322
+sections                    26,269
+embeddings                  1,559  (unchanged)
+documents with source/canonical identity   322 / 322
+sections with source/canonical identity    26,269 / 26,269
+```
+
+### 10.3 v0.2.5 legacy-read hotfix
+
+v0.2.4 canary 实测发现：旧 Markdown frontmatter 没有 `source_key` / `canonical_conversation_id`，
+因此 `conversation_read()` 返回空 identity；search/recall 因直接来自 index 已正常。
+
+v0.2.5 增加 `ConversationIndexDatabase.document_identity_for_file()`，`read()` 在 frontmatter
+缺新字段时按 `vault_path` 回填 index identity。新增回归测试后：
+
+```text
+targeted retrieval tests: 8 passed
+full pytest:              250 passed, 3 warnings
+git diff --check:         clean
+```
+
+正式 `v0.2.5` tag canary 实测：
+
+```text
+WebUI /admin                   303
+MCP unauthenticated            401
+legacy read source_key match   True
+legacy read canonical match    True
+source_system                  codex
+search identity                True
+recall identity                True
+```
+
+### 10.4 Production cutover result
+
+正式 production 容器：
+
+```text
+name:      research-memory-gateway
+image:     ghcr.io/kettly1260/research-memory-gateway:v0.2.5
+revision:  a97f80b655ee5024abe2d609fb39fa0c54896313
+ports:     18787 -> 8787 (MCP), 18788 -> 8788 (WebUI)
+network:   ai_network
+restart:   unless-stopped
+status:    running
+```
+
+production post-cutover gate：
+
+```text
+WebUI /admin                 303
+MCP unauthenticated          401
+manifest quick_check         ok
+source records               322
+active canonical             322
+unhydrated                   0
+pending duplicate candidates 0
+index quick_check            ok
+documents                    322
+sections                     26,269
+embeddings                   1,559
+documents identity coverage  322 / 322
+sections identity coverage   26,269 / 26,269
+search count (Fe3+)          3
+search identity              True
+recall identity              True
+legacy read source_key       True
+legacy read canonical        True
+```
+
+BGE-M3 在最终生产验收时已恢复：真实 `/v1/embeddings` POST 返回 HTTP 200；生产 `Fe3+`
+搜索实际走 hybrid：
+
+```text
+count               3
+fallback_to_lexical False
+fallback_reason      None
+identity             True
+```
+
+### 10.5 Immutability / rollback
+
+切换前后 322 Markdown 未被 production migration 重写：
+
+```text
+Markdown aggregate SHA-256:
+508b7038f05b01fdea73f44b5d3f728f81b2f4f81ae35728548e1e0971153e1a
+
+raw Codex export ZIP SHA-256:
+e1a853e494856163a0cc7493de4ec0c73480487a7a1efb9c2c902e83cb97018e
+```
+
+回滚点保留：
+
+```text
+container:
+  research-memory-gateway-pre-v024
+  image v0.2.3
+  stopped / preserved
+
+manifest backups:
+  manifest.pre-v024.sqlite
+  manifest.pre-v025-cutover.sqlite
+
+index backup:
+  conversation-index-v023-full.pre-v024.sqlite
+```
+
+本次 W13 产生的 `rmg-v024-*` migration/rehearsal work containers 与 v0.2.5 canary 已清理；
+正式 production 之外不保留后台 sleep/work 容器。
+
+**FINAL: Conversation Memory multi-source identity/dedup is live on NAS production with v0.2.5.**
