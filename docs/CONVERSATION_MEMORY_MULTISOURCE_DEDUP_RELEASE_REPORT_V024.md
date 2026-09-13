@@ -71,7 +71,7 @@ source record 存在：
 ## 4. 测试（W10 + remediation）
 
 ```text
-pytest: 247 passed（基线 187 + W10 53 + remediation 7），0 failed
+pytest: 249 passed（基线 187 + W10 53 + remediation 7 + formal rehearsal 2），0 failed
 git diff --check: clean
 frontend: 未修改
 ```
@@ -88,6 +88,7 @@ frontend: 未修改
 | `test_conversation_retrieval_v24.py` | 13.7 #31-36 |
 | `test_conversation_index_v24.py` | 13.8 #37-40 |
 | `test_conversation_remediation_v24.py` | 审计 blocker 回归：A) migrate→same export：Markdown hash 不变、record+snapshot hydrate、sequence 非空、二次 replay 为 unchanged；B) hydrate 后严格 continuation → source_continued + 原 path 更新；C) hydrate 后中间消息改写 → source_diverged + conflict + 原 note 不覆盖；D) hydrate 后较短 snapshot → stale_snapshot + 不截断 + stale snapshot ledger 断言（stale entry → stale fp ≠ 当前 fp）+ unhydrated different-entry fail-closed；confirm twice 幂等 no-op、resolve_canonical(loser) 正常、无 self-alias/self-merged_into、notes 数量不变、decision 不重复；rejected→confirm 拒绝；link API 直调自防御 |
+| `test_conversation_rehearsal_script.py` | 正式 migration rehearsal 工具可连续运行两次且每次使用独立 workdir/index；成功后 Windows 下 SQLite 句柄可清理；`--keep-workdir` 可保留证据；源 Markdown 与 raw ZIP 均保持不变。 |
 
 ## 5. 真实 322-session 副本 rehearsal（W11，remediation 后重跑）
 
@@ -122,6 +123,30 @@ overall: PASS
 
 环境漂移说明：5 个会话引用的 vault 文件在 9/12 基线后内容变化（例：`open_loops.md` 23,240 → 35,909 字节）。v0.2.3 baseline（`d6e44f0`）在同等环境给出完全相同的 5 个 `write/attachment_changed`，证明非 v0.2.4 回归；该差异只出现在首次 replay，reconcile 后的严格 gate 为 322 skipped。
 
+### 5.1 正式可重复 rehearsal 工具
+
+一次性的 `scratch/v024-rehearsal/run_rehearsal.py` 已整理为正式入口：
+
+```text
+scripts/rehearse_conversation_migration.py
+src/research_memory_gateway/conversations/rehearsal.py
+```
+
+正式工具不再硬编码工作副本或共享 `copy-index.sqlite`：每次运行都会创建新的隔离临时目录，使用 SQLite backup API 复制 archive-local manifest，只复制 Markdown，不修改 source root；reconcile index、synthetic continuation ZIP 都位于该次独立 workdir。成功后默认清理 workdir；失败时自动保留证据，`--keep-workdir` 可显式保留成功运行的工作目录。
+
+示例：
+
+```powershell
+python scripts/rehearse_conversation_migration.py `
+  --source-root exports/conversation-staging/full-322-lexical `
+  --archive "D:\Partition\F\Study\博士文件\Research-AI-Hub\_codex_workspace\tmp\chat-export\codex-sessions-20260912-012538.zip" `
+  --config config.conversation-production.yaml `
+  --expected-count 322 `
+  --report .local/conversation-migration-rehearsal-report.json
+```
+
+正式脚本已再次对真实 322-session 数据执行，结果 `overall=PASS`；严格 gate 仍为 `322 skipped / 0 written / 0 conflict / 0 failed`，synthetic continuation/stale replay 均 PASS，raw ZIP 前后 SHA-256 均为 `e1a853e494856163a0cc7493de4ec0c73480487a7a1efb9c2c902e83cb97018e`。成功运行的临时 workdir 已确认实际删除，而不是静默忽略 Windows SQLite 句柄问题。
+
 ## 6. 安全与隐私
 
 ```text
@@ -143,7 +168,7 @@ duplicate source 物理删除: 否
 ## 8. Release blocker 核对（remediation 后）
 
 ```text
-pytest all green                                  PASS (247)
+pytest all green                                  PASS (249)
 git diff --check                                  PASS
 frontend lint/build                               N/A
 legacy migration rehearsal                        PASS（含 fingerprint hydration）
