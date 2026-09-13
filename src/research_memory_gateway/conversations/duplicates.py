@@ -131,6 +131,10 @@ def build_candidate_proposals(
 
     ``fingerprints`` (a TranscriptFingerprints) and ``title``/``updated_at``
     describe the new snapshot; when omitted the stored record metadata is used.
+
+    Comparisons are batched (one fingerprint query for all peers, one
+    candidates read) so importing a full multi-hundred-conversation export
+    stays linear-ish instead of opening a connection per pair (v0.2.6 C12).
     """
     if fingerprints is not None:
         new_ordered = list(fingerprints.message_fingerprints)
@@ -147,15 +151,30 @@ def build_candidate_proposals(
     linked_group = _same_canonical_group(store, record)
     proposals: list[CandidateProposal] = []
 
-    for other in store.list_source_records():
-        if other.source_key == record.source_key:
-            continue
+    peers = [other for other in store.list_source_records() if other.source_key != record.source_key]
+    all_candidates = store.list_candidates()
+    decided_pairs: set[frozenset[str]] = set()
+    for existing in all_candidates:
+        pair = frozenset({existing.left_source_key, existing.right_source_key})
+        if existing.status in {"confirmed_same", "rejected"}:
+            decided_pairs.add(pair)
+    for other in peers:
         if other.source_key in linked_group:
             continue
-        if _pair_blocked(store, record.source_key, other.source_key):
+        if record.canonical_conversation_id and (
+            other.canonical_conversation_id == record.canonical_conversation_id
+        ):
             continue
 
-        other_sequence = store.message_fingerprint_sequence(other.source_key)
+    peer_sequences = store.message_fingerprint_sequences([other.source_key for other in peers])
+
+    for other in peers:
+        if other.source_key in linked_group:
+            continue
+        if frozenset({record.source_key, other.source_key}) in decided_pairs:
+            continue
+
+        other_sequence = peer_sequences.get(other.source_key, [])
         overlap = message_overlap_ratio(new_ordered, other_sequence)
         same_system = other.source_system == record.source_system
         same_namespace = (

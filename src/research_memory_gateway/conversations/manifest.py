@@ -161,7 +161,15 @@ class ImportManifest:
         error: str = "",
         parser_version: str = PARSER_VERSION,
         schema_version: str = SCHEMA_VERSION,
+        record_key: str = "",
     ) -> None:
+        """Record one import in the legacy ledger.
+
+        ``record_key`` overrides the ledger row key.  Codex keeps the bare
+        provider conversation id (historical behaviour); branched sources use
+        a branch-scoped key so siblings never fight over one row.
+        """
+        ledger_key = (record_key or "").strip() or ref.conversation_id
         output = Path(output_path) if output_path else Path("")
         output_resolved = str(output.resolve()) if str(output_path).strip() else ""
         output_sha = whole_output_sha256 or ""
@@ -229,7 +237,7 @@ class ImportManifest:
                     error=excluded.error
                 """,
                 (
-                    ref.conversation_id,
+                    ledger_key,
                     archive_path,
                     archive_sha256,
                     ref.source_entry,

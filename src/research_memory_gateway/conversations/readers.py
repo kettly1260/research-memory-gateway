@@ -20,6 +20,14 @@ class ConversationExportReader(Protocol):
     ``source_system``, ``parser_version`` and ``schema_version`` are exposed by
     each reader implementation; the pipeline never assumes a global Codex
     parser version.
+
+    v0.2.6 import-item keys: ``list_sessions`` yields one ref per importable
+    item and every lookup below addresses a ref by its
+    ``effective_import_key`` (Codex: the bare provider conversation id;
+    branched sources such as ChatGPT: one key per provider branch).  A ref's
+    ``conversation_id``/``source_conversation_id`` always keeps the bare
+    provider conversation id; branch identity lives in
+    ``source_branch_id`` and must never be folded into the conversation id.
     """
 
     @property
@@ -39,6 +47,6 @@ class ConversationExportReader(Protocol):
 
     def list_sessions(self) -> Sequence[ExportSessionRef]: ...
 
-    def get_session_ref(self, conversation_id: str) -> ExportSessionRef: ...
+    def get_session_ref(self, import_key: str) -> ExportSessionRef: ...
 
-    def parse(self, conversation_id: str) -> NormalizedConversation: ...
+    def parse(self, import_key: str) -> NormalizedConversation: ...

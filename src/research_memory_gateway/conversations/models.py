@@ -16,6 +16,15 @@ SCHEMA_VERSION = "ai-conversation-v1"
 CODEX_PARSER_VERSION = PARSER_VERSION
 CODEX_SCHEMA_VERSION = SCHEMA_VERSION
 
+# v0.2.6: ChatGPT Data Export reader versions.
+CHATGPT_PARSER_VERSION = "chatgpt-export-v1.0"
+CHATGPT_SCHEMA_VERSION = "chatgpt-conversations-v1"
+
+# Import-item key separator.  The provider conversation id is NEVER stored in
+# this combined form: import_key is a lookup/pipeline-scoping key only, while
+# source identity keeps the bare provider id plus a separate branch id.
+IMPORT_KEY_BRANCH_SEPARATOR = "#branch="
+
 
 @dataclass(frozen=True)
 class ExportSessionRef:
@@ -36,10 +45,20 @@ class ExportSessionRef:
     source_account_namespace_hash: str = ""
     source_thread_id: str = ""
     source_branch_id: str = ""
+    # v0.2.6: pipeline-scoped lookup key for one importable item.  Codex keeps
+    # this empty so it stays identical to ``conversation_id``; branched sources
+    # (ChatGPT) give every branch its own unique import_key while
+    # ``conversation_id`` keeps the bare provider conversation id.
+    import_key: str = ""
 
     @property
     def source_conversation_id(self) -> str:
         return self.conversation_id
+
+    @property
+    def effective_import_key(self) -> str:
+        """The key pipelines use to look this item up via the reader."""
+        return self.import_key or self.conversation_id
 
     def source_identity(self) -> "ConversationSourceIdentity":
         from .identity import ConversationSourceIdentity

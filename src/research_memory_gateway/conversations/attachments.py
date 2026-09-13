@@ -8,7 +8,7 @@ import re
 import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
 
 from .models import AttachmentRef, NormalizedConversation
 
@@ -90,9 +90,19 @@ def _canonicalize_path(raw_path: str) -> str:
 
 
 class AttachmentInventory:
-    def __init__(self, allowlist_roots: Sequence[str | Path] | None = None) -> None:
+    def __init__(
+        self,
+        allowlist_roots: Sequence[str | Path] | None = None,
+        *,
+        archive_asset_resolver: Callable[[str], tuple[bytes | None, str | None]] | None = None,
+    ) -> None:
         self.allowlist_roots = [Path(r) for r in (allowlist_roots or [])]
         self._zip_namelist_cache: dict[str, set[str]] = {}
+        # v0.2.6: optional provider-scoped resolver for assets that live
+        # inside the export archive itself (e.g. ChatGPT asset pointers).
+        # The resolver must never touch the network; when it returns
+        # (None, None) the record stays unresolved.
+        self._archive_asset_resolver = archive_asset_resolver
 
     def _get_zip_names(self, archive_path: str | Path | None) -> set[str]:
         if not archive_path:
@@ -324,6 +334,33 @@ class AttachmentInventory:
                 resolved_path=None,
                 observed_locators=[orig],
             )
+
+        # Archive-internal asset resolution (v0.2.6): provider pointers such
+        # as ``file-service://file-ABC`` are looked up strictly inside the
+        # export archive.  Unresolvable pointers stay unresolved -- the
+        # network is never consulted.
+        if self._archive_asset_resolver is not None and not URL_PATTERN.match(locator):
+            try:
+                content, resolved_name = self._archive_asset_resolver(locator)
+            except Exception:
+                content, resolved_name = None, None
+            if content is not None:
+                digest = hashlib.sha256(content).hexdigest()
+                return AttachmentInventoryRecord(
+                    conversation_id=conversation_id,
+                    message_id=att.message_id,
+                    tool_call_id="",
+                    source_ordinal=att.ordinal,
+                    locator_type="archive_asset",
+                    original_locator=_sanitize_locator(locator),
+                    canonical_locator=f"archive:{resolved_name or att.content_hash}",
+                    mime_or_extension=Path(resolved_name or "").suffix.lower() or att.content_type,
+                    size_bytes=len(content),
+                    content_hash=digest,
+                    status="found",
+                    resolved_path=None,
+                    observed_locators=[locator[:500]],
+                )
 
         # ZIP entry
         clean_path_str = locator.strip()

@@ -11,15 +11,95 @@ from typing import Any
 from research_memory_gateway.config import AppConfig, load_config
 from research_memory_gateway.retrieval import EmbeddingClient
 from .attachments import AttachmentInventory
+from .chatgpt_export import (
+    ChatGPTExportError,
+    ChatGPTExportReader,
+    detect_export_format,
+    resolve_account_namespace_hash,
+)
 from .codex_export import CodexExportReader
 from .identity_store import ConversationIdentityStore, load_legacy_import_rows
 from .index import ConversationIndexDatabase
 from .manifest import ImportManifest
 from .pipeline import ConversationIngestionPipeline
+from .readers import ConversationExportReader
 from .retrieval import ConversationRetrievalService
 from .vault_writer import ObsidianConversationWriter
 
 DEFAULT_EMBEDDING_VERSION = "v1"
+
+
+def _open_conversation_reader(
+    archive_path: Path,
+    fmt: str,
+    *,
+    namespace_label: str = "",
+    use_default_namespace: bool = False,
+) -> ConversationExportReader:
+    """Open the reader matching the export format.
+
+    ``auto`` detects from archive content, never from the file name; a ZIP
+    that could be both formats fails with AMBIGUOUS_EXPORT_FORMAT instead of
+    guessing.  ChatGPT exports must resolve an account namespace before any
+    identity is created.
+    """
+    choice = (fmt or "auto").strip().lower()
+    if choice == "auto":
+        choice = detect_export_format(archive_path)
+        if choice == "ambiguous":
+            raise ChatGPTExportError(
+                "AMBIGUOUS_EXPORT_FORMAT",
+                "archive content matches multiple export formats; pass --format explicitly",
+            )
+        if choice in {"unknown", ""}:
+            raise ChatGPTExportError(
+                "UNSUPPORTED_EXPORT_FORMAT",
+                "archive content matches no supported export format",
+            )
+    if choice == "codex":
+        return CodexExportReader(archive_path)
+    if choice == "chatgpt":
+        namespace_hash, _strategy = resolve_account_namespace_hash(
+            archive_path,
+            namespace_label=namespace_label,
+            use_default=use_default_namespace,
+        )
+        return ChatGPTExportReader(archive_path, account_namespace_hash=namespace_hash)
+    raise ChatGPTExportError("UNSUPPORTED_EXPORT_FORMAT", f"unknown --format value: {fmt}")
+
+
+def _select_import_keys(
+    reader: ConversationExportReader,
+    session_ids: list[str],
+    branch_ids: list[str],
+    limit: int | None,
+) -> list[str]:
+    """Resolve CLI filters to reader import keys.
+
+    A bare provider conversation id selects *all* of its branches unless
+    --branch-id narrows the selection.  Codex behaviour is preserved
+    verbatim: session ids are passed through exactly as typed.
+    """
+    if isinstance(reader, ChatGPTExportReader):
+        refs = reader.list_sessions()
+        if session_ids:
+            wanted = set(session_ids)
+            refs = [ref for ref in refs if ref.conversation_id in wanted]
+        if branch_ids:
+            wanted_branches = set(branch_ids)
+            refs = [ref for ref in refs if ref.source_branch_id in wanted_branches]
+        keys = [ref.effective_import_key for ref in refs]
+        if limit:
+            keys = keys[:limit]
+        return keys
+    # Codex: historical behaviour -- ids verbatim (unknown ones surface as
+    # failed_retryable/unknown_session in the summary).
+    if session_ids:
+        target = list(session_ids)
+        return target[:limit] if limit else target
+    refs = reader.list_sessions()  # type: ignore[attr-defined]
+    target = [ref.conversation_id for ref in refs]
+    return target[:limit] if limit else target
 
 
 def _resolve_explicit_staging(cfg: AppConfig, value: str) -> Path:
@@ -149,19 +229,35 @@ def cmd_audit_export(args: argparse.Namespace) -> int:
         print(f"Error: Archive not found: {archive_path}", file=sys.stderr)
         return 1
 
-    reader = CodexExportReader(archive_path)
-    sessions = reader.sessions()
-    manifest_meta = reader.manifest()
+    try:
+        reader = _open_conversation_reader(
+            archive_path,
+            getattr(args, "format", "auto"),
+            namespace_label=getattr(args, "account_namespace", "") or "",
+            use_default_namespace=bool(getattr(args, "use_default_account_namespace", False)),
+        )
+    except ChatGPTExportError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
-    subagents = sum(1 for s in sessions if "subagent" in s.relative_rollout_path or s.source_instance == "subagent")
-    report = {
-        "archive_path": str(archive_path.resolve()),
-        "archive_sha256": reader.archive_sha256,
-        "package_version": manifest_meta.get("packageVersion"),
-        "exported_at": manifest_meta.get("exportedAt"),
-        "total_sessions": len(sessions),
-        "estimated_subagents": subagents,
-    }
+    if isinstance(reader, ChatGPTExportReader):
+        report = reader.schema_audit()
+    else:
+        sessions = reader.sessions()  # type: ignore[attr-defined]
+        manifest_meta = reader.manifest()  # type: ignore[attr-defined]
+        subagents = sum(
+            1
+            for s in sessions
+            if "subagent" in s.relative_rollout_path or s.source_instance == "subagent"
+        )
+        report = {
+            "archive_path": str(archive_path.resolve()),
+            "archive_sha256": reader.archive_sha256,
+            "package_version": manifest_meta.get("packageVersion"),
+            "exported_at": manifest_meta.get("exportedAt"),
+            "total_sessions": len(sessions),
+            "estimated_subagents": subagents,
+        }
 
     if args.json_report:
         Path(args.json_report).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -195,11 +291,21 @@ def cmd_import(args: argparse.Namespace) -> int:
     manifest_file = cfg.conversation_archive.resolve_archive_manifest_path(output_root)
     csv_file = output_root / ".ai-memory" / "manifest.csv"
 
-    reader = CodexExportReader(archive_path)
+    try:
+        reader = _open_conversation_reader(
+            archive_path,
+            getattr(args, "format", "auto"),
+            namespace_label=getattr(args, "account_namespace", "") or "",
+            use_default_namespace=bool(getattr(args, "use_default_account_namespace", False)),
+        )
+    except ChatGPTExportError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     writer = ObsidianConversationWriter(output_root)
     manifest = ImportManifest(manifest_file)
     attachment_inventory = AttachmentInventory(
-        allowlist_roots=[entry.path for entry in cfg.sources.allowlist]
+        allowlist_roots=[entry.path for entry in cfg.sources.allowlist],
+        archive_asset_resolver=getattr(reader, "resolve_asset", None),
     )
     pipeline = ConversationIngestionPipeline(
         reader,
@@ -208,16 +314,14 @@ def cmd_import(args: argparse.Namespace) -> int:
         attachment_inventory=attachment_inventory,
     )
 
-    all_refs = reader.sessions()
-    if args.session_id:
-        target_ids = [sid for sid in args.session_id]
-    else:
-        target_ids = [s.conversation_id for s in all_refs]
+    session_ids = list(getattr(args, "session_id", None) or [])
+    conversation_ids = list(getattr(args, "conversation_id", None) or [])
+    branch_ids = list(getattr(args, "branch_id", None) or [])
+    target_keys = _select_import_keys(
+        reader, session_ids + conversation_ids, branch_ids, getattr(args, "limit", None)
+    )
 
-    if args.limit:
-        target_ids = target_ids[: args.limit]
-
-    results = pipeline.run(target_ids, dry_run=args.dry_run, resume=args.resume)
+    results = pipeline.run(target_keys, dry_run=args.dry_run, resume=args.resume)
     if not args.dry_run:
         manifest.export_csv(csv_file)
 
@@ -232,7 +336,7 @@ def cmd_import(args: argparse.Namespace) -> int:
     }
 
     summary = {
-        "total_requested": len(target_ids),
+        "total_requested": len(target_keys),
         "output_root": str(output_root),
         "dry_run": args.dry_run,
         "resume": getattr(args, "resume", False),
@@ -254,19 +358,29 @@ def cmd_inventory_attachments(args: argparse.Namespace) -> int:
         print(f"Error: Archive not found: {archive_path}", file=sys.stderr)
         return 1
 
-    reader = CodexExportReader(archive_path)
-    all_refs = reader.sessions()
-    if args.session_id:
-        target_ids = [sid for sid in args.session_id]
-    else:
-        target_ids = [s.conversation_id for s in all_refs]
-    if args.limit:
-        target_ids = target_ids[: args.limit]
+    try:
+        reader = _open_conversation_reader(
+            archive_path,
+            getattr(args, "format", "auto"),
+            namespace_label=getattr(args, "account_namespace", "") or "",
+            use_default_namespace=bool(getattr(args, "use_default_account_namespace", False)),
+        )
+    except ChatGPTExportError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    session_ids = list(getattr(args, "session_id", None) or [])
+    target_keys = _select_import_keys(
+        reader, session_ids, [], getattr(args, "limit", None)
+    )
 
     allowlist = [entry.path for entry in cfg.sources.allowlist]
 
-    inventory = AttachmentInventory(allowlist_roots=allowlist)
-    convs = [reader.parse(sid) for sid in target_ids]
+    inventory = AttachmentInventory(
+        allowlist_roots=allowlist,
+        archive_asset_resolver=getattr(reader, "resolve_asset", None),
+    )
+    convs = [reader.parse(key) for key in target_keys]
     records = inventory.scan_many(convs)
 
     if args.missing_only:
@@ -277,7 +391,7 @@ def cmd_inventory_attachments(args: argparse.Namespace) -> int:
     if args.output_csv:
         inventory.export_csv(records, args.output_csv)
 
-    print(f"Scanned {len(target_ids)} conversations, found {len(records)} attachment records.")
+    print(f"Scanned {len(target_keys)} conversations, found {len(records)} attachment records.")
     return 0
 
 
@@ -831,6 +945,12 @@ def build_parser() -> argparse.ArgumentParser:
     # 1. audit-export
     p_audit = subparsers.add_parser("audit-export", help="Audit export ZIP integrity and statistics")
     p_audit.add_argument("archive", help="Path to raw export ZIP")
+    p_audit.add_argument(
+        "--format", choices=["auto", "codex", "chatgpt"], default="auto",
+        help="Export format: auto detects from archive content (default: auto)",
+    )
+    p_audit.add_argument("--account-namespace", default="", help="ChatGPT: stable local namespace label (hash persisted, raw label never stored)")
+    p_audit.add_argument("--use-default-account-namespace", action="store_true", help="ChatGPT: explicitly opt in to the documented default account namespace")
     p_audit.add_argument("--json-report", help="Output path for JSON report")
     p_audit.set_defaults(func=cmd_audit_export)
 
@@ -838,11 +958,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_import = subparsers.add_parser("import", help="Import conversations to staging notes")
     p_import.add_argument("archive", help="Path to raw export ZIP")
     p_import.add_argument("--config", help="Path to config.yaml")
+    p_import.add_argument(
+        "--format", choices=["auto", "codex", "chatgpt"], default="auto",
+        help="Export format: auto detects from archive content (default: auto)",
+    )
+    p_import.add_argument("--account-namespace", default="", help="ChatGPT: stable local namespace label (hash persisted, raw label never stored)")
+    p_import.add_argument("--use-default-account-namespace", action="store_true", help="ChatGPT: explicitly opt in to the documented default account namespace")
     p_import.add_argument("--staging", action="store_true", default=True, help="Target staging folder")
     p_import.add_argument("--staging-dir", help="Explicit staging output directory")
     p_import.add_argument("--vault", action="store_true", help="Target canonical vault (requires --confirm-vault)")
     p_import.add_argument("--confirm-vault", action="store_true", help="Explicit confirmation for vault write")
     p_import.add_argument("--session-id", action="append", help="Specific session ID to import (repeatable)")
+    p_import.add_argument("--conversation-id", action="append", help="Provider conversation ID to import; selects all of its branches (repeatable)")
+    p_import.add_argument("--branch-id", action="append", help="ChatGPT: restrict --conversation-id selection to these branch ids (repeatable)")
     p_import.add_argument("--limit", type=int, help="Limit number of sessions")
     p_import.add_argument("--dry-run", action="store_true", help="Simulate import without modifying files")
     resume_group = p_import.add_mutually_exclusive_group()
@@ -856,6 +984,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_att = subparsers.add_parser("inventory-attachments", help="Scan attachment references and report missing files")
     p_att.add_argument("archive", help="Path to raw export ZIP")
     p_att.add_argument("--config", help="Path to config.yaml")
+    p_att.add_argument(
+        "--format", choices=["auto", "codex", "chatgpt"], default="auto",
+        help="Export format: auto detects from archive content (default: auto)",
+    )
+    p_att.add_argument("--account-namespace", default="", help="ChatGPT: stable local namespace label (hash persisted, raw label never stored)")
+    p_att.add_argument("--use-default-account-namespace", action="store_true", help="ChatGPT: explicitly opt in to the documented default account namespace")
     p_att.add_argument("--session-id", action="append", help="Specific session ID (repeatable)")
     p_att.add_argument("--limit", type=int, help="Limit number of sessions")
     p_att.add_argument("--missing-only", action="store_true", help="Only output missing attachments")

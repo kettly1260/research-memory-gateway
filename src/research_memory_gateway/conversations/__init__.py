@@ -1,6 +1,14 @@
 """Conversation archive ingestion and Obsidian staging support."""
 
 from .codex_export import CodexExportReader
+from .chatgpt_export import (
+    ChatGPTExportError,
+    ChatGPTExportReader,
+    ChatGPTGraph,
+    detect_account_guid,
+    detect_export_format,
+    resolve_account_namespace_hash,
+)
 from .manifest import ImportManifest
 from .pipeline import ConversationIngestionPipeline
 from .vault_writer import ObsidianConversationWriter
@@ -18,6 +26,9 @@ from .retrieval import ConversationRetrievalService
 __all__ = [
     "AttachmentInventory",
     "AttachmentInventoryRecord",
+    "ChatGPTExportError",
+    "ChatGPTExportReader",
+    "ChatGPTGraph",
     "ConversationChunk",
     "ConversationIndexDatabase",
     "ConversationIdentityStore",
@@ -31,4 +42,7 @@ __all__ = [
     "SearchResult",
     "TranscriptFingerprints",
     "compute_transcript_fingerprints",
+    "detect_account_guid",
+    "detect_export_format",
+    "resolve_account_namespace_hash",
 ]
