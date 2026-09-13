@@ -127,8 +127,24 @@ class ObsidianConversationWriter:
     def target_path(self, conversation: NormalizedConversation) -> Path:
         return self.target_path_from_ref(conversation.ref, conversation.created_at)
 
-    def write(self, conversation: NormalizedConversation, *, overwrite_managed: bool = True) -> Path:
-        path = self.target_path(conversation)
+    def write(
+        self,
+        conversation: NormalizedConversation,
+        *,
+        overwrite_managed: bool = True,
+        path_override: str | Path | None = None,
+    ) -> Path:
+        path = Path(path_override) if path_override else self.target_path(conversation)
+        if path_override:
+            root_resolved = self.root.resolve()
+            path_resolved = path.resolve()
+            try:
+                path_resolved.relative_to(root_resolved)
+            except ValueError as exc:
+                raise PermissionError(
+                    f"Refusing conversation output outside writer root: {path_resolved}"
+                ) from exc
+            path = path_resolved
         manual_content = ""
         manual_frontmatter: dict[str, Any] = {}
         if path.exists():

@@ -17,7 +17,12 @@ from research_memory_gateway.conversations import (
 )
 
 
-def make_export(tmp_path: Path, *, extra_user_text: str = "") -> tuple[Path, str]:
+def make_export(
+    tmp_path: Path,
+    *,
+    extra_user_text: str = "",
+    title: str = "Prototype Conversation",
+) -> tuple[Path, str]:
     conversation_id = "11111111-2222-3333-4444-555555555555"
     records = [
         {
@@ -130,7 +135,7 @@ def make_export(tmp_path: Path, *, extra_user_text: str = "") -> tuple[Path, str
         "sessions": [
             {
                 "sessionId": conversation_id,
-                "title": "Prototype Conversation",
+                "title": title,
                 "cwd": "G:\\LLM\\memory",
                 "updatedAt": 1789002006,
                 "relativeRolloutPath": "sessions/rollout.jsonl",
@@ -139,7 +144,7 @@ def make_export(tmp_path: Path, *, extra_user_text: str = "") -> tuple[Path, str
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "sessionIndexEntry": {
                     "id": conversation_id,
-                    "thread_name": "Prototype Conversation",
+                    "thread_name": title,
                     "updated_at": "2026-09-10T01:00:06Z",
                 },
                 "sourceInstance": "test",
@@ -249,6 +254,53 @@ def test_pipeline_is_idempotent_and_exports_human_readable_manifest(tmp_path: Pa
     csv_text = csv_path.read_text(encoding="utf-8-sig")
     assert "source_entry_sha256" in csv_text
     assert conversation_id in csv_text
+
+
+def test_pipeline_continued_conversation_reuses_original_path_when_title_changes(tmp_path: Path) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+
+    archive_v1, conversation_id = make_export(first_dir, title="Original Title")
+    output_root = tmp_path / "staging_continued"
+    manifest = ImportManifest(output_root / ".ai-memory" / "manifest.sqlite")
+    writer = ObsidianConversationWriter(output_root)
+
+    first_pipeline = ConversationIngestionPipeline(
+        CodexExportReader(archive_v1),
+        writer,
+        manifest,
+    )
+    first = first_pipeline.run([conversation_id])
+    assert first[0].status == "written"
+    original_path = Path(first[0].output_path)
+    original_text = original_path.read_text(encoding="utf-8")
+    original_path.write_text(original_text + "\nmanual continuity note\n", encoding="utf-8")
+
+    archive_v2, _ = make_export(
+        second_dir,
+        extra_user_text="This conversation continued with new content.",
+        title="Renamed After Continuation",
+    )
+    second_pipeline = ConversationIngestionPipeline(
+        CodexExportReader(archive_v2),
+        writer,
+        manifest,
+    )
+    second = second_pipeline.run([conversation_id])
+
+    assert second[0].status == "written"
+    assert second[0].reason == "source_changed"
+    assert Path(second[0].output_path) == original_path.resolve()
+    assert original_path.exists()
+    updated_text = original_path.read_text(encoding="utf-8")
+    assert "This conversation continued with new content." in updated_text
+    assert "manual continuity note" in updated_text
+    assert len(list(output_root.rglob("*.md"))) == 1
+    record = manifest.get_record(conversation_id)
+    assert record is not None
+    assert Path(record["output_path"]) == original_path.resolve()
 
 
 def test_pipeline_attachment_allowlist_content_change_and_missing(tmp_path: Path) -> None:

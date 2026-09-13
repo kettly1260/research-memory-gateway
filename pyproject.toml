@@ -1,6 +1,6 @@
 [project]
 name = "research-memory-gateway"
-version = "0.2.2"
+version = "0.2.3"
 description = "A lightweight evidence-first MCP gateway for cross-tool scientific research memory."
 readme = "README.md"
 requires-python = ">=3.11"

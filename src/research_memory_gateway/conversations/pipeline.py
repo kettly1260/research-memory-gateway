@@ -91,7 +91,17 @@ class ConversationIngestionPipeline:
             try:
                 conversation = conversation or self.reader.parse(conversation_id)
                 prior_record = self.manifest.get_record(conversation_id)
-                path = self.writer.write(conversation, overwrite_managed=True)
+                # Once a conversation has been imported, keep its canonical
+                # output path stable across later full exports.  A continued
+                # conversation may gain messages and even a new title, but it
+                # must update the existing managed note rather than leave an
+                # orphaned duplicate under a newly derived filename.
+                stable_output_path = decision.output_path or None
+                path = self.writer.write(
+                    conversation,
+                    overwrite_managed=True,
+                    path_override=stable_output_path,
+                )
                 if not att_hash:
                     att_hash = AttachmentInventory.inventory_hash(
                         self.attachment_inventory.scan_one(conversation)
