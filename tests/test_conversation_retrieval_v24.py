@@ -68,6 +68,52 @@ def test_search_returns_source_key_and_canonical_id(indexed_archive, tmp_path: P
     assert item["source_system"] == "codex"
 
 
+def test_read_backfills_identity_for_legacy_frontmatter(tmp_path: Path) -> None:
+    note = tmp_path / "staging" / "legacy.md"
+    note.parent.mkdir(parents=True)
+    note.write_text(
+        """---
+type: ai-conversation
+source: codex
+conversation_id: legacy-conversation-id
+source_system: codex
+thread_source: user
+---
+
+# Conversation
+
+Legacy note content for identity fallback.
+""",
+        encoding="utf-8",
+    )
+
+    index = ConversationIndexDatabase(tmp_path / "index.sqlite")
+    source_key = "srcv1_legacy_test"
+    canonical_id = "11111111-1111-4111-8111-111111111111"
+    indexed = index.index_file(
+        note,
+        identity_lookup=lambda _: {
+            "source_key": source_key,
+            "canonical_conversation_id": canonical_id,
+            "source_conversation_id": "legacy-conversation-id",
+            "source_thread_id": "legacy-thread",
+            "source_branch_id": "legacy-branch",
+        },
+    )
+    assert indexed > 0
+
+    service = ConversationRetrievalService(index, allowed_roots=[note.parent])
+    result = service.read(note)
+    metadata = result["metadata"]
+    assert metadata["conversation_id"] == "legacy-conversation-id"
+    assert metadata["source_key"] == source_key
+    assert metadata["canonical_conversation_id"] == canonical_id
+    assert metadata["source_conversation_id"] == "legacy-conversation-id"
+    assert metadata["source_thread_id"] == "legacy-thread"
+    assert metadata["source_branch_id"] == "legacy-branch"
+    assert metadata["source_system"] == "codex"
+
+
 # --- 13.7 #36 (part 1): plain Codex-only search results remain usable -------------
 
 def test_codex_only_search_ranking_unchanged(indexed_archive, tmp_path: Path) -> None:

@@ -247,23 +247,53 @@ class ConversationRetrievalService:
         text = safe_path.read_text(encoding="utf-8")
         from .vault_writer import parse_frontmatter
         fm, _ = parse_frontmatter(text)
+        indexed_identity = self.index_db.document_identity_for_file(safe_path)
+        conversation_id = str(
+            fm.get("conversation_id")
+            or indexed_identity.get("source_conversation_id")
+            or indexed_identity.get("id")
+            or ""
+        )
         metadata = {
             "source": fm.get("source"),
-            "source_system": fm.get("source_system") or (fm.get("source") if fm.get("source") == "codex" else "") or "codex",
-            "source_originator": fm.get("source_originator") or "",
-            "source_surface": fm.get("source_surface") or "",
-            "source_version": fm.get("source_version") or "",
-            "model_provider": fm.get("model_provider") or "",
-            "model_name": fm.get("model_name") or "",
-            "thread_source": fm.get("thread_source") or "",
-            "parent_thread_id": fm.get("parent_thread_id") or "",
-            "agent_path": fm.get("agent_path") or "",
-            "conversation_id": fm.get("conversation_id") or "",
-            "source_key": fm.get("source_key") or "",
-            "canonical_conversation_id": fm.get("canonical_conversation_id") or "",
-            "source_conversation_id": fm.get("source_conversation_id") or fm.get("conversation_id") or "",
-            "source_thread_id": fm.get("source_thread_id") or "",
-            "source_branch_id": fm.get("source_branch_id") or "",
+            "source_system": fm.get("source_system")
+            or indexed_identity.get("source_system")
+            or (fm.get("source") if fm.get("source") == "codex" else "")
+            or "codex",
+            "source_originator": fm.get("source_originator")
+            or indexed_identity.get("source_originator")
+            or "",
+            "source_surface": fm.get("source_surface")
+            or indexed_identity.get("source_surface")
+            or "",
+            "source_version": fm.get("source_version")
+            or indexed_identity.get("source_version")
+            or "",
+            "model_provider": fm.get("model_provider")
+            or indexed_identity.get("model_provider")
+            or "",
+            "model_name": fm.get("model_name") or indexed_identity.get("model_name") or "",
+            "thread_source": fm.get("thread_source")
+            or indexed_identity.get("thread_source")
+            or "",
+            "parent_thread_id": fm.get("parent_thread_id")
+            or indexed_identity.get("parent_thread_id")
+            or "",
+            "agent_path": fm.get("agent_path") or indexed_identity.get("agent_path") or "",
+            "conversation_id": conversation_id,
+            "source_key": fm.get("source_key") or indexed_identity.get("source_key") or "",
+            "canonical_conversation_id": fm.get("canonical_conversation_id")
+            or indexed_identity.get("canonical_conversation_id")
+            or "",
+            "source_conversation_id": fm.get("source_conversation_id")
+            or indexed_identity.get("source_conversation_id")
+            or conversation_id,
+            "source_thread_id": fm.get("source_thread_id")
+            or indexed_identity.get("source_thread_id")
+            or "",
+            "source_branch_id": fm.get("source_branch_id")
+            or indexed_identity.get("source_branch_id")
+            or "",
             "created": fm.get("created") or "",
             "updated": fm.get("updated") or "",
             "completion_status": fm.get("completion_status") or "",

@@ -653,6 +653,32 @@ class ConversationIndexDatabase:
             "embedding_dimension": emb["dimension"] if emb else None,
         }
 
+    def document_identity_for_file(self, path: str | Path) -> dict[str, str]:
+        """Return indexed source/canonical identity for one Markdown path.
+
+        v0.2.4 introduced source/canonical identity columns without rewriting
+        legacy Markdown frontmatter. Readers therefore need a path-based
+        fallback so old notes expose the same identity metadata as new notes.
+        """
+        target_str = str(Path(path).resolve())
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, source_key, canonical_conversation_id,
+                       source_conversation_id, source_thread_id, source_branch_id,
+                       source_system, source_originator, source_surface, source_version,
+                       model_provider, model_name, thread_source, parent_thread_id,
+                       agent_path
+                FROM conversation_documents
+                WHERE vault_path = ?
+                LIMIT 1
+                """,
+                (target_str,),
+            ).fetchone()
+        if row is None:
+            return {}
+        return {key: str(row[key] or "") for key in row.keys()}
+
     def _ensure_embedding(self, conn: sqlite3.Connection, chunk: ConversationChunk, model_name: str) -> None:
         # 检查是否已存在具有相同 identity 的 vector
         existing = conn.execute(
