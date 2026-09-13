@@ -256,7 +256,11 @@ def utc_now() -> str:
 def atomic_write_text(path: str | Path, text: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f".{target.name}.{secrets.token_hex(6)}.tmp")
+    # Keep the temporary sibling filename independent of the target name.
+    # Filesystems such as ext4 commonly cap each filename component at 255
+    # bytes; repeating an already-long UTF-8 target name in the temp filename
+    # can exceed that limit even when the final target itself is valid.
+    tmp = target.with_name(f".{secrets.token_hex(12)}.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(target)
 
