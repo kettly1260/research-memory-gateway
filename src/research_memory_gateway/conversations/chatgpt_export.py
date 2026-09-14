@@ -60,12 +60,14 @@ def find_conversation_shards(archive_or_namelist: zipfile.ZipFile | Any) -> list
 
     Matches ``conversations.json``, ``conversations-001.json``, ``conversations-1.json``,
     ``conversations_001.json``, etc.
-    Sorted numerically by shard index (un-numbered ``conversations.json`` sorts first as 0),
-    then case-insensitively by entry name for total determinism regardless of ZIP entry order.
+    If no standard conversation shards are found, falls back to discovering standalone
+    conversation JSON files (e.g. from ChatGPT Business selected or all exports).
+    Sorted deterministically.
     """
+    is_zip = isinstance(archive_or_namelist, zipfile.ZipFile)
     names = (
         archive_or_namelist.namelist()
-        if isinstance(archive_or_namelist, zipfile.ZipFile)
+        if is_zip
         else list(archive_or_namelist)
     )
     shards: list[tuple[int, str, str]] = []
@@ -80,8 +82,39 @@ def find_conversation_shards(archive_or_namelist: zipfile.ZipFile | Any) -> list
             num = int(num_str) if num_str is not None else 0
             shards.append((num, name.lower(), name))
 
-    shards.sort(key=lambda item: (item[0], item[1], item[2]))
-    return [item[2] for item in shards]
+    if shards:
+        shards.sort(key=lambda item: (item[0], item[1], item[2]))
+        return [item[2] for item in shards]
+
+    # Fallback: check for standalone conversation json files in zip
+    standalone: list[str] = []
+    ignored_names = {
+        "user.json",
+        "model_comparisons.json",
+        "shared_conversations.json",
+        "message_feedback.json",
+        "manifest.json",
+    }
+    for name in names:
+        if name.endswith("/"):
+            continue
+        if "__MACOSX" in name or Path(name).name.startswith("._"):
+            continue
+        clean_name = Path(name).name.lower()
+        if not clean_name.endswith(".json") or clean_name in ignored_names:
+            continue
+        if is_zip:
+            try:
+                raw = archive_or_namelist.read(name)
+                if b'"mapping"' in raw:
+                    standalone.append(name)
+            except Exception:
+                continue
+        else:
+            standalone.append(name)
+
+    standalone.sort(key=lambda s: s.lower())
+    return standalone
 
 BRANCH_KIND_PRIMARY = "primary"
 BRANCH_KIND_ALTERNATE = "alternate"
@@ -222,6 +255,10 @@ def _conversations_shards_shape_ok(archive: zipfile.ZipFile, shards: list[str]) 
             data = json.loads(archive.read(shard))
         except (json.JSONDecodeError, OSError, zipfile.BadZipFile, MemoryError):
             return False
+        if isinstance(data, dict):
+            if "mapping" in data and ("conversation_id" in data or "id" in data or "title" in data):
+                return True
+            continue
         if not isinstance(data, list):
             return False
         for element in data[:20]:
@@ -246,7 +283,7 @@ def _conversations_json_shape_ok(archive: zipfile.ZipFile) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def detect_account_guid(archive_path: str | Path) -> str:
+def detect_account_guid(archive_path: str | Path, filename_hint: str | None = None) -> str:
     """Return a stable provider account GUID from the export, or ''.
 
     Only a strict UUID is accepted, and anything email-shaped is rejected;
@@ -254,24 +291,34 @@ def detect_account_guid(archive_path: str | Path) -> str:
     persisted, logged or reported.
     """
     path = Path(archive_path)
-    if not path.exists() or not zipfile.is_zipfile(path):
-        return ""
-    with zipfile.ZipFile(path) as archive:
-        if USER_ENTRY not in set(archive.namelist()):
-            return ""
-        try:
-            user = json.loads(archive.read(USER_ENTRY))
-        except (json.JSONDecodeError, OSError, zipfile.BadZipFile, UnicodeDecodeError):
-            return ""
-    if not isinstance(user, dict):
-        return ""
-    value = user.get("id")
-    if not isinstance(value, str):
-        return ""
-    value = value.strip()
-    if "@" in value or not _UUID_RE.match(value):
-        return ""
-    return value
+    if path.exists() and zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            if USER_ENTRY in set(archive.namelist()):
+                try:
+                    user = json.loads(archive.read(USER_ENTRY))
+                    if isinstance(user, dict):
+                        value = user.get("id")
+                        if isinstance(value, str):
+                            value = value.strip()
+                            if "@" not in value and _UUID_RE.match(value):
+                                return value
+                except (json.JSONDecodeError, OSError, zipfile.BadZipFile, UnicodeDecodeError):
+                    pass
+
+    # Fallback to UUID in filename (e.g. chatgpt_business_backup_selected_fe828cbb-7312-4979-8049-9a25c3362b7c_2026-09-14.zip)
+    candidates = [path.name]
+    if filename_hint:
+        candidates.append(Path(filename_hint).name)
+    for candidate in candidates:
+        match = re.search(
+            r"[_\-]([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[_\-.]",
+            candidate,
+        )
+        if match:
+            candidate_uuid = match.group(1).lower()
+            if _UUID_RE.match(candidate_uuid):
+                return candidate_uuid
+    return ""
 
 
 def resolve_account_namespace_hash(
@@ -279,6 +326,7 @@ def resolve_account_namespace_hash(
     *,
     namespace_label: str = "",
     use_default: bool = False,
+    filename_hint: str = "",
 ) -> tuple[str, str]:
     """Resolve the account namespace hash following the v0.2.6 priority.
 
@@ -290,7 +338,7 @@ def resolve_account_namespace_hash(
     Returns ``(namespace_hash, strategy)``.  Raises ``ChatGPTExportError``
     with code ``ACCOUNT_NAMESPACE_REQUIRED`` when nothing usable is present.
     """
-    guid = detect_account_guid(archive_path)
+    guid = detect_account_guid(archive_path, filename_hint=filename_hint)
     if guid:
         return account_namespace_hash("chatgpt", guid), "export_account_guid"
     label = (namespace_label or "").strip()
@@ -825,10 +873,13 @@ class ChatGPTExportReader:
                     "MALFORMED_EXPORT", f"{shard_name} is not valid JSON: {exc}"
                 ) from exc
             if not isinstance(data, list):
-                raise ChatGPTExportError(
-                    "MALFORMED_EXPORT",
-                    f"{shard_name} top level must be a list, got {type(data).__name__}",
-                )
+                if isinstance(data, dict) and "mapping" in data:
+                    data = [data]
+                else:
+                    raise ChatGPTExportError(
+                        "MALFORMED_EXPORT",
+                        f"{shard_name} top level must be a list, got {type(data).__name__}",
+                    )
             for index, element in enumerate(data):
                 if not isinstance(element, dict):
                     self.schema_warnings.append(f"non_object_conversation:{shard_name}:{index}")

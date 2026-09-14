@@ -9,6 +9,13 @@ from ..service import ResearchMemoryService
 from .capture import capture_memory as capture_memory_impl
 from .recall import get_project_state as get_project_state_impl
 from .recall import recall_memory as recall_memory_impl
+from .upload_tools import (
+    conversation_ingest_turn as conversation_ingest_turn_impl,
+    conversation_upload_abort as conversation_upload_abort_impl,
+    conversation_upload_commit as conversation_upload_commit_impl,
+    conversation_upload_create as conversation_upload_create_impl,
+    conversation_upload_status as conversation_upload_status_impl,
+)
 from .verify import verify_memory as verify_memory_impl
 
 CORE_AGENT_TOOL_NAMES = (
@@ -21,6 +28,13 @@ CONVERSATION_TOOL_NAMES = (
     "conversation_search",
     "conversation_read",
     "conversation_recall",
+)
+CONVERSATION_UPLOAD_TOOL_NAMES = (
+    "conversation_upload_create",
+    "conversation_upload_status",
+    "conversation_upload_abort",
+    "conversation_upload_commit",
+    "conversation_ingest_turn",
 )
 AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES
 
@@ -115,6 +129,8 @@ def register_agent_tools(mcp: MCPServer, service: ResearchMemoryService) -> None
 
     if getattr(service.config, "conversation_archive", None) and service.config.conversation_archive.enabled:
         register_conversation_tools(mcp, service)
+        if getattr(service.config, "upload", None) and service.config.upload.enabled:
+            register_upload_tools(mcp, service)
 
 
 def register_conversation_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
@@ -195,4 +211,92 @@ def register_conversation_tools(mcp: MCPServer, service: ResearchMemoryService) 
             source_key=source_key,
             source_conversation_id=source_conversation_id,
             collapse_canonical=collapse_canonical,
+        )
+
+
+def register_upload_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    def conversation_upload_create(
+        filename: str,
+        size_bytes: int,
+        sha256: str,
+        content_type: str = "application/zip",
+        source_hint: str | None = None,
+        expiry_hours: int | None = None,
+    ) -> dict[str, Any]:
+        """Create a resumable upload session for conversation exports (ZIP).
+
+        Returns upload_id and standard tus 1.0.0 upload_url (/uploads/{upload_id}).
+        Upload chunks directly to upload_url using standard tus protocol.
+        """
+        return conversation_upload_create_impl(
+            service,
+            filename=filename,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            content_type=content_type,
+            source_hint=source_hint,
+            expiry_hours=expiry_hours,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def conversation_upload_status(upload_id: str) -> dict[str, Any]:
+        """Query real-time status of an in-flight or completed upload session."""
+        return conversation_upload_status_impl(service, upload_id=upload_id)
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True))
+    def conversation_upload_abort(upload_id: str) -> dict[str, Any]:
+        """Cancel and clean up an in-flight upload session."""
+        return conversation_upload_abort_impl(service, upload_id=upload_id)
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    def conversation_upload_commit(
+        upload_id: str,
+        vault_confirmed: bool = False,
+        target_vault: str | None = None,
+        format_hint: str = "auto",
+        account_namespace: str = "",
+        use_default_account_namespace: bool = False,
+        dry_run: bool = False,
+        resume: bool = True,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Finalize and commit an uploaded conversation export into the archive.
+
+        Verifies SHA-256 integrity, detects format (ChatGPT or Codex), processes
+        conversation graph, generates Markdown notes, and updates the search index.
+        """
+        return conversation_upload_commit_impl(
+            service,
+            upload_id=upload_id,
+            vault_confirmed=vault_confirmed,
+            target_vault=target_vault,
+            format_hint=format_hint,
+            account_namespace=account_namespace,
+            use_default_account_namespace=use_default_account_namespace,
+            dry_run=dry_run,
+            resume=resume,
+            limit=limit,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    def conversation_ingest_turn(
+        session_id: str,
+        role: str,
+        content: str,
+        title: str | None = None,
+        model: str | None = None,
+        timestamp: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Directly ingest a conversation turn into the archive and index for instant recall."""
+        return conversation_ingest_turn_impl(
+            service,
+            session_id=session_id,
+            role=role,
+            content=content,
+            title=title,
+            model=model,
+            timestamp=timestamp,
+            metadata=metadata,
         )
