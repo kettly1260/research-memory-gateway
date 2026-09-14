@@ -159,22 +159,30 @@ def test_c20_missing_namespace_fails_and_opt_in_default(tmp_path) -> None:
     assert ns_hash2 == account_namespace_hash("chatgpt", "my-namespace")
 
 
-def test_c20b_export_guid_takes_priority(tmp_path) -> None:
+def test_c20b_explicit_namespace_takes_priority_over_export_guid(tmp_path) -> None:
     from research_memory_gateway.conversations.chatgpt_export import (
         detect_account_guid,
         resolve_account_namespace_hash,
     )
+    from research_memory_gateway.conversations.identity import account_namespace_hash
     from tests.chatgpt_fixtures import TEST_ACCOUNT_GUID
 
     conversation = linear_conversation("conv-guid", [("user", "u"), ("assistant", "a")])
     archive = build_export(tmp_path / "guid.zip", [conversation], account_id=TEST_ACCOUNT_GUID)
     assert detect_account_guid(archive) == TEST_ACCOUNT_GUID
-    ns_hash, strategy = resolve_account_namespace_hash(
-        archive, namespace_label="ignored-label"
+
+    # v0.2.7: explicit account_namespace takes highest priority over internal export GUID
+    ns_hash_explicit, strategy_explicit = resolve_account_namespace_hash(
+        archive, namespace_label="my-explicit-namespace"
     )
-    assert strategy == "export_account_guid"
-    # the raw GUID itself is never persisted -- only its hash is returned
-    assert TEST_ACCOUNT_GUID not in ns_hash
+    assert strategy_explicit == "explicit_label"
+    assert ns_hash_explicit == account_namespace_hash("chatgpt", "my-explicit-namespace")
+
+    # When no explicit namespace is given, internal export GUID is used
+    ns_hash_guid, strategy_guid = resolve_account_namespace_hash(archive)
+    assert strategy_guid == "export_account_guid"
+    assert ns_hash_guid == account_namespace_hash("chatgpt", TEST_ACCOUNT_GUID)
+    assert TEST_ACCOUNT_GUID not in ns_hash_guid
 
 
 def test_c_branch_family_canonical(tmp_path) -> None:

@@ -1,6 +1,6 @@
 """Research Memory Gateway."""
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 # MCP Python SDK v2 compatibility bridge:
 # In MCP v2, model fields were migrated from camelCase to snake_case.

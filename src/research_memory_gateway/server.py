@@ -17,6 +17,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
 
+from . import __version__
 from .backends import build_backend
 from .agent_surface.tools import register_agent_tools
 from .config import AppConfig, load_config
@@ -438,10 +439,24 @@ def _mount_uploads_if_enabled(app: Starlette, config: AppConfig, mcp: MCPServer)
             app.mount(config.upload.upload_path, tus_app)
 
 
+def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
+    service = getattr(mcp, "_rmg_service", None)
+
+    async def _health_handler(request: Any) -> Response:
+        from starlette.responses import JSONResponse
+
+        data = service.health() if service is not None else {"status": "ok", "version": __version__}
+        return JSONResponse(data)
+
+    app.add_route("/health", _health_handler, methods=["GET"])
+    app.add_route("/healthz", _health_handler, methods=["GET"])
+
+
 def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only Streamable HTTP at /mcp."""
     app = mcp.streamable_http_app()
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
@@ -451,6 +466,7 @@ def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) ->
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
     app = mcp.sse_app()
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
@@ -488,6 +504,7 @@ def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfi
         lifespan=combined_lifespan,
     )
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app

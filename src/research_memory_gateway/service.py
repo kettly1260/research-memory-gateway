@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
+from . import __version__
 from .backends import MemoryBackend
 from .config import AppConfig
 from .exporters import export_memories
@@ -466,6 +467,7 @@ class ResearchMemoryService:
     def health(self) -> dict[str, Any]:
         return {
             "status": "ok",
+            "version": __version__,
             "backend": self.backend.health(),
             "retrieval": self.backend.retrieval_health(),
             "memory_policy": {

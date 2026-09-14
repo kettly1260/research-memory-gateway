@@ -21,3 +21,5 @@ scratch/
 .local/
 *Destination*
 %SystemDrive%/
+build/
+dist/

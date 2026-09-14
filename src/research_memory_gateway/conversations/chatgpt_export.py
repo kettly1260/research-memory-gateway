@@ -283,12 +283,16 @@ def _conversations_json_shape_ok(archive: zipfile.ZipFile) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def detect_account_guid(archive_path: str | Path, filename_hint: str | None = None) -> str:
-    """Return a stable provider account GUID from the export, or ''.
+def detect_account_guid(archive_path: str | Path) -> str:
+    """Return a stable provider account GUID from the export content, or ''.
 
-    Only a strict UUID is accepted, and anything email-shaped is rejected;
-    the raw value is used solely to derive a namespace hash and must never be
-    persisted, logged or reported.
+    Only a strict UUID found within internal export metadata (user.json) is
+    accepted, and anything email-shaped is rejected; the raw value is used
+    solely to derive a namespace hash and must never be persisted, logged or
+    reported.
+
+    ZIP filenames, internal JSON filenames, absolute source paths, upload
+    filenames, and extraction directories NEVER participate in identity.
     """
     path = Path(archive_path)
     if path.exists() and zipfile.is_zipfile(path):
@@ -304,20 +308,19 @@ def detect_account_guid(archive_path: str | Path, filename_hint: str | None = No
                                 return value
                 except (json.JSONDecodeError, OSError, zipfile.BadZipFile, UnicodeDecodeError):
                     pass
-
-    # Fallback to UUID in filename (e.g. chatgpt_business_backup_selected_fe828cbb-7312-4979-8049-9a25c3362b7c_2026-09-14.zip)
-    candidates = [path.name]
-    if filename_hint:
-        candidates.append(Path(filename_hint).name)
-    for candidate in candidates:
-        match = re.search(
-            r"[_\-]([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})[_\-.]",
-            candidate,
-        )
-        if match:
-            candidate_uuid = match.group(1).lower()
-            if _UUID_RE.match(candidate_uuid):
-                return candidate_uuid
+    elif path.exists() and path.is_dir():
+        user_file = path / USER_ENTRY
+        if user_file.exists() and user_file.is_file():
+            try:
+                user = json.loads(user_file.read_text(encoding="utf-8"))
+                if isinstance(user, dict):
+                    value = user.get("id")
+                    if isinstance(value, str):
+                        value = value.strip()
+                        if "@" not in value and _UUID_RE.match(value):
+                            return value
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                pass
     return ""
 
 
@@ -326,24 +329,23 @@ def resolve_account_namespace_hash(
     *,
     namespace_label: str = "",
     use_default: bool = False,
-    filename_hint: str = "",
 ) -> tuple[str, str]:
-    """Resolve the account namespace hash following the v0.2.6 priority.
+    """Resolve the account namespace hash following the v0.2.7 priority.
 
-    1. a stable provider account GUID inside the export (validated as a UUID,
-       never email/secret shaped) -> hash it;
-    2. an explicit stable user-chosen label -> ``account_namespace_hash``;
-    3. only with explicit opt-in, the documented default namespace.
+    1. Explicit account_namespace (highest priority) -> hash it with code "explicit_label";
+    2. Export content internal stable provider account identity (user.json) -> hash it with code "export_account_guid";
+    3. Explicit opt-in default namespace -> hash DEFAULT_NAMESPACE_LABEL with code "default_opt_in";
+    4. Otherwise fail closed with code "ACCOUNT_NAMESPACE_REQUIRED".
 
-    Returns ``(namespace_hash, strategy)``.  Raises ``ChatGPTExportError``
-    with code ``ACCOUNT_NAMESPACE_REQUIRED`` when nothing usable is present.
+    Filenames, paths, upload names, and extraction directories never participate
+    in identity resolution.
     """
-    guid = detect_account_guid(archive_path, filename_hint=filename_hint)
-    if guid:
-        return account_namespace_hash("chatgpt", guid), "export_account_guid"
     label = (namespace_label or "").strip()
     if label:
         return account_namespace_hash("chatgpt", label), "explicit_label"
+    guid = detect_account_guid(archive_path)
+    if guid:
+        return account_namespace_hash("chatgpt", guid), "export_account_guid"
     if use_default:
         return account_namespace_hash("chatgpt", DEFAULT_NAMESPACE_LABEL), "default_opt_in"
     raise ChatGPTExportError(
@@ -891,7 +893,17 @@ class ChatGPTExportReader:
                     continue
                 if provider_id in seen_by_provider_id:
                     existing_shard, existing_conv = seen_by_provider_id[provider_id]
-                    if _stable_json(existing_conv) == _stable_json(element):
+                    is_same = (
+                        _stable_json(existing_conv) == _stable_json(element)
+                        or (
+                            existing_conv.get("mapping") == element.get("mapping")
+                            and existing_conv.get("current_node") == element.get("current_node")
+                            and existing_conv.get("title") == element.get("title")
+                            and existing_conv.get("create_time") == element.get("create_time")
+                            and existing_conv.get("update_time") == element.get("update_time")
+                        )
+                    )
+                    if is_same:
                         self.schema_warnings.append(
                             f"duplicate_conversation_deduped:{provider_id}:{existing_shard}:{shard_name}"
                         )

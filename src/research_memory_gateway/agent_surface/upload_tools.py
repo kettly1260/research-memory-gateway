@@ -125,7 +125,6 @@ def conversation_upload_commit(
             blob_path,
             namespace_label=account_namespace,
             use_default=use_default_account_namespace,
-            filename_hint=original_filename,
         )
         reader = ChatGPTExportReader(blob_path, account_namespace_hash=ns_hash)
 
