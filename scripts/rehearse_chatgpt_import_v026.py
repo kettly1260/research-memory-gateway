@@ -102,11 +102,17 @@ def peak_rss_mb() -> float | None:
     return None
 
 
-def build_synthetic_export(target: Path, conversation_count: int = 40) -> Path:
+def build_synthetic_export(
+    target: Path,
+    conversation_count: int = 40,
+    *,
+    shard_count: int = 1,
+) -> Path:
     """Generate a deterministic synthetic full export (no private data)."""
     from tests.chatgpt_fixtures import (
         GraphBuilder,
         build_export,
+        build_sharded_export,
         linear_conversation,
         make_message,
         multimodal_message,
@@ -137,18 +143,19 @@ def build_synthetic_export(target: Path, conversation_count: int = 40) -> Path:
                 [("user", f"linear q {extra}"), ("assistant", f"linear a {extra}")],
             )
         )
-    with tempfile.TemporaryDirectory() as tmp:
-        staging = Path(tmp)
-        archive = build_export(
-            target,
-            conversations,
-            assets={
-                f"files/file-syn{i:03d}.png": f"synthetic-png-bytes-{i}".encode("utf-8")
-                for i in range(conversation_count)
-            },
-        )
-        # build_export writes directly to target; tmp only used for symmetry
-        del staging
+
+    assets = {
+        f"files/file-syn{i:03d}.png": f"synthetic-png-bytes-{i}".encode("utf-8")
+        for i in range(conversation_count)
+    }
+
+    if shard_count > 1:
+        shards: list[list[dict]] = [[] for _ in range(shard_count)]
+        for i, conv in enumerate(conversations):
+            shards[i % shard_count].append(conv)
+        archive = build_sharded_export(target, shards, assets=assets)
+    else:
+        archive = build_export(target, conversations, assets=assets)
     return archive
 
 
@@ -224,9 +231,41 @@ def run_rehearsal(archive_path: Path, workdir: Path, *, account_label: str = "re
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.startswith("<!-- source ordinal=")
     )
-    report["attachments_resolved"] = sum(
-        1 for path in md_files for line in path.read_text(encoding="utf-8").splitlines() if "archive_asset" in line
+    # Scan attachments using real AttachmentInventoryRecord / resolver results
+    all_attachment_records = []
+    for key in keys:
+        try:
+            parsed_conv = reader.parse(key)
+            all_attachment_records.extend(inventory.scan_one(parsed_conv))
+        except Exception:
+            pass
+
+    archive_assets_referenced = sum(
+        1
+        for r in all_attachment_records
+        if r.locator_type in {"archive_asset", "zip_entry"} or r.original_locator.startswith("file-service://")
     )
+    archive_assets_resolved = sum(
+        1
+        for r in all_attachment_records
+        if r.locator_type == "archive_asset" and r.status == "found"
+    )
+    archive_assets_unresolved = sum(
+        1
+        for r in all_attachment_records
+        if r.status == "unresolved"
+    )
+    content_sha_matched = sum(
+        1
+        for r in all_attachment_records
+        if r.status == "found" and bool(r.content_hash)
+    )
+
+    report["archive_assets_referenced"] = archive_assets_referenced
+    report["archive_assets_resolved"] = archive_assets_resolved
+    report["archive_assets_unresolved"] = archive_assets_unresolved
+    report["content_sha_matched"] = content_sha_matched
+    report["attachments_resolved"] = archive_assets_resolved
 
     # F. repeat import ---------------------------------------------------------
     snapshot = {path: path.read_bytes() for path in md_files}
@@ -277,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive", help="Path to an export ZIP; omit to generate a synthetic export")
     parser.add_argument("--account-namespace", default="rehearsal-label")
     parser.add_argument("--synthetic-conversations", type=int, default=40)
+    parser.add_argument("--sharded", action="store_true", help="Generate sharded conversation JSON files (e.g. conversations-001.json, conversations-002.json)")
+    parser.add_argument("--shard-count", type=int, default=3, help="Number of shards when generating sharded export")
     parser.add_argument("--json-report", help="Optional path for the JSON report")
     args = parser.parse_args(argv)
 
@@ -288,23 +329,44 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Archive not found: {archive}")
         synthetic = False
     else:
-        archive = workdir / "input" / "synthetic-chatgpt-export.zip"
+        filename = "synthetic-chatgpt-sharded-export.zip" if args.sharded else "synthetic-chatgpt-export.zip"
+        archive = workdir / "input" / filename
         archive.parent.mkdir(parents=True, exist_ok=True)
-        build_synthetic_export(archive, args.synthetic_conversations)
+        build_synthetic_export(
+            archive,
+            args.synthetic_conversations,
+            shard_count=args.shard_count if args.sharded else 1,
+        )
         synthetic = True
 
     report = run_rehearsal(archive, workdir, account_label=args.account_namespace)
     report["synthetic_archive"] = synthetic
+    report["validation_status"] = "REAL EXPORT VALIDATION PENDING"
+    report["production_ready"] = False
+
     report_text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.json_report:
         Path(args.json_report).write_text(report_text, encoding="utf-8")
     print(report_text)
+
+    if report.get("synthetic_archive", False):
+        attachment_gate_ok = (
+            report["archive_assets_resolved"] > 0
+            and report["archive_assets_referenced"] >= report["archive_assets_resolved"]
+            and report["content_sha_matched"] == report["archive_assets_resolved"]
+        )
+    else:
+        attachment_gate_ok = (
+            report["archive_assets_referenced"] == 0
+            or (report["archive_assets_resolved"] > 0 and report["content_sha_matched"] == report["archive_assets_resolved"])
+        )
 
     gates = [
         report["dry_run_all_dry_run"],
         report["repeat_all_skipped"],
         report["repeat_zero_rewrites"],
         report["raw_zip_unchanged"],
+        attachment_gate_ok,
     ]
     return 0 if all(gates) else 1
 

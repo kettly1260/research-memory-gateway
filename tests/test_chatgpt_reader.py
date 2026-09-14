@@ -21,11 +21,12 @@ from research_memory_gateway.conversations.chatgpt_export import (
     detect_account_guid,
     detect_export_format,
     plan_branches,
+    resolve_account_namespace_hash,
 )
 from tests.chatgpt_fixtures import (
     GraphBuilder,
     TEST_ACCOUNT_GUID,
-    build_export,
+    build_export, build_sharded_export,
     image_part,
     linear_conversation,
     make_message,
@@ -579,3 +580,143 @@ def test_detect_account_guid(tmp_path) -> None:
         tmp_path / "emailguid.zip", [conversation], account_id="user@example.com"
     )
     assert detect_account_guid(email_guid) == ""
+
+
+# --- sharded/numbered exports (v0.2.6 remediation) -----------------------------
+
+
+def test_sharded_export_auto_discovery(tmp_path) -> None:
+    c1 = linear_conversation("conv-s1", [("user", "s1-u"), ("assistant", "s1-a")])
+    c2 = linear_conversation("conv-s2", [("user", "s2-u"), ("assistant", "s2-a")])
+    sharded_zip = build_sharded_export(
+        tmp_path / "sharded.zip",
+        [[c1], [c2]],
+    )
+    assert detect_export_format(sharded_zip) == "chatgpt"
+
+    ns_hash, _ = resolve_account_namespace_hash(sharded_zip, namespace_label="test-ns")
+    reader = ChatGPTExportReader(sharded_zip, account_namespace_hash=ns_hash)
+    shards = reader.conversation_shards()
+    assert shards == ["conversations-001.json", "conversations-002.json"]
+
+    audit = reader.schema_audit()
+    assert audit["conversation_shard_count"] == 2
+    assert audit["conversation_shards"] == ["conversations-001.json", "conversations-002.json"]
+    assert audit["conversation_count"] == 2
+
+    sessions = reader.list_sessions()
+    assert len(sessions) == 2
+    assert {s.conversation_id for s in sessions} == {"conv-s1", "conv-s2"}
+
+
+def test_sharded_export_file_order_independence(tmp_path) -> None:
+    c1 = linear_conversation("conv-ord1", [("user", "u1")], create_time=1757800010.0)
+    c2 = linear_conversation("conv-ord2", [("user", "u2")], create_time=1757800020.0)
+
+    # Archive A: shard 1 written first, then shard 2
+    zip_a = tmp_path / "order_a.zip"
+    build_sharded_export(
+        zip_a,
+        {"conversations-001.json": [c1], "conversations-002.json": [c2]},
+    )
+
+    # Archive B: shard 2 written first, then shard 1
+    zip_b = tmp_path / "order_b.zip"
+    build_sharded_export(
+        zip_b,
+        {"conversations-002.json": [c2], "conversations-001.json": [c1]},
+    )
+
+    ns_hash = "fixed_test_ns"
+    reader_a = ChatGPTExportReader(zip_a, account_namespace_hash=ns_hash)
+    reader_b = ChatGPTExportReader(zip_b, account_namespace_hash=ns_hash)
+
+    assert reader_a.conversation_shards() == reader_b.conversation_shards()
+
+    sessions_a = reader_a.list_sessions()
+    sessions_b = reader_b.list_sessions()
+
+    assert [s.import_key for s in sessions_a] == [s.import_key for s in sessions_b]
+    assert [s.source_sha256 for s in sessions_a] == [s.source_sha256 for s in sessions_b]
+
+
+def test_sharded_numeric_shard_sorting(tmp_path) -> None:
+    c1 = linear_conversation("conv-num1", [("user", "u1")])
+    c2 = linear_conversation("conv-num2", [("user", "u2")])
+    c10 = linear_conversation("conv-num10", [("user", "u10")])
+
+    zip_num = tmp_path / "numeric_sort.zip"
+    build_sharded_export(
+        zip_num,
+        {
+            "conversations-10.json": [c10],
+            "conversations-2.json": [c2],
+            "conversations-1.json": [c1],
+        },
+    )
+
+    ns_hash = "fixed_test_ns"
+    reader = ChatGPTExportReader(zip_num, account_namespace_hash=ns_hash)
+    assert reader.conversation_shards() == [
+        "conversations-1.json",
+        "conversations-2.json",
+        "conversations-10.json",
+    ]
+
+
+def test_sharded_duplicate_conversation_identical_dedup(tmp_path) -> None:
+    c1 = linear_conversation("conv-dup", [("user", "hello"), ("assistant", "world")])
+
+    zip_dup = build_sharded_export(
+        tmp_path / "dup_identical.zip",
+        [[c1], [c1]],
+    )
+
+    ns_hash = "fixed_test_ns"
+    reader = ChatGPTExportReader(zip_dup, account_namespace_hash=ns_hash)
+    sessions = reader.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0].conversation_id == "conv-dup"
+    assert any("duplicate_conversation_deduped:conv-dup" in w for w in reader.schema_warnings)
+
+
+def test_sharded_duplicate_conversation_conflicting_fail_closed(tmp_path) -> None:
+    c1_v1 = linear_conversation("conv-conflict", [("user", "original")])
+    c1_v2 = linear_conversation("conv-conflict", [("user", "different")])
+
+    zip_conflict = build_sharded_export(
+        tmp_path / "dup_conflict.zip",
+        [[c1_v1], [c1_v2]],
+    )
+
+    ns_hash = "fixed_test_ns"
+    reader = ChatGPTExportReader(zip_conflict, account_namespace_hash=ns_hash)
+    with pytest.raises(ChatGPTExportError) as exc_info:
+        reader.list_sessions()
+    assert exc_info.value.code == "DUPLICATE_CONVERSATION_ID"
+
+
+def test_sharded_snapshot_hash_independent_of_packaging(tmp_path) -> None:
+    conv = linear_conversation("conv-pkg", [("user", "query"), ("assistant", "reply")])
+
+    zip_single = build_export(tmp_path / "single.zip", [conv])
+    zip_sharded = build_sharded_export(
+        tmp_path / "sharded_pkg.zip",
+        {
+            "conversations-001.json": [],
+            "conversations-002.json": [],
+            "conversations-003.json": [conv],
+        },
+    )
+
+    ns_hash = "fixed_test_ns"
+    reader_s = ChatGPTExportReader(zip_single, account_namespace_hash=ns_hash)
+    reader_m = ChatGPTExportReader(zip_sharded, account_namespace_hash=ns_hash)
+
+    ref_s = reader_s.list_sessions()[0]
+    ref_m = reader_m.list_sessions()[0]
+
+    assert ref_s.source_sha256 == ref_m.source_sha256
+    assert ref_s.source_size_bytes == ref_m.source_size_bytes
+    assert ref_s.source_entry == ref_m.source_entry
+    assert ref_s.import_key == ref_m.import_key

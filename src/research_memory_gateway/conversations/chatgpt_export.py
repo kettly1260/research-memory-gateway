@@ -49,6 +49,40 @@ from .models import (
 CONVERSATIONS_ENTRY = "conversations.json"
 USER_ENTRY = "user.json"
 
+CONVERSATIONS_SHARD_PATTERN = re.compile(
+    r"^(?:.*/)?conversations(?:[-_](?:part[-_]?)?(\d+))?\.json$",
+    re.IGNORECASE,
+)
+
+
+def find_conversation_shards(archive_or_namelist: zipfile.ZipFile | Any) -> list[str]:
+    """Discover conversation JSON shard filenames deterministically.
+
+    Matches ``conversations.json``, ``conversations-001.json``, ``conversations-1.json``,
+    ``conversations_001.json``, etc.
+    Sorted numerically by shard index (un-numbered ``conversations.json`` sorts first as 0),
+    then case-insensitively by entry name for total determinism regardless of ZIP entry order.
+    """
+    names = (
+        archive_or_namelist.namelist()
+        if isinstance(archive_or_namelist, zipfile.ZipFile)
+        else list(archive_or_namelist)
+    )
+    shards: list[tuple[int, str, str]] = []
+    for name in names:
+        if name.endswith("/"):
+            continue
+        if "__MACOSX" in name or Path(name).name.startswith("._"):
+            continue
+        m = CONVERSATIONS_SHARD_PATTERN.match(name)
+        if m:
+            num_str = m.group(1)
+            num = int(num_str) if num_str is not None else 0
+            shards.append((num, name.lower(), name))
+
+    shards.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[2] for item in shards]
+
 BRANCH_KIND_PRIMARY = "primary"
 BRANCH_KIND_ALTERNATE = "alternate"
 
@@ -168,8 +202,9 @@ def detect_export_format(archive_path: str | Path) -> str:
                 )
             except (json.JSONDecodeError, OSError, zipfile.BadZipFile):
                 codex_kind = False
-        if CONVERSATIONS_ENTRY in names:
-            chatgpt_shape = _conversations_json_shape_ok(archive)
+        shards = find_conversation_shards(archive)
+        if shards:
+            chatgpt_shape = _conversations_shards_shape_ok(archive, shards)
     if codex_kind and chatgpt_shape:
         return "ambiguous"
     if codex_kind:
@@ -179,24 +214,31 @@ def detect_export_format(archive_path: str | Path) -> str:
     return "unknown"
 
 
+def _conversations_shards_shape_ok(archive: zipfile.ZipFile, shards: list[str]) -> bool:
+    if not shards:
+        return False
+    for shard in shards:
+        try:
+            data = json.loads(archive.read(shard))
+        except (json.JSONDecodeError, OSError, zipfile.BadZipFile, MemoryError):
+            return False
+        if not isinstance(data, list):
+            return False
+        for element in data[:20]:
+            if not isinstance(element, dict):
+                continue
+            if "mapping" in element:
+                return True
+            if "title" in element and ("create_time" in element or "update_time" in element):
+                return True
+        if len(data) > 0:
+            return False
+    return True
+
+
 def _conversations_json_shape_ok(archive: zipfile.ZipFile) -> bool:
-    try:
-        data = json.loads(archive.read(CONVERSATIONS_ENTRY))
-    except (json.JSONDecodeError, OSError, zipfile.BadZipFile, MemoryError):
-        return False
-    if not isinstance(data, list):
-        return False
-    # Structural probe: a conversation object carries a mapping graph (or at
-    # least title+create/update_time when the mapping is empty), never
-    # session-JSONL packaging.
-    for element in data[:20]:
-        if not isinstance(element, dict):
-            continue
-        if "mapping" in element:
-            return True
-        if "title" in element and ("create_time" in element or "update_time" in element):
-            return True
-    return len(data) == 0
+    shards = find_conversation_shards(archive)
+    return _conversations_shards_shape_ok(archive, shards)
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +772,7 @@ class ChatGPTExportReader:
                 "ChatGPTExportReader requires an account namespace hash",
             )
         self._archive_sha256: str | None = None
+        self._shards: list[str] | None = None
         self._conversations: list[dict[str, Any]] | None = None
         self._refs_by_import_key: dict[str, ExportSessionRef] | None = None
         self._refs_in_order: list[ExportSessionRef] | None = None
@@ -751,35 +794,67 @@ class ChatGPTExportReader:
         # Read-only by construction: mode "r" only, anywhere in this module.
         return zipfile.ZipFile(self.archive_path, "r")
 
+    def conversation_shards(self) -> list[str]:
+        if self._shards is None:
+            with self._open_archive() as archive:
+                self._shards = find_conversation_shards(archive)
+        return list(self._shards)
+
     def _load_conversations(self) -> list[dict[str, Any]]:
         if self._conversations is not None:
             return self._conversations
-        with self._open_archive() as archive:
-            if CONVERSATIONS_ENTRY not in set(archive.namelist()):
-                raise ChatGPTExportError(
-                    "UNSUPPORTED_EXPORT_FORMAT",
-                    "ZIP has no structured conversations.json (HTML-only exports are not supported)",
-                )
-            raw = archive.read(CONVERSATIONS_ENTRY)
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
+        shards = self.conversation_shards()
+        if not shards:
             raise ChatGPTExportError(
-                "MALFORMED_EXPORT", f"conversations.json is not valid JSON: {exc}"
-            ) from exc
-        if not isinstance(data, list):
-            raise ChatGPTExportError(
-                "MALFORMED_EXPORT",
-                f"conversations.json top level must be a list, got {type(data).__name__}",
+                "UNSUPPORTED_EXPORT_FORMAT",
+                "ZIP has no structured conversations.json or conversation shards (HTML-only exports are not supported)",
             )
-        conversations: list[dict[str, Any]] = []
-        for index, element in enumerate(data):
-            if isinstance(element, dict):
-                conversations.append(element)
-            else:
-                self.schema_warnings.append(f"non_object_conversation:{index}")
-        self._conversations = conversations
-        return conversations
+        raw_shards: list[tuple[str, bytes]] = []
+        with self._open_archive() as archive:
+            for shard_name in shards:
+                raw_shards.append((shard_name, archive.read(shard_name)))
+
+        all_conversations: list[dict[str, Any]] = []
+        seen_by_provider_id: dict[str, tuple[str, dict[str, Any]]] = {}
+
+        for shard_name, raw in raw_shards:
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ChatGPTExportError(
+                    "MALFORMED_EXPORT", f"{shard_name} is not valid JSON: {exc}"
+                ) from exc
+            if not isinstance(data, list):
+                raise ChatGPTExportError(
+                    "MALFORMED_EXPORT",
+                    f"{shard_name} top level must be a list, got {type(data).__name__}",
+                )
+            for index, element in enumerate(data):
+                if not isinstance(element, dict):
+                    self.schema_warnings.append(f"non_object_conversation:{shard_name}:{index}")
+                    continue
+                provider_id = provider_id_of(element)
+                if not provider_id:
+                    self.schema_warnings.append(f"conversation_missing_id:{shard_name}:{index}")
+                    all_conversations.append(element)
+                    continue
+                if provider_id in seen_by_provider_id:
+                    existing_shard, existing_conv = seen_by_provider_id[provider_id]
+                    if _stable_json(existing_conv) == _stable_json(element):
+                        self.schema_warnings.append(
+                            f"duplicate_conversation_deduped:{provider_id}:{existing_shard}:{shard_name}"
+                        )
+                        continue
+                    else:
+                        raise ChatGPTExportError(
+                            "DUPLICATE_CONVERSATION_ID",
+                            f"Conflicting data for provider conversation {provider_id} in shards {existing_shard} and {shard_name}",
+                        )
+                seen_by_provider_id[provider_id] = (shard_name, element)
+                all_conversations.append(element)
+
+        self._conversations = all_conversations
+        return all_conversations
 
     # -- sessions ----------------------------------------------------------------
 
@@ -1067,6 +1142,9 @@ class ChatGPTExportReader:
         exact: dict[str, str] = {}
         stems: dict[str, str] = {}
         excluded = {CONVERSATIONS_ENTRY, USER_ENTRY, "chat.html", "manifest.json"}
+        for s in self.conversation_shards():
+            excluded.add(s)
+            excluded.add(Path(s).name)
         with self._open_archive() as archive:
             for name in archive.namelist():
                 if not _safe_zip_entry_name(name):
@@ -1206,11 +1284,14 @@ class ChatGPTExportReader:
                 timestamp_shapes[_timestamp_shape(message.get("create_time"))] += 1
                 _count_locator_schemes(message, locator_schemes)
 
+        shards = self.conversation_shards()
         return {
             "archive_path_resolved": str(self.archive_path.resolve()),
             "archive_sha256": self.archive_sha256,
             "archive_file_inventory": file_inventory,
-            "conversations_json_present": True,
+            "conversations_json_present": "conversations.json" in shards or bool(shards),
+            "conversation_shards": shards,
+            "conversation_shard_count": len(shards),
             "conversations_top_level_type": "list",
             "conversation_count": len(conversations),
             "conversation_object_fields": dict(sorted(conversation_fields.items())),

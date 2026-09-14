@@ -247,3 +247,46 @@ def build_export(
         for name, payload in (extra_entries or {}).items():
             _fixed_writestr(archive, name, payload)
     return path
+
+
+def build_sharded_export(
+    path: Path,
+    shards: dict[str, list[dict[str, Any]]] | list[list[dict[str, Any]]],
+    *,
+    account_id: str | None = TEST_ACCOUNT_GUID,
+    assets: dict[str, bytes] | None = None,
+    extra_entries: dict[str, str] | None = None,
+) -> Path:
+    """Write a sharded ChatGPT export ZIP (multiple numbered conversation JSON files)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(shards, list):
+        shard_map = {
+            f"conversations-{i+1:03d}.json": convs
+            for i, convs in enumerate(shards)
+        }
+    else:
+        shard_map = dict(shards)
+
+    with zipfile.ZipFile(path, "w") as archive:
+        for shard_name, convs in shard_map.items():
+            _fixed_writestr(
+                archive,
+                shard_name,
+                json.dumps(convs, ensure_ascii=False, indent=1),
+            )
+        if account_id is not None:
+            _fixed_writestr(
+                archive,
+                "user.json",
+                json.dumps(
+                    {"id": account_id, "name": "Synthetic User", "email": "redacted@example.com"}
+                ),
+            )
+        for name, payload in (assets or {}).items():
+            info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, payload)
+        for name, text in (extra_entries or {}).items():
+            _fixed_writestr(archive, name, text)
+    return path

@@ -21,10 +21,11 @@ from research_memory_gateway.conversations import (
 from research_memory_gateway.conversations.chatgpt_export import (
     ChatGPTExportError,
     ChatGPTExportReader,
+    resolve_account_namespace_hash,
 )
 from tests.chatgpt_fixtures import (
     GraphBuilder,
-    build_export,
+    build_export, build_sharded_export,
     linear_conversation,
     make_message,
 )
@@ -553,3 +554,29 @@ def test_archive_repack_unchanged(tmp_path) -> None:
     )
     assert results_b[0].status == "skipped"
     assert results_b[0].reason in {"unchanged", "same_source_in_new_archive", "source_packaging_changed"}
+
+
+def test_sharded_export_full_ingestion_and_idempotency(tmp_path) -> None:
+    c1 = linear_conversation("sharded-c1", [("user", "q1"), ("assistant", "a1")])
+    c2 = linear_conversation("sharded-c2", [("user", "q2"), ("assistant", "a2")])
+    archive = build_sharded_export(
+        tmp_path / "sharded_ingest.zip",
+        [[c1], [c2]],
+    )
+    ns_hash, _ = resolve_account_namespace_hash(archive, namespace_label="test-ns")
+    reader = ChatGPTExportReader(archive, account_namespace_hash=ns_hash)
+
+    vault = tmp_path / "vault"
+    manifest = ImportManifest(tmp_path / "manifest.sqlite")
+    writer = ObsidianConversationWriter(vault)
+    pipeline = ConversationIngestionPipeline(reader, writer, manifest)
+
+    keys = [r.effective_import_key for r in reader.list_sessions()]
+    first_run = pipeline.run(keys)
+    assert len(first_run) == 2
+    assert all(r.status == "written" for r in first_run)
+
+    # Repeat run must skip all without changes
+    second_run = pipeline.run(keys)
+    assert len(second_run) == 2
+    assert all(r.status == "skipped" for r in second_run)
