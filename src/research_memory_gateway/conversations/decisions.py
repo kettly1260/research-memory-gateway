@@ -22,6 +22,8 @@ from .identity import (
     FINGERPRINT_VERSION_UNHYDRATED,
     TranscriptFingerprints,
     canonical_conversation_id_for,
+    identity_uses_provider_family,
+    provider_family_canonical_id,
     sequence_relation,
 )
 from .identity_store import ConversationIdentityStore, SourceRecord
@@ -52,6 +54,25 @@ class SourceImportDecision:
     @property
     def status(self) -> str:
         return self.action
+
+
+def _canonical_for_new_identity(identity: Any, source_key: str) -> str:
+    """Canonical id for a brand-new source record.
+
+    Branch siblings of one provider conversation (v0.2.6: ChatGPT) resolve to
+    a shared provider-family canonical so they automatically belong to the
+    same canonical conversation family.  Everything else keeps the legacy
+    per-source-key derivation (Codex canonical ids never change).
+    """
+    if identity_uses_provider_family(
+        identity.source_system, identity.source_conversation_id, identity.source_branch_id
+    ):
+        return provider_family_canonical_id(
+            identity.source_system,
+            identity.source_account_namespace_hash,
+            identity.source_conversation_id,
+        )
+    return canonical_conversation_id_for(source_key)
 
 
 def effective_identity(
@@ -154,6 +175,81 @@ def _note_integrity_decision(
     return None
 
 
+def _family_branch_relation(
+    store: ConversationIdentityStore,
+    identity: Any,
+    fingerprints: TranscriptFingerprints,
+) -> SourceImportDecision | None:
+    """Resolve a new branch id against stored siblings of the same family.
+
+    Within one provider conversation family (same system + account namespace
+    + provider conversation id), the mapping graph proves lineage: one path
+    strictly extending another is a continuation of the same branch, while
+    genuinely divergent paths are alternate siblings.  This is provider
+    stable-identity reasoning, never content-similarity merging, and it never
+    crosses source systems or accounts.
+
+    Returns a decision when the incoming branch maps onto a stored sibling:
+      * stored visible sequence is a strict prefix of the incoming one
+        -> WRITE ``source_continued`` on that record (same source key,
+        same canonical, same Markdown path);
+      * the incoming sequence is a strict prefix of a stored one
+        -> SKIP ``stale_snapshot`` (an older tip of the same lineage must
+        never truncate the newer note);
+    ``None`` when the incoming branch is genuinely new (or diverged).
+    """
+    if not identity_uses_provider_family(
+        identity.source_system, identity.source_conversation_id, identity.source_branch_id
+    ):
+        return None
+    family = store.find_family_records(
+        source_system=identity.source_system,
+        source_account_namespace_hash=identity.source_account_namespace_hash,
+        source_conversation_id=identity.source_conversation_id,
+    )
+    if not family:
+        return None
+    incoming = list(fingerprints.message_fingerprints)
+    if not incoming:
+        return None
+    continuation_candidates: list[tuple[int, SourceRecord]] = []
+    stale_candidates: list[tuple[int, SourceRecord]] = []
+    for record in family:
+        if record.fingerprint_version != FINGERPRINT_VERSION:
+            continue
+        stored = store.message_fingerprint_sequence(record.source_key)
+        if not stored:
+            continue
+        relation = sequence_relation(stored, incoming)
+        if relation == "left_strict_prefix":
+            continuation_candidates.append((len(stored), record))
+        elif relation == "right_strict_prefix":
+            stale_candidates.append((len(stored), record))
+    if continuation_candidates:
+        continuation_candidates.sort(key=lambda item: (-item[0], item[1].first_seen_at, item[1].source_key))
+        record = continuation_candidates[0][1]
+        return SourceImportDecision(
+            WRITE,
+            "source_continued",
+            record.output_path,
+            source_key=record.source_key,
+            canonical_conversation_id=record.canonical_conversation_id,
+            source_record=record,
+        )
+    if stale_candidates:
+        stale_candidates.sort(key=lambda item: (-item[0], item[1].first_seen_at, item[1].source_key))
+        record = stale_candidates[0][1]
+        return SourceImportDecision(
+            SKIP,
+            "stale_snapshot",
+            record.output_path,
+            source_key=record.source_key,
+            canonical_conversation_id=record.canonical_conversation_id,
+            source_record=record,
+        )
+    return None
+
+
 def decide_source_import(
     *,
     store: ConversationIdentityStore,
@@ -192,7 +288,13 @@ def decide_source_import(
                         canonical_conversation_id=candidate.canonical_conversation_id,
                         source_record=candidate,
                     )
-        canonical = canonical_conversation_id_for(source_key)
+        # v0.2.6: branched providers -- resolve the incoming branch against
+        # stored siblings of the same provider conversation family before
+        # creating a new source record (continuation / stale protection).
+        family_decision = _family_branch_relation(store, identity, fingerprints)
+        if family_decision is not None:
+            return family_decision
+        canonical = _canonical_for_new_identity(identity, source_key)
         return SourceImportDecision(
             NEW_SOURCE, "new_source_record", source_key=source_key, canonical_conversation_id=canonical
         )

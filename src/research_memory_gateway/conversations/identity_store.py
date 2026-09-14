@@ -389,6 +389,37 @@ class ConversationIdentityStore:
             ).fetchall()
         return [_source_record_from_row(row) for row in rows]
 
+    def find_family_records(
+        self,
+        *,
+        source_system: str,
+        source_account_namespace_hash: str,
+        source_conversation_id: str,
+    ) -> list[SourceRecord]:
+        """Active source records of one provider conversation family.
+
+        Family = same system + account namespace + provider conversation id,
+        i.e. the branch siblings of one provider conversation.  Scoped SQL
+        lookup so full-export imports never scan the whole store per item.
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM conversation_source_records
+                WHERE source_system = ?
+                  AND source_account_namespace_hash = ?
+                  AND source_conversation_id = ?
+                  AND status = 'active'
+                ORDER BY first_seen_at, source_key
+                """,
+                (
+                    _norm(source_system).lower(),
+                    _norm(source_account_namespace_hash),
+                    _norm(source_conversation_id),
+                ),
+            ).fetchall()
+        return [_source_record_from_row(row) for row in rows]
+
     def list_source_records(
         self,
         *,
@@ -811,6 +842,31 @@ class ConversationIdentityStore:
 
     def message_fingerprint_sequence(self, source_key: str) -> list[str]:
         return [fp for _, fp, _ in self.read_message_fingerprints(source_key)]
+
+    def message_fingerprint_sequences(self, source_keys: Sequence[str]) -> dict[str, list[str]]:
+        """Batched fingerprint sequences for many source keys in one query.
+
+        Purely additive read path used by duplicate detection so a full-export
+        import does not open one connection per candidate pair (v0.2.6 C12).
+        """
+        keys = [k for k in {_norm(key) for key in source_keys} if k]
+        if not keys:
+            return {}
+        sequences: dict[str, list[str]] = {key: [] for key in keys}
+        placeholders = ",".join("?" for _ in keys)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT source_key, ordinal, message_fingerprint
+                FROM conversation_message_fingerprints
+                WHERE source_key IN ({placeholders})
+                ORDER BY source_key, ordinal
+                """,
+                keys,
+            ).fetchall()
+        for source_key, _ordinal, fingerprint in rows:
+            sequences.setdefault(str(source_key), []).append(str(fingerprint))
+        return sequences
 
     # -- duplicate candidates -----------------------------------------------------
 

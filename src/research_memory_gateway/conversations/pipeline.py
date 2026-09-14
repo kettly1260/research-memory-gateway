@@ -71,18 +71,24 @@ class ConversationIngestionPipeline:
 
     def run(
         self,
-        conversation_ids: list[str],
+        import_keys: list[str],
         *,
         dry_run: bool = False,
         resume: bool = True,
     ) -> list[IngestionResult]:
+        """Import the selected reader items.
+
+        Each entry is a reader lookup key: the session ref's
+        ``effective_import_key``.  For Codex this is the bare provider
+        conversation id; branched sources pass one key per branch.
+        """
         results: list[IngestionResult] = []
-        for conversation_id in conversation_ids:
+        for import_key in import_keys:
             try:
-                ref = self.reader.get_session_ref(conversation_id)
+                ref = self.reader.get_session_ref(import_key)
             except Exception as exc:
                 results.append(
-                    IngestionResult(conversation_id, "failed_retryable", "unknown_session", error=str(exc))
+                    IngestionResult(import_key, "failed_retryable", "unknown_session", error=str(exc))
                 )
                 continue
 
@@ -90,7 +96,7 @@ class ConversationIngestionPipeline:
             att_hash = ""
             parse_error = ""
             try:
-                conversation = self.reader.parse(conversation_id)
+                conversation = self.reader.parse(import_key)
                 inventory_records = self.attachment_inventory.scan_one(conversation)
                 att_hash = AttachmentInventory.inventory_hash(inventory_records)
             except Exception as exc:
@@ -103,7 +109,7 @@ class ConversationIngestionPipeline:
                 continue
 
             fingerprints = compute_transcript_fingerprints(conversation)
-            legacy_record = self.manifest.get_record(ref.conversation_id)
+            legacy_record = self.manifest.get_record(self._legacy_record_key(ref))
             decision = decide_source_import(
                 store=self.identity_store,
                 ref=ref,
@@ -130,7 +136,7 @@ class ConversationIngestionPipeline:
                 )
             if dry_run or decision.action == DRY_RUN:
                 results.append(
-                    IngestionResult(conversation_id, "dry_run", decision.reason, decision.output_path)
+                    IngestionResult(import_key, "dry_run", decision.reason, decision.output_path)
                 )
                 continue
 
@@ -149,7 +155,7 @@ class ConversationIngestionPipeline:
                 continue
             if decision.action == INDEX:
                 results.append(
-                    IngestionResult(conversation_id, "index_stale", decision.reason, decision.output_path)
+                    IngestionResult(import_key, "index_stale", decision.reason, decision.output_path)
                 )
                 continue
             if decision.action == CONFLICT:
@@ -159,7 +165,7 @@ class ConversationIngestionPipeline:
                 except Exception:
                     candidate_path = decision.output_path
                 results.append(
-                    IngestionResult(conversation_id, "conflict", decision.reason, candidate_path)
+                    IngestionResult(import_key, "conflict", decision.reason, candidate_path)
                 )
                 continue
             if decision.action in {NEW_SOURCE, WRITE, REBUILD}:
@@ -172,11 +178,22 @@ class ConversationIngestionPipeline:
                 continue
             # Unknown action: fail closed without touching anything.
             results.append(
-                IngestionResult(conversation_id, "failed_retryable", decision.reason, decision.output_path)
+                IngestionResult(import_key, "failed_retryable", decision.reason, decision.output_path)
             )
         return results
 
     # ------------------------------------------------------------------ paths
+
+    def _legacy_record_key(self, ref: ExportSessionRef) -> str:
+        """Ledger row key for one session ref.
+
+        Codex keeps the historical bare provider conversation id (the legacy
+        table is Codex-keyed compatibility data).  Branched sources (ChatGPT)
+        use a branch-scoped key so sibling branches never fight over one row.
+        """
+        if (ref.source_system or "codex") == "codex":
+            return ref.conversation_id
+        return ref.effective_import_key
 
     def _handle_parse_failure(self, ref: ExportSessionRef, parse_error: str) -> IngestionResult:
         """Conservative fallback when a session cannot be parsed.
@@ -188,7 +205,7 @@ class ConversationIngestionPipeline:
         pipeline never guesses continuation/stale without a transcript.
         """
         record = self._find_record_for_ref(ref)
-        legacy = self.manifest.get_record(ref.conversation_id)
+        legacy = self.manifest.get_record(self._legacy_record_key(ref))
         if (
             record is not None
             and record.last_source_entry_sha256 == ref.source_sha256
@@ -212,6 +229,7 @@ class ConversationIngestionPipeline:
             error=parse_error,
             parser_version=self.reader.parser_version,
             schema_version=self.reader.schema_version,
+            record_key=self._legacy_record_key(ref),
         )
         return IngestionResult(ref.conversation_id, "failed_retryable", "parse_error", error=parse_error)
 
@@ -479,19 +497,22 @@ class ConversationIngestionPipeline:
     ) -> None:
         """Keep the legacy ledger in sync without cross-system key theft.
 
-        The legacy table is keyed by the bare provider conversation id.  If a
-        different source record already owns that id in the v2 store, the
-        legacy row is left untouched and the v2 tables stay authoritative.
+        Codex rows are keyed by the bare provider conversation id, which
+        several source systems may share: only write when this source record
+        is the sole owner of that id in the v2 store.  Branched sources write
+        branch-scoped rows, so no shared row exists to steal.
         """
         if not ref.source_conversation_id.strip():
             return
-        occupants = self.identity_store.find_source_records_by_conversation(
-            ref.source_conversation_id
-        )
-        if occupants:
-            current = self._find_record_for_ref(ref)
-            if current is None or {o.source_key for o in occupants} != {current.source_key}:
-                return
+        legacy_key = self._legacy_record_key(ref)
+        if legacy_key == ref.conversation_id:
+            occupants = self.identity_store.find_source_records_by_conversation(
+                ref.source_conversation_id
+            )
+            if occupants:
+                current = self._find_record_for_ref(ref)
+                if current is None or {o.source_key for o in occupants} != {current.source_key}:
+                    return
         self.manifest.record(
             ref,
             archive_path=str(self.reader.archive_path.resolve()),
@@ -503,6 +524,7 @@ class ConversationIngestionPipeline:
             error=error,
             parser_version=self.reader.parser_version,
             schema_version=self.reader.schema_version,
+            record_key=legacy_key,
         )
 
     def _source_meta_for(

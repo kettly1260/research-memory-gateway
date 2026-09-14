@@ -43,6 +43,12 @@ ORDERED_MESSAGES_DOMAIN = "rmg-ordered-messages-v1"
 MESSAGE_SET_DOMAIN = "rmg-message-set-v1"
 TOOL_EVENT_SET_DOMAIN = "rmg-tool-event-set-v1"
 ATTACHMENT_INVENTORY_DOMAIN = "rmg-attachment-inventory-v1"
+# v0.2.6: provider conversation family grouping.  Branch siblings of one
+# provider conversation (same system + account namespace + provider id) share
+# one canonical family.  This is *not* cross-source merging: the family key is
+# derived only from provider-stable identity, never from content similarity.
+PROVIDER_FAMILY_DOMAIN = "rmg-provider-family-v1"
+SYNTHETIC_CONVERSATION_ID_PREFIX = "synthetic-content-"
 
 # Fixed namespace for deterministic canonical conversation UUIDv5 values.
 CANONICAL_NAMESPACE_V1 = uuid.uuid5(
@@ -113,6 +119,49 @@ class ConversationSourceIdentity:
 def canonical_conversation_id_for(source_key: str) -> str:
     """Deterministic canonical id for the first source record of a conversation."""
     return str(uuid.uuid5(CANONICAL_NAMESPACE_V1, normalize_component(source_key)))
+
+
+def provider_family_key(
+    source_system: str, source_account_namespace_hash: str, source_conversation_id: str
+) -> str:
+    """Deterministic source-key-shaped key for one provider conversation family.
+
+    Two branches of the same provider conversation carry the same family key,
+    so both resolve to one canonical conversation family without any manual
+    duplicate review.  Cross-source pairs (different system or namespace) can
+    never share a family key.
+    """
+    payload = "\0".join(
+        [
+            PROVIDER_FAMILY_DOMAIN,
+            normalize_component(source_system).lower(),
+            normalize_component(source_account_namespace_hash),
+            normalize_component(source_conversation_id),
+        ]
+    )
+    return f"{SOURCE_KEY_PREFIX}_{_sha256_hex(payload)}"
+
+
+def provider_family_canonical_id(
+    source_system: str, source_account_namespace_hash: str, source_conversation_id: str
+) -> str:
+    return canonical_conversation_id_for(
+        provider_family_key(source_system, source_account_namespace_hash, source_conversation_id)
+    )
+
+
+def identity_uses_provider_family(source_system: str, source_conversation_id: str, source_branch_id: str) -> bool:
+    """True when branch siblings may auto-group into one canonical family.
+
+    Requires a non-empty provider branch id and a real (non-synthetic)
+    provider conversation id.  Codex legacy records keep the per-source-key
+    canonical derivation unchanged.
+    """
+    return bool(
+        normalize_component(source_branch_id)
+        and normalize_component(source_conversation_id)
+        and not normalize_component(source_conversation_id).startswith(SYNTHETIC_CONVERSATION_ID_PREFIX)
+    )
 
 
 # ---------------------------------------------------------------------------
