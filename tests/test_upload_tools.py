@@ -196,3 +196,51 @@ def test_conversation_ingest_turn(tmp_path: Path) -> None:
     search2 = service.conversation_retrieval.search(query="Pechmann condensation")
     assert search2["count"] >= 1
     assert "resorcinol" in search2["results"][0]["content"]
+
+
+def test_conversation_ingest_snapshot(tmp_path: Path) -> None:
+    service = _setup_service(tmp_path)
+    from research_memory_gateway.agent_surface.upload_tools import conversation_ingest_snapshot
+
+    # Empty messages should fail
+    with pytest.raises(ValueError, match="messages must be a non-empty list"):
+        conversation_ingest_snapshot(
+            service,
+            session_id="session-snap-1",
+            messages=[],
+        )
+
+    # Ingest multi-turn snapshot
+    snapshot_res = conversation_ingest_snapshot(
+        service,
+        session_id="session-snap-1",
+        title="Catalyst Stability Analysis",
+        model="gpt-5-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": "What is the degradation mechanism of perovskite quantum dots under UV irradiation?",
+                "timestamp": "2026-09-14T10:00:00Z",
+            },
+            {
+                "role": "assistant",
+                "content": "UV induces photo-oxidation of surface organic ligands (oleate/oleylammonium), leading to lead halide cluster desorption and deep-level defect generation.",
+                "timestamp": "2026-09-14T10:00:30Z",
+            },
+        ],
+    )
+
+    assert snapshot_res["status"] == "ingested"
+    assert snapshot_res["message_count"] == 2
+    assert snapshot_res["indexed"] is True
+    file_path = Path(snapshot_res["file_path"])
+    assert file_path.exists()
+
+    # Search for terms in snapshot
+    search_res = service.conversation_retrieval.search(query="oleylammonium")
+    assert search_res["count"] >= 1
+    assert "photo-oxidation" in search_res["results"][0]["content"]
+
+    search_user = service.conversation_retrieval.search(query="perovskite")
+    assert search_user["count"] >= 1
+    assert "degradation mechanism" in search_user["results"][0]["content"]

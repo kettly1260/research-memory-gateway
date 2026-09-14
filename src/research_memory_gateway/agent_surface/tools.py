@@ -10,6 +10,7 @@ from .capture import capture_memory as capture_memory_impl
 from .recall import get_project_state as get_project_state_impl
 from .recall import recall_memory as recall_memory_impl
 from .upload_tools import (
+    conversation_ingest_snapshot as conversation_ingest_snapshot_impl,
     conversation_ingest_turn as conversation_ingest_turn_impl,
     conversation_upload_abort as conversation_upload_abort_impl,
     conversation_upload_commit as conversation_upload_commit_impl,
@@ -35,6 +36,7 @@ CONVERSATION_UPLOAD_TOOL_NAMES = (
     "conversation_upload_abort",
     "conversation_upload_commit",
     "conversation_ingest_turn",
+    "conversation_ingest_snapshot",
 )
 AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES
 
@@ -299,4 +301,24 @@ def register_upload_tools(mcp: MCPServer, service: ResearchMemoryService) -> Non
             model=model,
             timestamp=timestamp,
             metadata=metadata,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    def conversation_ingest_snapshot(
+        session_id: str,
+        messages: list[dict[str, Any]],
+        title: str | None = None,
+        model: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        overwrite: bool = True,
+    ) -> dict[str, Any]:
+        """Directly ingest a full conversation snapshot (multiple messages) into the archive and index."""
+        return conversation_ingest_snapshot_impl(
+            service,
+            session_id=session_id,
+            messages=messages,
+            title=title,
+            model=model,
+            metadata=metadata,
+            overwrite=overwrite,
         )

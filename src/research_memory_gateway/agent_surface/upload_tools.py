@@ -267,3 +267,70 @@ def conversation_ingest_turn(
         "indexed": indexed,
         "timestamp": now_iso,
     }
+
+
+def conversation_ingest_snapshot(
+    service: ResearchMemoryService,
+    *,
+    session_id: str,
+    messages: list[dict[str, Any]],
+    title: str | None = None,
+    model: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    overwrite: bool = True,
+) -> dict[str, Any]:
+    """Ingest a complete conversation snapshot directly into staging and index into FTS."""
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("messages must be a non-empty list of message dicts.")
+
+    archive_cfg = service.config.conversation_archive
+    staging_dir = archive_cfg.resolve_staging_dir()
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)
+    session_file = staging_dir / f"agent_{safe_id}.md"
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    clean_title = title or f"Agent Conversation {safe_id[:8]}"
+
+    lines = [
+        "---",
+        f"conversation_id: {session_id}",
+        "source_system: agent",
+        f"title: \"{clean_title}\"",
+    ]
+    if model:
+        lines.append(f"model: \"{model}\"")
+    lines.extend([
+        f"created_at: \"{now_iso}\"",
+        f"updated_at: \"{now_iso}\"",
+        "---",
+        "",
+        f"# {clean_title}",
+        "",
+    ])
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        ts = msg.get("timestamp") or now_iso
+        lines.append(f"## {role.title()} ({ts})\n\n{str(content).strip()}\n")
+
+    session_file.write_text("\n".join(lines), encoding="utf-8")
+
+    index_db = service.conversation_retrieval.index_db
+    try:
+        index_db.index_file(session_file)
+        indexed = True
+    except Exception as e:
+        logger.warning("Failed to index agent snapshot note: %s", e)
+        indexed = False
+
+    return {
+        "status": "ingested",
+        "session_id": session_id,
+        "message_count": len(messages),
+        "file_path": str(session_file),
+        "indexed": indexed,
+        "timestamp": now_iso,
+    }
