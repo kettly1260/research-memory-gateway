@@ -2,7 +2,7 @@
 """
 Research Memory Gateway - Workspace Generic Docker Host Resource Hygiene Tool (P0)
 
-Generic, multi-host, manifest-driven engine for Docker host inventory,
+Fail-Closed, multi-host, manifest-driven engine for Docker host inventory,
 lifecycle management, safe targeted cleanup (dry-run by default),
 approved shared cache bounding, policy validation, and release-ready hard gate audits.
 """
@@ -55,6 +55,18 @@ GAU_CACHE_LIMITS = {
     "soft_limit_gb": 15.0,
     "hard_limit_gb": 25.0,
 }
+
+
+class HostCollectionError(Exception):
+    """Raised when an inventory or probe operation fails on a remote host (Fail-Closed)."""
+
+    def __init__(self, host: str, command: str, returncode: int, stderr: str, reason: str):
+        self.host = host
+        self.command = command
+        self.returncode = returncode
+        self.stderr = stderr.strip()
+        self.reason = reason
+        super().__init__(f"[{host}] Host collection failed on '{command}': {reason} (code {returncode}) - {self.stderr}")
 
 
 @dataclass
@@ -116,87 +128,208 @@ def run_ssh(host_key: str, cmd: str, timeout: int = 35) -> subprocess.CompletedP
         host.ssh_target,
         full_cmd,
     ]
-    return subprocess.run(
-        ssh_args,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    try:
+        return subprocess.run(
+            ssh_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HostCollectionError(
+            host=host_key,
+            command=full_cmd,
+            returncode=-1,
+            stderr=f"SSH command timed out after {timeout} seconds",
+            reason="SSH Command Timeout",
+        ) from exc
+
+
+def probe_host_reachability(host_key: str) -> Dict[str, Any]:
+    """
+    Lightweight probe checking SSH reachability and Docker daemon responsiveness.
+    Must succeed before any inventory is collected.
+    """
+    cmd = "docker version --format '{{json .}}'"
+    res = run_ssh(host_key, cmd, timeout=15)
+    if res.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stderr,
+            reason="Daemon/SSH Reachability Probe Failed",
+        )
+    try:
+        data = json.loads(res.stdout)
+        server_ok = bool(data.get("Server"))
+        if not server_ok:
+            raise HostCollectionError(
+                host=host_key,
+                command=cmd,
+                returncode=res.returncode,
+                stderr="Docker server version not returned by daemon",
+                reason="Docker Daemon Unresponsive",
+            )
+        return {
+            "ssh_ok": True,
+            "docker_ok": True,
+            "server_version": data.get("Server", {}).get("Version", "unknown"),
+        }
+    except json.JSONDecodeError as exc:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stdout,
+            reason="Malformed JSON response from docker version probe",
+        ) from exc
 
 
 def collect_containers(host_key: str) -> List[Dict[str, Any]]:
-    cmd = "docker inspect $(docker ps -aq) 2>/dev/null || true"
-    res = run_ssh(host_key, cmd, timeout=35)
-    if res.returncode != 0 or not res.stdout.strip():
+    # Step 1: list container IDs without hiding errors
+    list_cmd = "docker ps -aq"
+    res_list = run_ssh(host_key, list_cmd, timeout=30)
+    if res_list.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=list_cmd,
+            returncode=res_list.returncode,
+            stderr=res_list.stderr,
+            reason="Failed to list container IDs",
+        )
+
+    ids = res_list.stdout.strip().split()
+    if not ids:
         return []
+
+    # Step 2: inspect container details
+    inspect_cmd = f"docker inspect {' '.join(ids)}"
+    res_insp = run_ssh(host_key, inspect_cmd, timeout=35)
+    if res_insp.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stderr,
+            reason="Failed to inspect container details",
+        )
+
     try:
-        raw_list = json.loads(res.stdout)
-        results = []
-        for c in raw_list:
-            results.append({
-                "id": c.get("Id", "")[:12],
-                "full_id": c.get("Id", ""),
-                "name": c.get("Name", "").lstrip("/"),
-                "image": c.get("Config", {}).get("Image", ""),
-                "image_id": c.get("Image", "")[:12],
-                "image_full_id": c.get("Image", ""),
-                "status": c.get("State", {}).get("Status", ""),
-                "running": c.get("State", {}).get("Running", False),
-                "created": c.get("Created", ""),
-                "labels": c.get("Config", {}).get("Labels") or {},
-                "mounts": [m.get("Source") for m in c.get("Mounts", []) if m.get("Source")],
-                "networks": list(c.get("NetworkSettings", {}).get("Networks", {}).keys()),
+        raw_list = json.loads(res_insp.stdout)
+    except json.JSONDecodeError as exc:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stdout[:200],
+            reason="Malformed JSON in container inspect",
+        ) from exc
+
+    results = []
+    for c in raw_list:
+        mounts = []
+        for m in c.get("Mounts", []):
+            mounts.append({
+                "type": m.get("Type", ""),
+                "name": m.get("Name", ""),
+                "source": m.get("Source", ""),
+                "destination": m.get("Destination", ""),
+                "rw": m.get("RW", True),
             })
-        return results
-    except Exception:
-        return []
+        results.append({
+            "host": host_key,
+            "id": c.get("Id", "")[:12],
+            "full_id": c.get("Id", ""),
+            "name": c.get("Name", "").lstrip("/"),
+            "image": c.get("Config", {}).get("Image", ""),
+            "image_id": c.get("Image", "")[:12],
+            "image_full_id": c.get("Image", ""),
+            "status": c.get("State", {}).get("Status", ""),
+            "running": c.get("State", {}).get("Running", False),
+            "created": c.get("Created", ""),
+            "labels": c.get("Config", {}).get("Labels") or {},
+            "mounts": mounts,
+            "networks": list(c.get("NetworkSettings", {}).get("Networks", {}).keys()),
+        })
+    return results
 
 
 def collect_images(host_key: str) -> List[Dict[str, Any]]:
     cmd = "docker images --digests --no-trunc --format '{{json .}}'"
     res = run_ssh(host_key, cmd, timeout=35)
-    if res.returncode != 0 or not res.stdout.strip():
-        return []
+    if res.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stderr,
+            reason="Failed to list docker images",
+        )
 
     images = []
     ids_to_inspect = []
     for line in res.stdout.strip().splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
         try:
-            item = json.loads(line)
-            img_id = item.get("ID", "")
-            images.append({
-                "repository": item.get("Repository", ""),
-                "tag": item.get("Tag", ""),
-                "digest": item.get("Digest", ""),
-                "id": img_id[:12] if img_id else "",
-                "full_id": img_id,
-                "size": item.get("Size", ""),
-                "created": item.get("CreatedAt", ""),
-                "labels": {},
-            })
-            if img_id and img_id not in ids_to_inspect:
-                ids_to_inspect.append(img_id)
-        except Exception:
-            pass
+            item = json.loads(line_str)
+        except json.JSONDecodeError as exc:
+            raise HostCollectionError(
+                host=host_key,
+                command=cmd,
+                returncode=res.returncode,
+                stderr=line_str,
+                reason="Malformed JSON line in docker images output",
+            ) from exc
 
-    # Batch inspect all image labels in chunks of 25 (guarantee 100% coverage)
+        img_id = item.get("ID", "")
+        images.append({
+            "host": host_key,
+            "repository": item.get("Repository", ""),
+            "tag": item.get("Tag", ""),
+            "digest": item.get("Digest", ""),
+            "id": img_id[:12] if img_id else "",
+            "full_id": img_id,
+            "size": item.get("Size", ""),
+            "created": item.get("CreatedAt", ""),
+            "labels": {},
+        })
+        if img_id and img_id not in ids_to_inspect:
+            ids_to_inspect.append(img_id)
+
+    # Batch inspect all image labels in chunks of 25 (100% coverage, fail-closed)
     batch_size = 25
     label_map: Dict[str, Dict[str, str]] = {}
     for i in range(0, len(ids_to_inspect), batch_size):
         chunk = ids_to_inspect[i:i + batch_size]
-        inspect_cmd = f"docker image inspect {' '.join(chunk)} 2>/dev/null || true"
+        inspect_cmd = f"docker image inspect {' '.join(chunk)}"
         res_insp = run_ssh(host_key, inspect_cmd, timeout=35)
-        if res_insp.returncode == 0 and res_insp.stdout.strip():
-            try:
-                insp_list = json.loads(res_insp.stdout)
-                for item in insp_list:
-                    full_id = item.get("Id", "")
-                    lbls = item.get("Config", {}).get("Labels") or {}
-                    label_map[full_id] = lbls
-            except Exception:
-                pass
+        if res_insp.returncode != 0:
+            raise HostCollectionError(
+                host=host_key,
+                command=inspect_cmd,
+                returncode=res_insp.returncode,
+                stderr=res_insp.stderr,
+                reason=f"Failed to inspect image batch {i // batch_size + 1}",
+            )
+        try:
+            insp_list = json.loads(res_insp.stdout)
+            for item in insp_list:
+                full_id = item.get("Id", "")
+                lbls = item.get("Config", {}).get("Labels") or {}
+                label_map[full_id] = lbls
+        except json.JSONDecodeError as exc:
+            raise HostCollectionError(
+                host=host_key,
+                command=inspect_cmd,
+                returncode=res_insp.returncode,
+                stderr=res_insp.stdout[:200],
+                reason="Malformed JSON in image inspect batch",
+            ) from exc
 
     for img in images:
         img["labels"] = label_map.get(img["full_id"], {})
@@ -205,83 +338,158 @@ def collect_images(host_key: str) -> List[Dict[str, Any]]:
 
 
 def collect_volumes(host_key: str) -> List[Dict[str, Any]]:
-    cmd = "docker volume inspect $(docker volume ls -q) 2>/dev/null || true"
-    res = run_ssh(host_key, cmd, timeout=30)
-    if res.returncode != 0 or not res.stdout.strip():
+    list_cmd = "docker volume ls -q"
+    res_list = run_ssh(host_key, list_cmd, timeout=30)
+    if res_list.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=list_cmd,
+            returncode=res_list.returncode,
+            stderr=res_list.stderr,
+            reason="Failed to list docker volumes",
+        )
+
+    names = res_list.stdout.strip().split()
+    if not names:
         return []
+
+    inspect_cmd = f"docker volume inspect {' '.join(names)}"
+    res_insp = run_ssh(host_key, inspect_cmd, timeout=30)
+    if res_insp.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stderr,
+            reason="Failed to inspect docker volumes",
+        )
     try:
-        raw_list = json.loads(res.stdout)
-        results = []
-        for v in raw_list:
-            results.append({
-                "name": v.get("Name", ""),
-                "driver": v.get("Driver", ""),
-                "mountpoint": v.get("Mountpoint", ""),
-                "labels": v.get("Labels") or {},
-            })
-        return results
-    except Exception:
-        return []
+        raw_list = json.loads(res_insp.stdout)
+    except json.JSONDecodeError as exc:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stdout[:200],
+            reason="Malformed JSON in volume inspect",
+        ) from exc
+
+    results = []
+    for v in raw_list:
+        results.append({
+            "host": host_key,
+            "name": v.get("Name", ""),
+            "driver": v.get("Driver", ""),
+            "mountpoint": v.get("Mountpoint", ""),
+            "labels": v.get("Labels") or {},
+        })
+    return results
 
 
 def collect_networks(host_key: str) -> List[Dict[str, Any]]:
-    cmd = "docker network inspect $(docker network ls -q) 2>/dev/null || true"
-    res = run_ssh(host_key, cmd, timeout=30)
-    if res.returncode != 0 or not res.stdout.strip():
+    list_cmd = "docker network ls -q"
+    res_list = run_ssh(host_key, list_cmd, timeout=30)
+    if res_list.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=list_cmd,
+            returncode=res_list.returncode,
+            stderr=res_list.stderr,
+            reason="Failed to list docker networks",
+        )
+
+    ids = res_list.stdout.strip().split()
+    if not ids:
         return []
+
+    inspect_cmd = f"docker network inspect {' '.join(ids)}"
+    res_insp = run_ssh(host_key, inspect_cmd, timeout=30)
+    if res_insp.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stderr,
+            reason="Failed to inspect docker networks",
+        )
     try:
-        raw_list = json.loads(res.stdout)
-        results = []
-        for n in raw_list:
-            results.append({
-                "id": n.get("Id", "")[:12],
-                "full_id": n.get("Id", ""),
-                "name": n.get("Name", ""),
-                "driver": n.get("Driver", ""),
-                "scope": n.get("Scope", ""),
-                "labels": n.get("Labels") or {},
-                "containers": list(n.get("Containers", {}).keys()),
-            })
-        return results
-    except Exception:
-        return []
+        raw_list = json.loads(res_insp.stdout)
+    except json.JSONDecodeError as exc:
+        raise HostCollectionError(
+            host=host_key,
+            command=inspect_cmd,
+            returncode=res_insp.returncode,
+            stderr=res_insp.stdout[:200],
+            reason="Malformed JSON in network inspect",
+        ) from exc
+
+    results = []
+    for n in raw_list:
+        results.append({
+            "host": host_key,
+            "id": n.get("Id", "")[:12],
+            "full_id": n.get("Id", ""),
+            "name": n.get("Name", ""),
+            "driver": n.get("Driver", ""),
+            "scope": n.get("Scope", ""),
+            "labels": n.get("Labels") or {},
+            "containers": list(n.get("Containers", {}).keys()),
+        })
+    return results
 
 
 def collect_buildx_builders(host_key: str) -> List[Dict[str, Any]]:
-    cmd = "docker buildx ls 2>/dev/null || true"
+    cmd = "docker buildx ls"
     res = run_ssh(host_key, cmd, timeout=20)
+    if res.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stderr,
+            reason="Failed to list docker buildx builders",
+        )
+
     builders = []
-    if res.returncode == 0 and res.stdout.strip():
-        for line in res.stdout.strip().splitlines():
-            line_str = line.strip()
-            if not line_str or line_str.startswith("NAME") or line_str.startswith("\\_"):
-                continue
-            parts = line_str.split()
-            if parts:
-                builder_name = parts[0].rstrip("*")
-                builders.append({
-                    "name": builder_name,
-                    "is_current": "*" in parts[0],
-                    "raw": line_str,
-                })
+    for line in res.stdout.strip().splitlines():
+        line_str = line.strip()
+        if not line_str or line_str.startswith("NAME") or line_str.startswith("\\_"):
+            continue
+        parts = line_str.split()
+        if parts:
+            builder_name = parts[0].rstrip("*")
+            builders.append({
+                "host": host_key,
+                "name": builder_name,
+                "is_current": "*" in parts[0],
+                "raw": line_str,
+            })
     return builders
 
 
 def collect_buildkit_cache(host_key: str) -> Dict[str, Any]:
-    cmd = "docker buildx du 2>/dev/null || true"
+    cmd = "docker buildx du"
     res = run_ssh(host_key, cmd, timeout=25)
+    if res.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stderr,
+            reason="Failed to query buildx du cache",
+        )
+
     reclaimable = "0B"
     total = "0B"
     entries_count = 0
-    if res.returncode == 0 and res.stdout.strip():
-        for line in res.stdout.strip().splitlines():
-            line_str = line.strip()
-            if line_str.startswith("Reclaimable:"):
-                reclaimable = line_str.replace("Reclaimable:", "").strip()
-            elif line_str.startswith("Total:"):
-                total = line_str.replace("Total:", "").strip()
-            elif line_str and not line_str.startswith("ID") and not line_str.startswith("Shared:") and not line_str.startswith("Private:"):
-                entries_count += 1
+    for line in res.stdout.strip().splitlines():
+        line_str = line.strip()
+        if line_str.startswith("Reclaimable:"):
+            reclaimable = line_str.replace("Reclaimable:", "").strip()
+        elif line_str.startswith("Total:"):
+            total = line_str.replace("Total:", "").strip()
+        elif line_str and not line_str.startswith("ID") and not line_str.startswith("Shared:") and not line_str.startswith("Private:"):
+            entries_count += 1
     return {
         "entries_count": entries_count,
         "reclaimable": reclaimable,
@@ -290,20 +498,41 @@ def collect_buildkit_cache(host_key: str) -> Dict[str, Any]:
 
 
 def collect_system_df(host_key: str) -> List[Dict[str, Any]]:
-    cmd = "docker system df --format '{{json .}}' 2>/dev/null || true"
+    cmd = "docker system df --format '{{json .}}'"
     res = run_ssh(host_key, cmd, timeout=25)
+    if res.returncode != 0:
+        raise HostCollectionError(
+            host=host_key,
+            command=cmd,
+            returncode=res.returncode,
+            stderr=res.stderr,
+            reason="Failed to query docker system df",
+        )
+
     items = []
-    if res.returncode == 0 and res.stdout.strip():
-        for line in res.stdout.strip().splitlines():
-            try:
-                items.append(json.loads(line))
-            except Exception:
-                pass
+    for line in res.stdout.strip().splitlines():
+        line_str = line.strip()
+        if not line_str:
+            continue
+        try:
+            items.append(json.loads(line_str))
+        except json.JSONDecodeError as exc:
+            raise HostCollectionError(
+                host=host_key,
+                command=cmd,
+                returncode=res.returncode,
+                stderr=line_str,
+                reason="Malformed JSON in docker system df",
+            ) from exc
     return items
 
 
 def collect_full_inventory(host_key: str) -> Dict[str, Any]:
-    """Collects comprehensive inventory across all Docker object types."""
+    """
+    Collects comprehensive inventory across all Docker object types (Fail-Closed).
+    Runs reachability probe first; raises HostCollectionError if any step fails.
+    """
+    probe = probe_host_reachability(host_key)
     containers = collect_containers(host_key)
     images = collect_images(host_key)
     volumes = collect_volumes(host_key)
@@ -314,11 +543,16 @@ def collect_full_inventory(host_key: str) -> Dict[str, Any]:
 
     referenced_image_ids = {c["image_full_id"] for c in containers if c.get("image_full_id")}
     referenced_network_names = {net for c in containers for net in c.get("networks", [])}
-    referenced_volume_mounts = {mount for c in containers for mount in c.get("mounts", [])}
+    referenced_named_volumes = {
+        m["name"] for c in containers for m in c.get("mounts", [])
+        if m.get("type") == "volume" and m.get("name")
+    }
 
     return {
         "host": host_key,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "probe": probe,
+        "observation_complete": True,
         "containers": containers,
         "images": images,
         "volumes": volumes,
@@ -328,7 +562,7 @@ def collect_full_inventory(host_key: str) -> Dict[str, Any]:
         "system_df": df,
         "referenced_image_ids": list(referenced_image_ids),
         "referenced_network_names": list(referenced_network_names),
-        "referenced_volume_mounts": list(referenced_volume_mounts),
+        "referenced_named_volumes": list(referenced_named_volumes),
     }
 
 
@@ -371,10 +605,9 @@ class TaskManifestManager:
         return None
 
     @classmethod
-    def init_task_host(cls, task_id: str, project: str, host: str) -> Dict[str, Any]:
+    def init_task_host(cls, task_id: str, project: str, host: str, cache_policy: str = "default") -> Dict[str, Any]:
         """
-        Initializes preflight inventory for a specific host under a task.
-        Never overwrites existing hosts under the same task.
+        Initializes preflight inventory for a specific host under a task (Fail-Closed).
         """
         manifest = cls.load_manifest(task_id)
         if not manifest:
@@ -395,6 +628,7 @@ class TaskManifestManager:
             "status": "started",
             "preflight_time": preflight_data["timestamp"],
             "postflight_time": None,
+            "cache_policy": cache_policy,
             "active_candidates": [],
             "retained_resources": [],
             "cleanup_plan": None,
@@ -467,19 +701,11 @@ def classify_resource_ownership(
     task_id: Optional[str] = None,
     manifest: Optional[Dict[str, Any]] = None,
     is_delta: bool = False,
+    host_key: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Determines resource category (A~G) and rationale.
-    Distinguishes pre-existing vs delta new resources.
-    Categories:
-      A_production: Current live production (protected)
-      B_rollback: Designated rollback image (protected)
-      C_candidate: Active candidate image (retained)
-      D_transient: Task temporary resource (must be cleaned)
-      E_dangling: Task-owned dangling artifact or abandoned cache (must be cleaned)
-      F_other_projects: Third-party resource (strictly protected)
-      G_preexisting_unknown: Unknown resource present in preflight (protected, reported)
-      G_new_unknown: Unknown resource appeared during task (blocks gate, never auto-deleted)
+    Accepts explicit host_key context for accurate candidate resolution.
     """
     labels = res.get("labels") or {}
     lifecycle = labels.get("io.agent.lifecycle") or labels.get("io.rmg.lifecycle")
@@ -488,6 +714,7 @@ def classify_resource_ownership(
     repo = res.get("repository", "")
     tag = res.get("tag", "")
     image = res.get("image", "")
+    effective_host = host_key or res.get("host", "")
 
     # Universal lifecycle labels
     if lifecycle == "production":
@@ -495,14 +722,14 @@ def classify_resource_ownership(
     if lifecycle == "rollback":
         return "B_rollback", "Explicit lifecycle=rollback label"
     if lifecycle == "candidate":
-        # Check if candidate is active or superseded in manifest
+        # Candidate supersession resolution using manifest active_candidates
         if manifest and task_id:
-            host_info = manifest.get("hosts", {}).get(res.get("host", ""), {})
+            host_info = manifest.get("hosts", {}).get(effective_host, {})
             active_cands = host_info.get("active_candidates", [])
             tag_full = f"{repo}:{tag}"
-            if tag_full in active_cands:
+            if tag_full in active_cands or (tag in active_cands):
                 return "C_candidate", "Active candidate registered in manifest"
-            if len(active_cands) > 0 and tag_full not in active_cands:
+            if len(active_cands) > 0 and (tag_full not in active_cands and tag not in active_cands):
                 return "D_transient", "Candidate superseded by active candidate"
         return "C_candidate", "Candidate lifecycle label"
     if lifecycle == "temporary":
@@ -554,7 +781,7 @@ def plan_task_cleanup(
 ) -> Dict[str, Any]:
     """
     Builds a targeted cleanup plan for a specific task based on preflight delta.
-    Default is dry-run.
+    Validates active container references on volumes and networks before planning deletion.
     """
     manifest = TaskManifestManager.load_manifest(task_id)
     preflight = TaskManifestManager.load_preflight(task_id, host_key)
@@ -581,9 +808,23 @@ def plan_task_cleanup(
     new_unknown_resources = []
     preexisting_unknown_resources = []
 
+    # Running / protected container reference maps
+    referenced_named_vols: Set[str] = set()
+    referenced_net_names: Set[str] = set()
+
+    for c in current["containers"]:
+        cat, _ = classify_resource_ownership("container", c, task_id, manifest, is_delta=False, host_key=host_key)
+        # If container is running or protected (not in containers_to_delete):
+        if c.get("running") or cat in ("A_production", "B_rollback", "F_other_projects"):
+            for m in c.get("mounts", []):
+                if m.get("type") == "volume" and m.get("name"):
+                    referenced_named_vols.add(m["name"])
+            for net in c.get("networks", []):
+                referenced_net_names.add(net)
+
     # 1. Delta containers
     for c in delta["new_containers"]:
-        cat, reason = classify_resource_ownership("container", c, task_id, manifest, is_delta=True)
+        cat, reason = classify_resource_ownership("container", c, task_id, manifest, is_delta=True, host_key=host_key)
         if cat == "D_transient":
             containers_to_delete.append({"id": c["id"], "name": c["name"], "reason": reason})
         elif cat == "G_new_unknown":
@@ -593,7 +834,7 @@ def plan_task_cleanup(
 
     # 2. Delta images
     for img in delta["new_images"]:
-        cat, reason = classify_resource_ownership("image", img, task_id, manifest, is_delta=True)
+        cat, reason = classify_resource_ownership("image", img, task_id, manifest, is_delta=True, host_key=host_key)
         tag_str = f"{img['repository']}:{img['tag']}"
         if cat in ("D_transient", "E_dangling"):
             images_to_delete.append({"id": img["id"], "tag": tag_str, "reason": reason})
@@ -604,9 +845,12 @@ def plan_task_cleanup(
 
     # 3. Delta networks
     for net in delta["new_networks"]:
-        cat, reason = classify_resource_ownership("network", net, task_id, manifest, is_delta=True)
+        cat, reason = classify_resource_ownership("network", net, task_id, manifest, is_delta=True, host_key=host_key)
         if cat == "D_transient":
-            networks_to_delete.append({"id": net["id"], "name": net["name"], "reason": reason})
+            if net["name"] in referenced_net_names:
+                protected_skipped.append({"id": net["id"], "name": net["name"], "reason": "Referenced by running/protected container"})
+            else:
+                networks_to_delete.append({"id": net["id"], "name": net["name"], "reason": reason})
         elif cat == "G_new_unknown":
             new_unknown_resources.append({"type": "network", "id": net["id"], "name": net["name"], "reason": reason})
         else:
@@ -614,9 +858,12 @@ def plan_task_cleanup(
 
     # 4. Delta volumes
     for vol in delta["new_volumes"]:
-        cat, reason = classify_resource_ownership("volume", vol, task_id, manifest, is_delta=True)
+        cat, reason = classify_resource_ownership("volume", vol, task_id, manifest, is_delta=True, host_key=host_key)
         if cat == "D_transient":
-            volumes_to_delete.append({"name": vol["name"], "reason": reason})
+            if vol["name"] in referenced_named_vols:
+                protected_skipped.append({"name": vol["name"], "reason": "Referenced by running/protected container (Fail-Closed)"})
+            else:
+                volumes_to_delete.append({"name": vol["name"], "reason": reason})
         elif cat == "G_new_unknown":
             new_unknown_resources.append({"type": "volume", "name": vol["name"], "reason": reason})
         else:
@@ -624,22 +871,22 @@ def plan_task_cleanup(
 
     # 5. Delta builders
     for bld in delta["new_builders"]:
-        cat, reason = classify_resource_ownership("builder", bld, task_id, manifest, is_delta=True)
+        cat, reason = classify_resource_ownership("builder", bld, task_id, manifest, is_delta=True, host_key=host_key)
         if cat == "D_transient" or bld["name"].startswith(f"agent-{task_id}"):
             builders_to_delete.append({"name": bld["name"], "reason": reason})
         elif cat == "G_new_unknown":
             new_unknown_resources.append({"type": "builder", "name": bld["name"], "reason": reason})
 
-    # Record pre-existing unknown resources in current inventory
+    # Pre-existing unknown count
     for c in current["containers"]:
         if c["full_id"] not in {dc["full_id"] for dc in delta["new_containers"]}:
-            cat, reason = classify_resource_ownership("container", c, task_id, manifest, is_delta=False)
+            cat, _ = classify_resource_ownership("container", c, task_id, manifest, is_delta=False, host_key=host_key)
             if cat == "G_preexisting_unknown":
                 preexisting_unknown_resources.append({"type": "container", "id": c["id"], "name": c["name"]})
 
     for img in current["images"]:
         if img["full_id"] not in {di["full_id"] for di in delta["new_images"]}:
-            cat, reason = classify_resource_ownership("image", img, task_id, manifest, is_delta=False)
+            cat, _ = classify_resource_ownership("image", img, task_id, manifest, is_delta=False, host_key=host_key)
             if cat == "G_preexisting_unknown":
                 preexisting_unknown_resources.append({"type": "image", "id": img["id"], "tag": f"{img['repository']}:{img['tag']}"})
 
@@ -758,7 +1005,8 @@ def execute_task_cleanup(
 
 def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
     """
-    Task Completion Gate: evaluates whether THIS task left transient garbage or new_unknowns.
+    Task Completion Gate: evaluates whether THIS task left transient garbage,
+    unapproved cache deltas, or new_unknowns.
     """
     manifest = TaskManifestManager.load_manifest(task_id)
     if not manifest:
@@ -793,7 +1041,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
         # Delta containers
         for c in delta["new_containers"]:
-            cat, reason = classify_resource_ownership("container", c, task_id, manifest, is_delta=True)
+            cat, reason = classify_resource_ownership("container", c, task_id, manifest, is_delta=True, host_key=host_key)
             if cat == "D_transient":
                 temp_conts.append(c["name"])
             elif cat == "G_new_unknown":
@@ -801,7 +1049,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
         # Delta images
         for img in delta["new_images"]:
-            cat, reason = classify_resource_ownership("image", img, task_id, manifest, is_delta=True)
+            cat, reason = classify_resource_ownership("image", img, task_id, manifest, is_delta=True, host_key=host_key)
             tag_name = f"{img['repository']}:{img['tag']}"
             if cat == "D_transient":
                 superseded_imgs.append(tag_name)
@@ -812,7 +1060,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
         # Delta networks
         for net in delta["new_networks"]:
-            cat, reason = classify_resource_ownership("network", net, task_id, manifest, is_delta=True)
+            cat, reason = classify_resource_ownership("network", net, task_id, manifest, is_delta=True, host_key=host_key)
             if cat == "D_transient":
                 temp_networks.append(net["name"])
             elif cat == "G_new_unknown":
@@ -820,7 +1068,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
         # Delta volumes
         for vol in delta["new_volumes"]:
-            cat, reason = classify_resource_ownership("volume", vol, task_id, manifest, is_delta=True)
+            cat, reason = classify_resource_ownership("volume", vol, task_id, manifest, is_delta=True, host_key=host_key)
             if cat == "D_transient":
                 temp_volumes.append(vol["name"])
             elif cat == "G_new_unknown":
@@ -828,7 +1076,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
         # Delta builders
         for bld in delta["new_builders"]:
-            cat, reason = classify_resource_ownership("builder", bld, task_id, manifest, is_delta=True)
+            cat, reason = classify_resource_ownership("builder", bld, task_id, manifest, is_delta=True, host_key=host_key)
             if cat == "D_transient" or bld["name"].startswith(f"agent-{task_id}"):
                 disposable_builders.append(bld["name"])
             elif cat == "G_new_unknown":
@@ -837,12 +1085,12 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
         # Count pre-existing unknown resources
         for c in current["containers"]:
             if c["full_id"] not in {dc["full_id"] for dc in delta["new_containers"]}:
-                cat, _ = classify_resource_ownership("container", c, task_id, manifest, is_delta=False)
+                cat, _ = classify_resource_ownership("container", c, task_id, manifest, is_delta=False, host_key=host_key)
                 if cat == "G_preexisting_unknown":
                     preexisting_unknown_count += 1
         for img in current["images"]:
             if img["full_id"] not in {di["full_id"] for di in delta["new_images"]}:
-                cat, _ = classify_resource_ownership("image", img, task_id, manifest, is_delta=False)
+                cat, _ = classify_resource_ownership("image", img, task_id, manifest, is_delta=False, host_key=host_key)
                 if cat == "G_preexisting_unknown":
                     preexisting_unknown_count += 1
 
@@ -853,6 +1101,15 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
         cur_gb = parse_byte_size(cur_cache_total)
         cache_delta_gb = max(0.0, cur_gb - pre_gb)
 
+        cache_policy = host_data.get("cache_policy", "default")
+        approved_cache_delta = 0.0
+        unattributed_cache_delta = 0.0
+
+        if cache_policy == "approved_shared":
+            approved_cache_delta = cache_delta_gb
+        else:
+            unattributed_cache_delta = cache_delta_gb
+
         # Evaluate gau-unraid cache limits
         cache_warning = None
         if host_key == "gau-unraid":
@@ -862,7 +1119,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
             elif cur_gb > GAU_CACHE_LIMITS["soft_limit_gb"]:
                 cache_warning = f"WARNING: Exceeded soft limit ({cur_gb:.2f}GB > {GAU_CACHE_LIMITS['soft_limit_gb']}GB)"
 
-        # Task clean assertion: all transient == 0 and new_unknown == 0
+        # Task clean assertion: all transient == 0, new_unknown == 0, and unattributed cache delta == 0
         host_clean = (
             len(temp_conts) == 0
             and len(superseded_imgs) == 0
@@ -871,6 +1128,7 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
             and len(temp_networks) == 0
             and len(temp_volumes) == 0
             and len(new_unknown) == 0
+            and unattributed_cache_delta == 0.0
             and (cache_warning is None or "EXCEEDED HARD LIMIT" not in cache_warning)
         )
 
@@ -884,7 +1142,8 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
             "disposable_builders": disposable_builders,
             "temporary_networks": temp_networks,
             "temporary_volumes": temp_volumes,
-            "task_owned_build_cache_delta": f"{cache_delta_gb:.2f}GB",
+            "approved_shared_cache_delta": f"{approved_cache_delta:.2f}GB",
+            "unattributed_cache_delta": f"{unattributed_cache_delta:.2f}GB",
             "host_build_cache_total": cur_cache_total,
             "cache_warning": cache_warning,
             "preexisting_unknown_resources": preexisting_unknown_count,
@@ -902,10 +1161,8 @@ def audit_task_completion_gate(task_id: str) -> Dict[str, Any]:
 
 def audit_host_posture(host_key: str) -> Dict[str, Any]:
     """
-    Host Hygiene Audit (read-only):
-    Audits overall host posture (production, rollback, active candidates,
-    pre-existing unknown, dangling, host cache, disk usage).
-    Does NOT falsely declare task-owned garbage NONE without a task baseline.
+    Host Hygiene Audit (read-only posture report):
+    Audits overall host posture. Raises HostCollectionError if unreachable.
     """
     inv = collect_full_inventory(host_key)
     production_items = []
@@ -915,7 +1172,7 @@ def audit_host_posture(host_key: str) -> Dict[str, Any]:
     unknowns = []
 
     for c in inv["containers"]:
-        cat, reason = classify_resource_ownership("container", c, is_delta=False)
+        cat, reason = classify_resource_ownership("container", c, is_delta=False, host_key=host_key)
         item = {"id": c["id"], "name": c["name"], "image": c["image"], "reason": reason}
         if cat == "A_production":
             production_items.append(item)
@@ -929,7 +1186,7 @@ def audit_host_posture(host_key: str) -> Dict[str, Any]:
             unknowns.append(item)
 
     for img in inv["images"]:
-        cat, reason = classify_resource_ownership("image", img, is_delta=False)
+        cat, reason = classify_resource_ownership("image", img, is_delta=False, host_key=host_key)
         tag_str = f"{img['repository']}:{img['tag']}"
         item = {"id": img["id"], "tag": tag_str, "size": img["size"], "reason": reason}
         if cat == "A_production":
@@ -946,6 +1203,7 @@ def audit_host_posture(host_key: str) -> Dict[str, Any]:
     return {
         "host": host_key,
         "timestamp": inv["timestamp"],
+        "observation_status": "COMPLETE",
         "total_containers": len(inv["containers"]),
         "total_images": len(inv["images"]),
         "total_volumes": len(inv["volumes"]),
@@ -1040,6 +1298,14 @@ def bootstrap_gau_unraid() -> Dict[str, Any]:
             f"fi"
         )
         res_check = run_ssh(host_key, check_cmd)
+        if res_check.returncode != 0:
+            raise HostCollectionError(
+                host=host_key,
+                command=check_cmd,
+                returncode=res_check.returncode,
+                stderr=res_check.stderr,
+                reason="Failed to check plugin status",
+            )
         current_sha = res_check.stdout.strip()
 
         if current_sha == expected_sha:
@@ -1059,6 +1325,13 @@ def bootstrap_gau_unraid() -> Dict[str, Any]:
             else:
                 results[tool_name] = {"status": "FAILED", "error": res_install.stderr.strip()}
                 print(f"    [-] Failed to install {tool_name}: {res_install.stderr.strip()}")
+                raise HostCollectionError(
+                    host=host_key,
+                    command=install_cmd,
+                    returncode=res_install.returncode,
+                    stderr=res_install.stderr,
+                    reason=f"Failed to bootstrap {tool_name}",
+                )
 
     return results
 
@@ -1072,6 +1345,7 @@ def main():
     start_parser.add_argument("--task-id", required=True, help="Unique Task ID")
     start_parser.add_argument("--project", default="research-memory-gateway", help="Project name")
     start_parser.add_argument("--host", choices=["unraid", "gau-unraid"], required=True, help="Host to initialize")
+    start_parser.add_argument("--cache-policy", choices=["default", "approved_shared"], default="default", help="Build cache policy")
 
     # task-status
     status_parser = subparsers.add_parser("task-status", help="Inspect task status and deltas")
@@ -1098,58 +1372,83 @@ def main():
     args = parser.parse_args()
 
     if args.command == "task-start":
-        manifest = TaskManifestManager.init_task_host(args.task_id, args.project, args.host)
-        print(f"[+] Task {args.task_id} initialized on {args.host} with preflight inventory.")
-        print(json.dumps(manifest, indent=2))
+        try:
+            manifest = TaskManifestManager.init_task_host(args.task_id, args.project, args.host, args.cache_policy)
+            print(f"[+] Task {args.task_id} initialized on {args.host} with preflight inventory.")
+            print(json.dumps(manifest, indent=2))
+        except HostCollectionError as exc:
+            print(f"[-] FATAL (Fail-Closed): {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     if args.command == "task-status":
         manifest = TaskManifestManager.load_manifest(args.task_id)
         if not manifest:
-            print(f"[-] Task manifest not found: {args.task_id}")
+            print(f"[-] Task manifest not found: {args.task_id}", file=sys.stderr)
             sys.exit(1)
         print(f"\n=== TASK STATUS: {args.task_id} ===")
         print(f"Project: {manifest.get('project')}, Start Time: {manifest.get('start_time')}")
+        status_ok = True
         for h, info in manifest.get("hosts", {}).items():
             pre = TaskManifestManager.load_preflight(args.task_id, h)
-            cur = collect_full_inventory(h)
-            delta = compute_inventory_delta(pre or {}, cur)
-            print(f"\n[{h.upper()}] Status: {info.get('status')}")
-            print(f"  New Containers: {[c['name'] for c in delta['new_containers']]}")
-            new_img_tags = [f"{i['repository']}:{i['tag']}" for i in delta['new_images']]
-            print(f"  New Images:     {new_img_tags}")
-            print(f"  New Networks:   {[n['name'] for n in delta['new_networks']]}")
-            print(f"  New Volumes:    {[v['name'] for v in delta['new_volumes']]}")
-            print(f"  New Builders:   {[b['name'] for b in delta['new_builders']]}")
+            try:
+                cur = collect_full_inventory(h)
+                delta = compute_inventory_delta(pre or {}, cur)
+                print(f"\n[{h.upper()}] Status: {info.get('status')}")
+                print(f"  New Containers: {[c['name'] for c in delta['new_containers']]}")
+                new_img_tags = [f"{i['repository']}:{i['tag']}" for i in delta['new_images']]
+                print(f"  New Images:     {new_img_tags}")
+                print(f"  New Networks:   {[n['name'] for n in delta['new_networks']]}")
+                print(f"  New Volumes:    {[v['name'] for v in delta['new_volumes']]}")
+                print(f"  New Builders:   {[b['name'] for b in delta['new_builders']]}")
+            except HostCollectionError as exc:
+                print(f"\n[{h.upper()}] Status: INDETERMINATE - {exc}", file=sys.stderr)
+                status_ok = False
+        if not status_ok:
+            sys.exit(1)
         return
 
     if args.command == "task-finish":
         manifest = TaskManifestManager.load_manifest(args.task_id)
         if not manifest:
-            print(f"[-] Task manifest not found: {args.task_id}")
+            print(f"[-] Task manifest not found: {args.task_id}", file=sys.stderr)
             sys.exit(1)
 
         print(f"\n[*] Executing task-finish workflow for task {args.task_id}...")
         cleanup_success_overall = True
 
         for h in manifest.get("hosts", {}).keys():
-            # 1. Postflight inventory
-            TaskManifestManager.record_postflight(args.task_id, h)
-
-            # 2. Cleanup if requested
-            if args.cleanup:
-                clean_res = execute_task_cleanup(h, args.task_id, apply=args.apply)
-                if not clean_res.get("cleanup_success", True):
-                    cleanup_success_overall = False
-                manifest["hosts"][h]["cleanup_result"] = clean_res
-                # Fresh postflight after cleanup
+            try:
+                # 1. Postflight inventory
                 TaskManifestManager.record_postflight(args.task_id, h)
+
+                # 2. Cleanup if requested
+                if args.cleanup:
+                    clean_res = execute_task_cleanup(h, args.task_id, apply=args.apply)
+                    if not clean_res.get("cleanup_success", True):
+                        cleanup_success_overall = False
+                    manifest["hosts"][h]["cleanup_result"] = clean_res
+                    # Fresh postflight verification after cleanup
+                    try:
+                        TaskManifestManager.record_postflight(args.task_id, h)
+                    except HostCollectionError as exc:
+                        print(f"[-] Post-cleanup verification failed on {h}: {exc}", file=sys.stderr)
+                        manifest["hosts"][h]["cleanup_result"]["verification"] = "UNVERIFIED"
+                        cleanup_success_overall = False
+            except HostCollectionError as exc:
+                print(f"[-] Host collection failed on {h}: {exc}", file=sys.stderr)
+                cleanup_success_overall = False
 
         manifest["finish_time"] = datetime.now(timezone.utc).isoformat()
         TaskManifestManager.save_manifest(manifest)
 
         # 3. Final Task Gate
-        report = audit_task_completion_gate(args.task_id)
+        try:
+            report = audit_task_completion_gate(args.task_id)
+        except HostCollectionError as exc:
+            print(f"[-] Task completion gate failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+
         print("\n=== TASK COMPLETION HYGIENE GATE AUDIT ===")
         for h, data in report.get("hosts", {}).items():
             print(f"\n[{h.upper()}]")
@@ -1159,7 +1458,8 @@ def main():
             print(f"  disposable_builders:          {len(data.get('disposable_builders', []))}")
             print(f"  temporary_networks:           {len(data.get('temporary_networks', []))} {data.get('temporary_networks', [])}")
             print(f"  temporary_volumes:            {len(data.get('temporary_volumes', []))} {data.get('temporary_volumes', [])}")
-            print(f"  task_owned_build_cache_delta: {data.get('task_owned_build_cache_delta')}")
+            print(f"  approved_shared_cache_delta:  {data.get('approved_shared_cache_delta', '0.00GB')}")
+            print(f"  unattributed_cache_delta:     {data.get('unattributed_cache_delta', '0.00GB')}")
             print(f"  host_build_cache_total:       {data.get('host_build_cache_total')}")
             if data.get("cache_warning"):
                 print(f"  cache_warning:                {data.get('cache_warning')}")
@@ -1175,17 +1475,33 @@ def main():
 
     if args.command == "audit-host":
         hosts = ["unraid", "gau-unraid"] if args.host == "all" else [args.host]
+        all_complete = True
         for h in hosts:
-            res = audit_host_posture(h)
-            if args.json:
-                print(json.dumps(res, indent=2))
-            else:
-                print(f"\n=== {h.upper()} HOST POSTURE AUDIT ===")
-                print(f"Total Containers: {res['total_containers']}, Images: {res['total_images']}, Volumes: {res['total_volumes']}, Networks: {res['total_networks']}")
-                print(f"Production items: {len(res['production_resources'])}, Rollback items: {len(res['rollback_resources'])}, Active candidates: {len(res['active_candidates'])}")
-                print(f"Other projects:   {res['other_projects_count']}")
-                print(f"Pre-existing unknown resources: {res['preexisting_unknown_count']}")
-                print(f"Host Build Cache: {res['buildkit_cache']['total']} (reclaimable: {res['buildkit_cache']['reclaimable']})")
+            try:
+                res = audit_host_posture(h)
+                if args.json:
+                    print(json.dumps(res, indent=2))
+                else:
+                    print(f"\n=== {h.upper()} HOST POSTURE AUDIT ===")
+                    print(f"Observation status: {res['observation_status']}")
+                    print(f"Total Containers:   {res['total_containers']}")
+                    print(f"Total Images:       {res['total_images']}")
+                    print(f"Total Volumes:      {res['total_volumes']}")
+                    print(f"Total Networks:     {res['total_networks']}")
+                    print(f"Production items:   {len(res['production_resources'])}")
+                    print(f"Rollback items:     {len(res['rollback_resources'])}")
+                    print(f"Active candidates:  {len(res['active_candidates'])}")
+                    print(f"Other projects:     {res['other_projects_count']}")
+                    print(f"Pre-existing unknown resources: {res['preexisting_unknown_count']}")
+                    print(f"Host Build Cache:   {res['buildkit_cache']['total']} (reclaimable: {res['buildkit_cache']['reclaimable']})")
+                    print("Status:             AUDIT COMPLETE")
+            except HostCollectionError as exc:
+                all_complete = False
+                print(f"\n=== {h.upper()} HOST POSTURE AUDIT ===", file=sys.stderr)
+                print("Observation status: INDETERMINATE", file=sys.stderr)
+                print(f"Failure reason:     {exc}", file=sys.stderr)
+        if not all_complete:
+            sys.exit(1)
         return
 
     if args.command == "policy-check":
@@ -1194,7 +1510,7 @@ def main():
             print("[+] Workspace AGENTS.md matches canonical policy.")
             sys.exit(0)
         else:
-            print("[-] Workspace AGENTS.md is out of sync with canonical policy. Run 'policy-install' to sync.")
+            print("[-] Workspace AGENTS.md is out of sync with canonical policy. Run 'policy-install' to sync.", file=sys.stderr)
             sys.exit(1)
 
     if args.command == "policy-install":
@@ -1202,8 +1518,12 @@ def main():
         return
 
     if args.command == "bootstrap-gau":
-        res = bootstrap_gau_unraid()
-        print(json.dumps(res, indent=2))
+        try:
+            res = bootstrap_gau_unraid()
+            print(json.dumps(res, indent=2))
+        except HostCollectionError as exc:
+            print(f"[-] Bootstrap failed: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     parser.print_help()
