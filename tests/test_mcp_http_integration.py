@@ -63,7 +63,6 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
             streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
                 read_stream,
                 write_stream,
-                _session_id,
             ),
             ClientSession(read_stream, write_stream) as session,
         ):
@@ -76,11 +75,21 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                     "get_project_state",
                 }
                 tool_by_name = {tool.name: tool for tool in tools.tools}
-                assert tool_by_name["recall_memory"].annotations.readOnlyHint is True
-                assert tool_by_name["verify_memory"].annotations.readOnlyHint is True
-                assert tool_by_name["get_project_state"].annotations.readOnlyHint is True
-                assert tool_by_name["capture_memory"].annotations.readOnlyHint is False
-                assert tool_by_name["capture_memory"].annotations.destructiveHint is False
+                assert (tool_by_name["recall_memory"].annotations.read_only_hint
+                        if hasattr(tool_by_name["recall_memory"].annotations, "read_only_hint")
+                        else tool_by_name["recall_memory"].annotations.readOnlyHint) is True
+                assert (tool_by_name["verify_memory"].annotations.read_only_hint
+                        if hasattr(tool_by_name["verify_memory"].annotations, "read_only_hint")
+                        else tool_by_name["verify_memory"].annotations.readOnlyHint) is True
+                assert (tool_by_name["get_project_state"].annotations.read_only_hint
+                        if hasattr(tool_by_name["get_project_state"].annotations, "read_only_hint")
+                        else tool_by_name["get_project_state"].annotations.readOnlyHint) is True
+                assert (tool_by_name["capture_memory"].annotations.read_only_hint
+                        if hasattr(tool_by_name["capture_memory"].annotations, "read_only_hint")
+                        else tool_by_name["capture_memory"].annotations.readOnlyHint) is False
+                assert (tool_by_name["capture_memory"].annotations.destructive_hint
+                        if hasattr(tool_by_name["capture_memory"].annotations, "destructive_hint")
+                        else tool_by_name["capture_memory"].annotations.destructiveHint) is False
 
                 recalled = await session.call_tool(
                     "recall_memory",
@@ -89,7 +98,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                         "project": "Fe3-probe",
                     },
                 )
-                payload = recalled.structuredContent
+                payload = getattr(recalled, "structured_content", None) or getattr(recalled, "structuredContent", None)
                 assert payload is not None
                 assert payload["result_count"] == 1
                 assert payload["results"][0]["matched_claims"][0]["claim_id"] == "claim_fe_stock"
@@ -102,7 +111,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                         "project": "materials",
                     },
                 )
-                capture_payload = captured.structuredContent
+                capture_payload = getattr(captured, "structured_content", None) or getattr(captured, "structuredContent", None)
                 assert capture_payload is not None
                 assert capture_payload["action"] == "queued"
                 assert capture_payload["memory_tier"] == "trusted"
@@ -117,7 +126,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                         "project": "security-e2e",
                     },
                 )
-                secret_payload = secret_capture.structuredContent
+                secret_payload = getattr(secret_capture, "structured_content", None) or getattr(secret_capture, "structuredContent", None)
                 assert secret_payload is not None
                 assert secret_payload["action"] == "saved"
                 assert secret_payload["secret_redaction"]["detected"] is True
@@ -126,7 +135,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                     "recall_memory",
                     {"query": "SECRET-123456789", "project": "security-e2e"},
                 )
-                secret_recall_payload = secret_recall.structuredContent
+                secret_recall_payload = getattr(secret_recall, "structured_content", None) or getattr(secret_recall, "structuredContent", None)
                 assert secret_recall_payload is not None
                 assert secret_recall_payload["result_count"] == 0
 
@@ -144,14 +153,16 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
                         "project": "origin-e2e",
                     },
                 )
-                assert old_path.structuredContent["action"] == "saved"
-                assert new_path.structuredContent["action"] == "saved"
+                old_payload = getattr(old_path, "structured_content", None) or getattr(old_path, "structuredContent", None)
+                new_payload = getattr(new_path, "structured_content", None) or getattr(new_path, "structuredContent", None)
+                assert old_payload["action"] == "saved"
+                assert new_payload["action"] == "saved"
 
                 path_recall = await session.call_tool(
                     "recall_memory",
                     {"query": "Origin MCP repository path", "project": "origin-e2e"},
                 )
-                path_payload = path_recall.structuredContent
+                path_payload = getattr(path_recall, "structured_content", None) or getattr(path_recall, "structuredContent", None)
                 assert path_payload is not None
                 assert path_payload["result_count"] == 1
                 assert "originlab-jx" in path_payload["results"][0]["content"]

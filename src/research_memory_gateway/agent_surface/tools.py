@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
 from ..service import ResearchMemoryService
@@ -25,7 +25,7 @@ CONVERSATION_TOOL_NAMES = (
 AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES
 
 
-def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
+def register_agent_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def recall_memory(
         query: str,
@@ -117,7 +117,7 @@ def register_agent_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
         register_conversation_tools(mcp, service)
 
 
-def register_conversation_tools(mcp: FastMCP, service: ResearchMemoryService) -> None:
+def register_conversation_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
     def conversation_search(
         query: str,

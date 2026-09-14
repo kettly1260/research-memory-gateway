@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from starlette.applications import Starlette
 from starlette.responses import Response
 from starlette.routing import Mount, Route
@@ -149,10 +149,13 @@ def _is_loopback_client(scope: Scope) -> bool:
     return host in {"127.0.0.1", "::1", "localhost"}
 
 
-def build_mcp(config: AppConfig, surface: str | None = None) -> FastMCP:
+def build_mcp(config: AppConfig, surface: str | None = None) -> MCPServer:
     backend = build_backend(config)
     service = ResearchMemoryService(config, backend)
-    mcp = FastMCP(config.server.name, host=config.server.host, port=config.server.port)
+    mcp = MCPServer(config.server.name)
+    mcp.settings.__dict__["host"] = config.server.host
+    mcp.settings.__dict__["port"] = config.server.port
+    mcp.settings.__dict__["transport_security"] = None
     selected_surface = surface or config.server.surface
     if selected_surface not in {"agent", "admin", "full"}:
         raise ValueError("surface must be agent, admin, or full")
@@ -419,7 +422,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _build_streamable_http_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
+def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only Streamable HTTP at /mcp."""
     app = mcp.streamable_http_app()
     if auth_token or config.backend.type == "sqlite":
@@ -427,7 +430,7 @@ def _build_streamable_http_app(mcp: FastMCP, auth_token: str | None, config: App
     return app
 
 
-def _build_sse_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
+def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
     app = mcp.sse_app()
     if auth_token or config.backend.type == "sqlite":
@@ -435,7 +438,7 @@ def _build_sse_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> S
     return app
 
 
-def _build_combined_app(mcp: FastMCP, auth_token: str | None, config: AppConfig) -> Starlette:
+def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving both Streamable HTTP (/mcp) and legacy SSE (/sse).
 
     We mount both transports on the same port so that:
