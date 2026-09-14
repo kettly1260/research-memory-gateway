@@ -18,3 +18,6 @@ scratch/
 .tmp/
 /node_modules/
 /package-lock.json
+.local/
+*Destination*
+%SystemDrive%/
