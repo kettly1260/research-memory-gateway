@@ -58,7 +58,7 @@ class BearerAuthMiddleware:
         self.sqlite_path = sqlite_path
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") in {"/health", "/healthz"}:
+        if scope["type"] != "http" or scope.get("path") in {"/health", "/healthz"} or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
 
@@ -156,6 +156,8 @@ def build_mcp(config: AppConfig, surface: str | None = None) -> MCPServer:
     mcp.settings.__dict__["host"] = config.server.host
     mcp.settings.__dict__["port"] = config.server.port
     mcp.settings.__dict__["transport_security"] = None
+    mcp._rmg_service = service  # type: ignore[attr-defined]
+    mcp._rmg_config = config    # type: ignore[attr-defined]
     selected_surface = surface or config.server.surface
     if selected_surface not in {"agent", "admin", "full"}:
         raise ValueError("surface must be agent, admin, or full")
@@ -422,9 +424,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _mount_uploads_if_enabled(app: Starlette, config: AppConfig, mcp: MCPServer) -> None:
+    if getattr(config, "upload", None) and config.upload.enabled:
+        service = getattr(mcp, "_rmg_service", None)
+        if service is not None:
+            from .uploads import create_tus_asgi_app
+
+            tus_app = create_tus_asgi_app(
+                upload_manager=service.upload_manager,
+                upload_path=config.upload.upload_path,
+                max_size_bytes=config.upload.max_size_bytes,
+            )
+            app.mount(config.upload.upload_path, tus_app)
+
+
 def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only Streamable HTTP at /mcp."""
     app = mcp.streamable_http_app()
+    _mount_uploads_if_enabled(app, config, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
@@ -433,6 +450,7 @@ def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: A
 def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
     app = mcp.sse_app()
+    _mount_uploads_if_enabled(app, config, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app
@@ -469,6 +487,7 @@ def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfi
         routes=combined_routes,
         lifespan=combined_lifespan,
     )
+    _mount_uploads_if_enabled(app, config, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
     return app

@@ -60,6 +60,18 @@ class ResearchMemoryService:
         self.source_resolver = SourceResolver(config)
         self.proposals: dict[str, SaveProposal] = {}
         self._conversation_retrieval = None
+        self._upload_manager = None
+
+    @property
+    def upload_manager(self):
+        if self._upload_manager is None:
+            from .uploads import UploadManager
+            upload_dir = self.config.upload.resolve_base_dir()
+            self._upload_manager = UploadManager(
+                base_dir=upload_dir,
+                default_expiry_hours=self.config.upload.default_expiry_hours,
+            )
+        return self._upload_manager
 
     @property
     def conversation_retrieval(self):

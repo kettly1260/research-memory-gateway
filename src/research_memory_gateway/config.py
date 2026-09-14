@@ -215,6 +215,19 @@ class ConversationArchiveConfig(BaseModel):
         return resolved
 
 
+class UploadConfig(BaseModel):
+    enabled: bool = True
+    base_dir: str = "./data/uploads"
+    upload_path: str = "/uploads"
+    max_size_bytes: int = 1024 * 1024 * 1024  # 1 GB
+    default_expiry_hours: int = 24
+
+    def resolve_base_dir(self, base_dir: str | Path | None = None) -> Path:
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.base_dir)
+        return path.resolve() if path.is_absolute() else (base / path).resolve()
+
+
 def validate_safe_path(target_path: str | Path, allowed_roots: Sequence[str | Path]) -> Path:
     target = Path(target_path).resolve()
     resolved_roots = [Path(root).resolve() for root in allowed_roots]
@@ -236,6 +249,7 @@ class AppConfig(BaseModel):
     export: ExportConfig = Field(default_factory=ExportConfig)
     webui: WebUIConfig = Field(default_factory=WebUIConfig)
     conversation_archive: ConversationArchiveConfig = Field(default_factory=ConversationArchiveConfig)
+    upload: UploadConfig = Field(default_factory=UploadConfig)
 
 
 def load_config(path: str | Path) -> AppConfig:
