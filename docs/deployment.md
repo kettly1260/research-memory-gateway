@@ -20,6 +20,22 @@ AI client -> research-memory-gateway MCP -> SQLite
 
 Use SQLite mode first. Add embedding/rerank only for better retrieval quality.
 
+## Dual-Host Architecture & Docker Hygiene (P0)
+
+To protect the production environment and prevent accumulation of build artifacts, deployment is split across two dedicated hosts:
+
+1. **`gau-unraid` VM (`192.168.22.202`)**: Dedicated **Build / Test / Rehearsal Host**.
+   - Clean builds, pytest integration suites, and candidate image rehearsal are executed here in isolation.
+   - Pushes verified candidate images directly to GHCR.
+   - Strict retention: At most 1 active candidate + 1 reproducible artifact retained.
+2. **Unraid NAS (`192.168.22.102`)**: Dedicated **Production / Canary Runtime Host**.
+   - Pulls published candidate images by exact digest from GHCR.
+   - Runs canary testing, health checks, production cutover, and rollback.
+   - **Local builds are strictly forbidden on Unraid** to prevent host disk exhaustion and build cache pollution.
+   - Strict retention: Only Current Production + Last-Known-Good Rollback image are retained.
+
+See [Docker Host Resource Hygiene SOP (P0)](file:///g:/LLM/memory/docs/DOCKER_HOST_RESOURCE_HYGIENE_SOP.md) for lifecycle rules, required labels, preflight/postflight inventory requirements, and release gate checks.
+
 ## Recommended NAS Deployment
 
 1. Copy this project to the NAS.
