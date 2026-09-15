@@ -25,6 +25,7 @@ from scripts.docker_hygiene import (
     probe_host_reachability,
     run_ssh,
     verify_policy_sync,
+    WORKSPACE_AGENTS_FILE,
     PINNED_TOOLCHAIN,
     GAU_CACHE_LIMITS,
 )
@@ -254,8 +255,17 @@ def test_cleanup_failure_propagates_to_failure(tmp_path, monkeypatch):
             assert clean_res["executed_actions"][0]["success"] is False
 
 
-def test_policy_sync():
-    assert verify_policy_sync() is True
+def test_policy_sync(tmp_path: Path):
+    if WORKSPACE_AGENTS_FILE.exists():
+        assert verify_policy_sync() is True
+    fake_agents = tmp_path / "AGENTS.md"
+    fake_canonical = tmp_path / "POLICY.md"
+    fake_canonical.write_text("TEST POLICY", encoding="utf-8")
+    fake_agents.write_text(
+        "header\n<!-- BEGIN MANAGED DOCKER HYGIENE POLICY -->\nTEST POLICY\n<!-- END MANAGED DOCKER HYGIENE POLICY -->\nfooter",
+        encoding="utf-8",
+    )
+    assert verify_policy_sync(agents_file=fake_agents, canonical_file=fake_canonical) is True
 
 
 def test_fail_closed_ssh_failure():

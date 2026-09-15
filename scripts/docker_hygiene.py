@@ -1217,19 +1217,22 @@ def audit_host_posture(host_key: str) -> Dict[str, Any]:
     }
 
 
-def verify_policy_sync() -> bool:
+def verify_policy_sync(agents_file: Optional[Path] = None, canonical_file: Optional[Path] = None) -> bool:
     """Checks if WORKSPACE_AGENTS_FILE managed block matches CANONICAL_POLICY_FILE."""
-    if not CANONICAL_POLICY_FILE.exists():
-        print(f"[-] Canonical policy missing: {CANONICAL_POLICY_FILE}")
+    canonical_p = canonical_file or CANONICAL_POLICY_FILE
+    agents_p = agents_file or WORKSPACE_AGENTS_FILE
+
+    if not canonical_p.exists():
+        print(f"[-] Canonical policy missing: {canonical_p}")
         return False
-    if not WORKSPACE_AGENTS_FILE.exists():
-        print(f"[-] Workspace AGENTS.md missing: {WORKSPACE_AGENTS_FILE}")
+    if not agents_p.exists():
+        print(f"[-] Workspace AGENTS.md missing: {agents_p}")
         return False
 
-    with open(CANONICAL_POLICY_FILE, "r", encoding="utf-8") as f:
+    with open(canonical_p, "r", encoding="utf-8") as f:
         canonical_text = f.read().strip()
 
-    with open(WORKSPACE_AGENTS_FILE, "r", encoding="utf-8") as f:
+    with open(agents_p, "r", encoding="utf-8") as f:
         agents_text = f.read()
 
     pattern = re.compile(
@@ -1238,7 +1241,7 @@ def verify_policy_sync() -> bool:
     )
     match = pattern.search(agents_text)
     if not match:
-        print(f"[-] Managed markers not found in {WORKSPACE_AGENTS_FILE}")
+        print(f"[-] Managed markers not found in {agents_p}")
         return False
 
     managed_content = match.group(1).strip()
