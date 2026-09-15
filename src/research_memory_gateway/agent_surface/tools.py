@@ -25,6 +25,11 @@ CORE_AGENT_TOOL_NAMES = (
     "verify_memory",
     "get_project_state",
 )
+MEDIA_TOOL_NAMES = (
+    "media_status",
+    "media_index_image",
+    "media_search",
+)
 CONVERSATION_TOOL_NAMES = (
     "conversation_search",
     "conversation_read",
@@ -38,7 +43,7 @@ CONVERSATION_UPLOAD_TOOL_NAMES = (
     "conversation_ingest_turn",
     "conversation_ingest_snapshot",
 )
-AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES
+AGENT_TOOL_NAMES = CORE_AGENT_TOOL_NAMES + MEDIA_TOOL_NAMES
 
 
 def register_agent_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
@@ -129,10 +134,74 @@ def register_agent_tools(mcp: MCPServer, service: ResearchMemoryService) -> None
         """
         return get_project_state_impl(service, project=project, limit=limit)
 
+    if getattr(service.config, "media_index", None) and service.config.media_index.enabled:
+        register_media_tools(mcp, service)
+
     if getattr(service.config, "conversation_archive", None) and service.config.conversation_archive.enabled:
         register_conversation_tools(mcp, service)
         if getattr(service.config, "upload", None) and service.config.upload.enabled:
             register_upload_tools(mcp, service)
+
+
+def register_media_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def media_status() -> dict[str, Any]:
+        """Inspect Research Media Index vector coverage and active embedding model.
+
+        Media uses the same embedding endpoint/model as Research Memory. RMG
+        does not probe whether that downstream model supports image inputs.
+        """
+        return service.media_index.stats()
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False))
+    def media_index_image(
+        file_path: str,
+        source_system: str = "local",
+        source_resource_id: str = "",
+        parent_resource_id: str = "",
+        caption: str = "",
+        ocr_text: str = "",
+        metadata: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Index one local image and request its vector from the shared embedding endpoint.
+
+        Image bytes are sent as a data URI through the same embedding ``input``
+        field used for text. The gateway does not maintain a model capability
+        list; unsupported image input is returned as a normal embedding error.
+        """
+        return service.media_index.index_image_file(
+            file_path,
+            source_system=source_system,
+            source_resource_id=source_resource_id,
+            parent_resource_id=parent_resource_id,
+            caption=caption,
+            ocr_text=ocr_text,
+            metadata=metadata,
+            force=force,
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+    def media_search(
+        query: str | None = None,
+        image_path: str | None = None,
+        source_system: str | None = None,
+        parent_resource_id: str | None = None,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Vector-search indexed media with either text or an image query.
+
+        Provide exactly one of ``query`` or ``image_path``. Both query modes
+        use the same configured embedding endpoint; cross-modal compatibility
+        is intentionally delegated to the downstream model.
+        """
+        return service.media_index.search(
+            query=query,
+            image_path=image_path,
+            source_system=source_system,
+            parent_resource_id=parent_resource_id,
+            limit=limit,
+        )
 
 
 def register_conversation_tools(mcp: MCPServer, service: ResearchMemoryService) -> None:

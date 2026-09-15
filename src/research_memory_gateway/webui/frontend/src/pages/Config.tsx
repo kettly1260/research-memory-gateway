@@ -27,7 +27,8 @@ import {
   AlertTriangle,
   Server,
   MessagesSquare,
-  UploadCloud
+  UploadCloud,
+  Images
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -754,6 +755,32 @@ export function Config() {
                   <div className="space-y-1">
                     <Label>{t('config.conversation_index')}</Label>
                     <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.conversation_archive.index_path}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 font-medium">
+                    <Images className="w-4 h-4 text-primary" />
+                    {t('config.media_index')}
+                  </div>
+                  <Badge variant={config.system.media_index.enabled ? 'default' : 'secondary'}>
+                    {config.system.media_index.enabled ? t('config.enabled') : t('config.disabled')}
+                  </Badge>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-1 md:col-span-2">
+                    <Label>{t('config.media_index_path')}</Label>
+                    <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.media_index.index_path}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{t('config.media_embedding_provider')}</Label>
+                    <div className="text-xs rounded bg-muted px-2 py-1.5">
+                      {config.system.media_index.shares_embedding_provider
+                        ? t('config.media_shared_embedding')
+                        : t('config.disabled')}
+                    </div>
                   </div>
                 </div>
               </div>

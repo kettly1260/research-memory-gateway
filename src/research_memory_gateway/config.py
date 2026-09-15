@@ -9,7 +9,7 @@ import secrets
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr
@@ -176,6 +176,7 @@ class ConversationArchiveConfig(BaseModel):
             )
         return vault
 
+
     def resolve_canonical_root(self, *, confirmed: bool = False) -> Path:
         vault = self.resolve_vault_root(confirmed=confirmed)
         subdir = Path(self.canonical_subdir)
@@ -215,6 +216,31 @@ class ConversationArchiveConfig(BaseModel):
         return resolved
 
 
+class MediaIndexConfig(BaseModel):
+    """Persistent multimodal resource index.
+
+    Media vectors intentionally reuse ``retrieval.embedding``. This config
+    only controls local indexing/storage behaviour; it does not describe or
+    probe downstream model capabilities.
+    """
+
+    enabled: bool = True
+    index_path: str = "./data/research-media.sqlite"
+    embedding_version: str = "v1"
+    max_image_bytes: int = 32 * 1024 * 1024
+
+    def resolve_index_path(self, base_dir: str | Path | None = None) -> Path:
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.index_path)
+        resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+        if not path.is_absolute():
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                raise PermissionError(f"media index_path escapes base directory: {self.index_path}")
+        return resolved
+
+
 class UploadConfig(BaseModel):
     enabled: bool = True
     base_dir: str = "./data/uploads"
@@ -249,6 +275,7 @@ class AppConfig(BaseModel):
     export: ExportConfig = Field(default_factory=ExportConfig)
     webui: WebUIConfig = Field(default_factory=WebUIConfig)
     conversation_archive: ConversationArchiveConfig = Field(default_factory=ConversationArchiveConfig)
+    media_index: MediaIndexConfig = Field(default_factory=MediaIndexConfig)
     upload: UploadConfig = Field(default_factory=UploadConfig)
 
 

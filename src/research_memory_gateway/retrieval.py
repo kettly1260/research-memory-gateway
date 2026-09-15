@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import math
 import os
 import time
@@ -58,6 +59,17 @@ class EmbeddingClient:
         return os.getenv(self.config.model_env) or self.config.model or ""
 
     def embed(self, text: str) -> list[float] | None:
+        """Embed text through the configured embedding endpoint."""
+        return self.embed_input(text)
+
+    def embed_input(self, input_value: Any) -> list[float] | None:
+        """Embed an opaque input value through the configured endpoint.
+
+        ``input_value`` is deliberately not capability-checked. Text, data
+        URIs, or future structured multimodal payloads all travel through the
+        same ``input`` field and model configuration. Unsupported modalities
+        are a downstream provider concern and surface as normal request errors.
+        """
         self.last_error = None
         self.last_status_code = None
         if not self.config.enabled:
@@ -66,10 +78,16 @@ class EmbeddingClient:
         if not self.base_url:
             self.last_error = RetrievalFailureReason.NOT_CONFIGURED.value
             return None
-        if not text.strip():
+        if input_value is None:
             self.last_error = RetrievalFailureReason.EMPTY_INPUT.value
             return None
-        payload: dict[str, Any] = {"input": text}
+        if isinstance(input_value, str) and not input_value.strip():
+            self.last_error = RetrievalFailureReason.EMPTY_INPUT.value
+            return None
+        if isinstance(input_value, (list, dict, tuple)) and not input_value:
+            self.last_error = RetrievalFailureReason.EMPTY_INPUT.value
+            return None
+        payload: dict[str, Any] = {"input": input_value}
         if self.model:
             payload["model"] = self.model
         headers = {"Content-Type": "application/json"}
@@ -95,6 +113,21 @@ class EmbeddingClient:
             return None
         self.last_vector_dimensions = len(vector)
         return vector
+
+    def embed_image_bytes(self, content: bytes, *, mime_type: str = "image/png") -> list[float] | None:
+        """Embed image bytes using the same endpoint as text embeddings.
+
+        Images are represented as a standard data URI placed directly in the
+        existing ``input`` field. RMG does not probe the configured model for
+        image capability; providers that do not accept image inputs simply
+        return their normal request error.
+        """
+        if not content:
+            self.last_error = RetrievalFailureReason.EMPTY_INPUT.value
+            return None
+        encoded = base64.b64encode(content).decode("ascii")
+        data_uri = f"data:{mime_type or 'application/octet-stream'};base64,{encoded}"
+        return self.embed_input(data_uri)
 
     def health(self) -> dict[str, Any]:
         status = "disabled"

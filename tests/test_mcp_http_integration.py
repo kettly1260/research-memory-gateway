@@ -5,10 +5,12 @@ import time
 from threading import Thread
 
 import anyio
+import httpx
 import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from research_memory_gateway.agent_surface.tools import AGENT_TOOL_NAMES
 from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.config import AppConfig
 from research_memory_gateway.models import ResearchMemory
@@ -58,6 +60,13 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
     thread.start()
     _wait_for_port(port)
 
+    health = httpx.get(f"http://127.0.0.1:{port}/health", timeout=5)
+    assert health.status_code == 200
+    health_data = health.json()
+    assert health_data["media_index"]["enabled"] is True
+    assert health_data["media_index"]["shares_embedding_provider"] is True
+    assert set(health_data["mcp"]["tools"]) == set(AGENT_TOOL_NAMES)
+
     async def exercise() -> None:
         async with (
             streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
@@ -68,12 +77,7 @@ def test_real_streamable_http_agent_surface_and_recall(tmp_path) -> None:
         ):
                 await session.initialize()
                 tools = await session.list_tools()
-                assert {tool.name for tool in tools.tools} == {
-                    "recall_memory",
-                    "capture_memory",
-                    "verify_memory",
-                    "get_project_state",
-                }
+                assert {tool.name for tool in tools.tools} == set(AGENT_TOOL_NAMES)
                 tool_by_name = {tool.name: tool for tool in tools.tools}
                 assert (tool_by_name["recall_memory"].annotations.read_only_hint
                         if hasattr(tool_by_name["recall_memory"].annotations, "read_only_hint")

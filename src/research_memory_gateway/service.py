@@ -62,6 +62,7 @@ class ResearchMemoryService:
         self.proposals: dict[str, SaveProposal] = {}
         self._conversation_retrieval = None
         self._upload_manager = None
+        self._media_index = None
 
     @property
     def upload_manager(self):
@@ -105,6 +106,33 @@ class ResearchMemoryService:
             self._conversation_retrieval.embedding_client = emb_client
             self._conversation_retrieval.index_db.embedding_client = emb_client
         return self._conversation_retrieval
+
+    @property
+    def media_index(self):
+        """Return the lazily opened Research Media Index.
+
+        Media indexing reuses the same hot-reloadable embedding client as
+        Research Memory and Conversation retrieval. No separate model or
+        capability registry is maintained here.
+        """
+        if not self.config.media_index.enabled:
+            raise RuntimeError("media_index_disabled")
+        refresh = getattr(self.backend, "_refresh_retrieval_clients", None)
+        if callable(refresh):
+            refresh()
+        emb_client = getattr(self.backend, "embedding_client", None)
+        if self._media_index is None:
+            from .media_index import MediaIndexDatabase
+
+            self._media_index = MediaIndexDatabase(
+                self.config.media_index.resolve_index_path(),
+                embedding_client=emb_client,
+                embedding_version=self.config.media_index.embedding_version,
+                max_image_bytes=self.config.media_index.max_image_bytes,
+            )
+        else:
+            self._media_index.embedding_client = emb_client
+        return self._media_index
 
     def propose_save(
         self,
@@ -474,11 +502,22 @@ class ResearchMemoryService:
         return proposal
 
     def health(self) -> dict[str, Any]:
+        media_health: dict[str, Any] = {
+            "enabled": self.config.media_index.enabled,
+            "index_path": self.config.media_index.index_path,
+            "loaded": self._media_index is not None,
+        }
+        if self._media_index is not None:
+            try:
+                media_health.update(self.media_index.stats())
+            except Exception as exc:
+                media_health["error"] = exc.__class__.__name__
         return {
             "status": "ok",
             "version": __version__,
             "backend": self.backend.health(),
             "retrieval": self.backend.retrieval_health(),
+            "media_index": media_health,
             "memory_policy": {
                 "require_user_confirmation": self.config.memory.require_user_confirmation,
                 "require_evidence_for_claims": self.config.memory.require_evidence_for_claims,

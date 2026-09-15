@@ -3,7 +3,7 @@ server:
   host: 127.0.0.1
   port: 8787
   auth_token_env: RESEARCH_MEMORY_TOKEN
-  # agent: only recall/capture/verify/project-state tools (recommended for normal agents)
+  # agent: recall/capture/verify/project-state plus Research Media tools
   # admin: legacy evidence-first management tools only
   # full: both surfaces, intended for debugging/migration
   surface: agent
@@ -102,3 +102,14 @@ conversation_archive:
   # Enforce confirmation before writing to vault_root; forbids auto-creating empty vault roots.
   require_explicit_vault_confirmation: true
   copy_embedded_images: false
+
+media_index:
+  # No background scanner is started. Resources are indexed only when explicitly
+  # submitted, so enabling this does not consume model/GPU resources while idle.
+  enabled: true
+  index_path: ./data/research-media.sqlite
+  embedding_version: v1
+  max_image_bytes: 33554432
+  # Media reuses retrieval.embedding exactly. Image bytes are sent to the same
+  # endpoint/model as data: URIs in the existing `input` field. RMG does not
+  # probe or maintain a list of models that support image vectors.

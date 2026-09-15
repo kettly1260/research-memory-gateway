@@ -279,6 +279,48 @@ def test_embedding_client_tries_v1_path_when_root_embeddings_404(monkeypatch) ->
     ]
 
 
+def test_embedding_client_image_uses_same_endpoint_and_input_field(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"embedding": [0.25, 0.75]}]}
+
+    class FakeClient:
+        payloads: list[dict] = []
+        urls: list[str] = []
+
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            self.urls.append(url)
+            self.payloads.append(json)
+            return FakeResponse()
+
+    monkeypatch.setattr("research_memory_gateway.retrieval.httpx.Client", FakeClient)
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            enabled=True,
+            base_url="http://models.local/v1",
+            model="shared-multimodal-model",
+            endpoint_path="/embeddings",
+            max_retries=0,
+        )
+    )
+
+    vector = client.embed_image_bytes(b"\x89PNG-fake", mime_type="image/png")
+
+    assert vector == [0.25, 0.75]
+    assert FakeClient.urls == ["http://models.local/v1/embeddings"]
+    payload = FakeClient.payloads[0]
+    assert payload["model"] == "shared-multimodal-model"
+    assert payload["input"].startswith("data:image/png;base64,")
+
+
 def test_rerank_client_extracts_results_index_relevance_score() -> None:
     client = RerankClient(RerankConfig(enabled=True))
 

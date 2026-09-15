@@ -472,6 +472,13 @@ async def api_config_effective(request: Request) -> Response:
             "index_path": state.config.conversation_archive.index_path,
             "vault_root": state.config.conversation_archive.vault_root,
         },
+        "media_index": {
+            "enabled": state.config.media_index.enabled,
+            "index_path": state.config.media_index.index_path,
+            "embedding_version": state.config.media_index.embedding_version,
+            "max_image_bytes": state.config.media_index.max_image_bytes,
+            "shares_embedding_provider": True,
+        },
         "upload": {
             "enabled": state.config.upload.enabled,
             "mcp_tools_enabled": bool(

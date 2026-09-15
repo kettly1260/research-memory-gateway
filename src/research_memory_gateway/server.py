@@ -438,6 +438,7 @@ def _mount_uploads_if_enabled(app: Starlette, config: AppConfig, mcp: MCPServer)
 
 def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
     service = getattr(mcp, "_rmg_service", None)
+    config = getattr(mcp, "_rmg_config", None)
 
     async def _health_handler(request: Any) -> Response:
         from starlette.responses import JSONResponse
@@ -448,10 +449,20 @@ def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
             "tool_count": len(tools),
             "tools": sorted(tool.name for tool in tools),
         }
+        if config is None:
+            return JSONResponse(data)
         data["conversation_archive"] = {
             "enabled": bool(config.conversation_archive.enabled),
             "staging_dir": config.conversation_archive.staging_dir,
             "index_path": config.conversation_archive.index_path,
+        }
+        data["media_index"] = {
+            **(data.get("media_index", {}) if isinstance(data.get("media_index"), dict) else {}),
+            "enabled": bool(config.media_index.enabled),
+            "index_path": config.media_index.index_path,
+            "embedding_version": config.media_index.embedding_version,
+            "mcp_tools_enabled": bool(config.media_index.enabled),
+            "shares_embedding_provider": True,
         }
         data["upload"] = {
             "enabled": bool(config.upload.enabled),

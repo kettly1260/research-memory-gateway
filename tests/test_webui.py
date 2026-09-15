@@ -294,6 +294,8 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
     assert "value" not in effective["embedding"]["api_key"]
     assert effective["system"]["backend"]["sqlite_path"].endswith("memory.db")
     assert effective["system"]["conversation_archive"]["enabled"] is False
+    assert effective["system"]["media_index"]["enabled"] is True
+    assert effective["system"]["media_index"]["shares_embedding_provider"] is True
     assert effective["system"]["upload"]["configured_enabled"] is True
     assert effective["system"]["upload"]["enabled"] is True
     assert effective["system"]["upload"]["mcp_tools_enabled"] is False

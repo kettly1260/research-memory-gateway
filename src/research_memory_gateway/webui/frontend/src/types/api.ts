@@ -192,6 +192,13 @@ export interface EffectiveConfig {
       index_path: string
       vault_root: string | null
     }
+    media_index: {
+      enabled: boolean
+      index_path: string
+      embedding_version: string
+      max_image_bytes: number
+      shares_embedding_provider: boolean
+    }
     upload: {
       enabled: boolean
       mcp_tools_enabled: boolean

@@ -797,14 +797,16 @@ def test_get_project_state_enforces_standard_context_budget(tmp_path) -> None:
     assert state["context_budget"]["estimated_tokens"] <= 500
 
 
-def test_agent_surface_exposes_only_four_agent_tools(tmp_path) -> None:
+def test_agent_surface_exposes_default_tools_without_opening_media_index(tmp_path) -> None:
     config = AppConfig()
     config.backend.sqlite_path = str(tmp_path / "agent.db")
+    config.media_index.index_path = str(tmp_path / "media.db")
     config.server.surface = "agent"
 
     names = tool_names(build_mcp(config))
 
     assert names == set(AGENT_TOOL_NAMES)
+    assert not (tmp_path / "media.db").exists()
 
 
 def test_agent_tools_publish_mcp_annotations(tmp_path) -> None:
@@ -817,6 +819,10 @@ def test_agent_tools_publish_mcp_annotations(tmp_path) -> None:
     assert tools["recall_memory"].annotations.readOnlyHint is True
     assert tools["verify_memory"].annotations.readOnlyHint is True
     assert tools["get_project_state"].annotations.readOnlyHint is True
+    assert tools["media_status"].annotations.readOnlyHint is True
+    assert tools["media_search"].annotations.readOnlyHint is True
+    assert tools["media_index_image"].annotations.readOnlyHint is False
+    assert tools["media_index_image"].annotations.destructiveHint is False
     assert tools["capture_memory"].annotations.readOnlyHint is False
     assert tools["capture_memory"].annotations.destructiveHint is False
     assert tools["capture_memory"].inputSchema["properties"]["importance"]["enum"] == [
