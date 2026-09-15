@@ -154,9 +154,6 @@ def build_mcp(config: AppConfig, surface: str | None = None) -> MCPServer:
     backend = build_backend(config)
     service = ResearchMemoryService(config, backend)
     mcp = MCPServer(config.server.name)
-    mcp.settings.__dict__["host"] = config.server.host
-    mcp.settings.__dict__["port"] = config.server.port
-    mcp.settings.__dict__["transport_security"] = None
     mcp._rmg_service = service  # type: ignore[attr-defined]
     mcp._rmg_config = config    # type: ignore[attr-defined]
     selected_surface = surface or config.server.surface
@@ -454,7 +451,10 @@ def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
 
 def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only Streamable HTTP at /mcp."""
-    app = mcp.streamable_http_app()
+    # MCP SDK v2 otherwise defaults this app-level host to 127.0.0.1 and
+    # auto-enables a localhost-only Host allowlist, rejecting remote clients
+    # with 421 even when uvicorn itself is bound to 0.0.0.0.
+    app = mcp.streamable_http_app(host=config.server.host)
     _mount_uploads_if_enabled(app, config, mcp)
     _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
@@ -464,7 +464,7 @@ def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: A
 
 def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
-    app = mcp.sse_app()
+    app = mcp.sse_app(host=config.server.host)
     _mount_uploads_if_enabled(app, config, mcp)
     _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
@@ -480,8 +480,8 @@ def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfi
       - Legacy SSE clients (``GET /sse``, ``POST /messages/``) still work.
     """
     # Get the two sub-apps. Both share the same underlying mcp._mcp_server.
-    shttp_app = mcp.streamable_http_app()
-    sse_app = mcp.sse_app()
+    shttp_app = mcp.streamable_http_app(host=config.server.host)
+    sse_app = mcp.sse_app(host=config.server.host)
 
     # Extract the session_manager lifespan from the streamable HTTP app.
     shttp_lifespan = shttp_app.router.lifespan_context

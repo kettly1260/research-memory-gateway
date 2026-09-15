@@ -23,7 +23,12 @@ from research_memory_gateway.models import (
     ResearchMemory,
 )
 from research_memory_gateway.retrieval import EmbeddingClient, RerankClient
-from research_memory_gateway.server import BearerAuthMiddleware, build_mcp
+from research_memory_gateway.server import (
+    BearerAuthMiddleware,
+    _build_combined_app,
+    _build_streamable_http_app,
+    build_mcp,
+)
 from research_memory_gateway.service import ResearchMemoryService
 from research_memory_gateway.taxonomy import (
     ACTIONABLE_PLAN_STATUSES,
@@ -530,17 +535,75 @@ def test_bearer_auth_middleware_allows_loopback_when_master_token_unset() -> Non
     assert anyio.run(run, "192.168.1.10") == 401
 
 
-def test_mcp_uses_configured_remote_host_for_transport_security(tmp_path) -> None:
+def _streamable_security_settings(app: Starlette):
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/mcp")
+    return route.endpoint.session_manager.security_settings
+
+
+def test_streamable_http_uses_configured_remote_host_for_transport_security(tmp_path) -> None:
     config = AppConfig()
     config.server.host = "0.0.0.0"
     config.server.port = 8787
     config.backend.sqlite_path = str(tmp_path / "memory.db")
 
     mcp = build_mcp(config)
+    app = _build_streamable_http_app(mcp, auth_token="secret", config=config)
 
-    assert mcp.settings.host == "0.0.0.0"
-    assert mcp.settings.port == 8787
-    assert mcp.settings.transport_security is None
+    assert _streamable_security_settings(app) is None
+
+
+def test_streamable_http_accepts_codex_remote_host_header(tmp_path) -> None:
+    config = AppConfig()
+    config.server.host = "0.0.0.0"
+    config.backend.sqlite_path = str(tmp_path / "memory.db")
+
+    mcp = build_mcp(config)
+    app = _build_streamable_http_app(mcp, auth_token="secret", config=config)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "codex-host-regression", "version": "1"},
+        },
+    }
+    headers = {
+        "Host": "192.168.22.102:18787",
+        "Authorization": "Bearer secret",
+        "Accept": "application/json, text/event-stream",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/mcp", json=payload, headers=headers)
+
+    assert response.status_code == 200
+    assert "research-memory-gateway" in response.text
+
+
+def test_combined_http_uses_configured_remote_host_for_transport_security(tmp_path) -> None:
+    config = AppConfig()
+    config.server.host = "0.0.0.0"
+    config.backend.sqlite_path = str(tmp_path / "memory.db")
+
+    mcp = build_mcp(config)
+    app = _build_combined_app(mcp, auth_token="secret", config=config)
+
+    assert _streamable_security_settings(app) is None
+
+
+def test_streamable_http_keeps_loopback_dns_rebinding_protection(tmp_path) -> None:
+    config = AppConfig()
+    config.server.host = "127.0.0.1"
+    config.backend.sqlite_path = str(tmp_path / "memory.db")
+
+    mcp = build_mcp(config)
+    app = _build_streamable_http_app(mcp, auth_token="secret", config=config)
+    security = _streamable_security_settings(app)
+
+    assert security is not None
+    assert security.enable_dns_rebinding_protection is True
 
 
 def test_bearer_auth_middleware_preserves_streaming_asgi_messages() -> None:
