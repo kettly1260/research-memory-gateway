@@ -172,6 +172,35 @@ export interface EffectiveConfig {
     token: ConfigValue
     [key: string]: ConfigValue
   }
+  system: {
+    server: {
+      host: string
+      port: number
+      surface: string
+    }
+    backend: {
+      type: string
+      sqlite_path: string
+    }
+    webui: {
+      host: string
+      port: number
+    }
+    conversation_archive: {
+      enabled: boolean
+      staging_dir: string
+      index_path: string
+      vault_root: string | null
+    }
+    upload: {
+      enabled: boolean
+      mcp_tools_enabled: boolean
+      configured_enabled: boolean
+      base_dir: string
+      upload_path: string
+      max_size_bytes: number
+    }
+  }
 }
 
 // ─── Vector Coverage ───

@@ -133,9 +133,9 @@ def test_conversations_api_disabled(tmp_path: Path, monkeypatch) -> None:
     client, app, staging_dir, note_uv, _, _ = setup_conversation_env(tmp_path, monkeypatch, archive_enabled=False)
     login_webui(client)
 
-    # Status returns 404 with disabled indicator and doesn't 500
+    # Status is an inspectable state endpoint even when the feature is disabled.
     res_status = client.get("/admin/api/conversations/status")
-    assert res_status.status_code == 404
+    assert res_status.status_code == 200
     data_status = res_status.json()
     assert data_status["enabled"] is False
     assert data_status["error"] == "conversation_archive_disabled"

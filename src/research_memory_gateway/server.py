@@ -443,6 +443,23 @@ def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
         from starlette.responses import JSONResponse
 
         data = service.health() if service is not None else {"status": "ok", "version": __version__}
+        tools = await mcp.list_tools()
+        data["mcp"] = {
+            "tool_count": len(tools),
+            "tools": sorted(tool.name for tool in tools),
+        }
+        data["conversation_archive"] = {
+            "enabled": bool(config.conversation_archive.enabled),
+            "staging_dir": config.conversation_archive.staging_dir,
+            "index_path": config.conversation_archive.index_path,
+        }
+        data["upload"] = {
+            "enabled": bool(config.upload.enabled),
+            "mcp_tools_enabled": bool(
+                config.conversation_archive.enabled and config.upload.enabled
+            ),
+            "path": config.upload.upload_path,
+        }
         return JSONResponse(data)
 
     app.add_route("/health", _health_handler, methods=["GET"])
@@ -551,16 +568,23 @@ def main() -> None:
         config.server.host,
         config.server.port,
     )
-    _run_http_apps(config, app)
+    _run_http_apps(config, app, service=getattr(mcp, "_rmg_service", None))
 
 
-def _run_http_apps(config: AppConfig, mcp_app: Any) -> None:
+def _run_http_apps(
+    config: AppConfig,
+    mcp_app: Any,
+    service: ResearchMemoryService | None = None,
+) -> None:
     if not config.webui.enabled:
         uvicorn.run(mcp_app, host=config.server.host, port=config.server.port)
         return
 
     async def runner() -> None:
-        webui_app = build_webui_app(config)
+        # MCP and WebUI are two network surfaces of the same process. Share the
+        # same service/backend so runtime config, caches, API keys and backfill
+        # state cannot silently diverge between them.
+        webui_app = build_webui_app(config, service)
         mcp_server = uvicorn.Server(
             uvicorn.Config(mcp_app, host=config.server.host, port=config.server.port, log_level="info")
         )

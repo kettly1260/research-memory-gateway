@@ -283,23 +283,33 @@ class WebConfigStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
-    def load(self) -> WebRuntimeConfig:
+    def load_raw(self) -> dict[str, Any]:
         if not self.path.exists():
-            return WebRuntimeConfig()
+            return {}
         with self.path.open("r", encoding="utf-8") as handle:
             raw = yaml.safe_load(handle) or {}
-        return WebRuntimeConfig.model_validate(raw)
+        if not isinstance(raw, dict):
+            raise ValueError("web_config must be a mapping")
+        # Validate the sparse overlay without materializing model defaults into
+        # the persisted file. RuntimeConfigResolver needs to distinguish
+        # "not configured in WebUI" from an explicit false/default value.
+        validated = WebRuntimeConfig.model_validate(raw)
+        return _sparse_projection(validated.model_dump(mode="json"), raw)
+
+    def load(self) -> WebRuntimeConfig:
+        return WebRuntimeConfig.model_validate(self.load_raw())
 
     def save(self, config: WebRuntimeConfig) -> None:
         payload = config.model_dump(mode="json", exclude_none=False)
         atomic_write_text(self.path, yaml.safe_dump(payload, sort_keys=False, allow_unicode=True))
 
     def patch(self, updates: dict[str, Any]) -> WebRuntimeConfig:
-        data = self.load().model_dump(mode="json")
+        data = self.load_raw()
         updates = _expand_dotted_keys(updates)
         _deep_update(data, updates)
         updated = WebRuntimeConfig.model_validate(data)
-        self.save(updated)
+        normalized = _sparse_projection(updated.model_dump(mode="json"), data)
+        atomic_write_text(self.path, yaml.safe_dump(normalized, sort_keys=False, allow_unicode=True))
         return updated
 
 
@@ -428,15 +438,43 @@ class RuntimeConfigResolver:
         self.secret_store = secret_store or SecretStore(app_config.webui.secret_store_path)
 
     def effective(self) -> dict[str, Any]:
-        web = self.web_config_store.load()
+        web_raw = self.web_config_store.load_raw()
+        web = WebRuntimeConfig.model_validate(web_raw)
         secrets_data = self.secret_store.load()
         result = {
-            "retrieval": {"mode": self._field(os.getenv("RETRIEVAL_MODE"), web.retrieval.get("mode"), self.app_config.retrieval.mode, "keyword")},
-            "embedding": self._provider_effective("embedding", web.embedding, self.app_config.retrieval.embedding, secrets_data),
-            "rerank": self._provider_effective("rerank", web.rerank, self.app_config.retrieval.rerank, secrets_data),
+            "retrieval": {
+                "mode": self._field(
+                    os.getenv("RETRIEVAL_MODE"),
+                    _nested_value(web_raw, "retrieval", "mode"),
+                    self.app_config.retrieval.mode,
+                    "keyword",
+                )
+            },
+            "embedding": self._provider_effective(
+                "embedding",
+                self.app_config.retrieval.embedding,
+                secrets_data,
+                web_raw.get("embedding") if isinstance(web_raw.get("embedding"), dict) else {},
+            ),
+            "rerank": self._provider_effective(
+                "rerank",
+                self.app_config.retrieval.rerank,
+                secrets_data,
+                web_raw.get("rerank") if isinstance(web_raw.get("rerank"), dict) else {},
+            ),
             "nocturne": {
-                "transport": self._field(os.getenv("NOCTURNE_TRANSPORT"), web.nocturne.transport, None, "unknown"),
-                "url": self._field(os.getenv("NOCTURNE_URL"), web.nocturne.url, None, None),
+                "transport": self._field(
+                    os.getenv("NOCTURNE_TRANSPORT"),
+                    _nested_value(web_raw, "nocturne", "transport"),
+                    None,
+                    "unknown",
+                ),
+                "url": self._field(
+                    os.getenv("NOCTURNE_URL"),
+                    _nested_value(web_raw, "nocturne", "url"),
+                    None,
+                    None,
+                ),
                 "token": self._secret_field(os.getenv("NOCTURNE_TOKEN"), secrets_data.get("nocturne.token")),
             },
             "backfill": web.backfill.model_dump(mode="json"),
@@ -481,15 +519,21 @@ class RuntimeConfigResolver:
             env[f"{provider.upper()}_API_KEY"] = str(secret)
         return env
 
-    def _provider_effective(self, name: str, web: WebRuntimeProviderConfig, base: EmbeddingConfig | RerankConfig, secrets_data: dict[str, str]) -> dict[str, Any]:
+    def _provider_effective(
+        self,
+        name: str,
+        base: EmbeddingConfig | RerankConfig,
+        secrets_data: dict[str, str],
+        web_raw: dict[str, Any],
+    ) -> dict[str, Any]:
         prefix = name.upper()
         return {
-            "enabled": self._field(os.getenv(f"{prefix}_ENABLED"), web.enabled, base.enabled, False, value_type="bool"),
-            "base_url": self._field(os.getenv(base.base_url_env), web.base_url, None, None),
-            "model": self._field(os.getenv(base.model_env), web.model, None, None),
-            "endpoint_path": self._field(os.getenv(f"{prefix}_ENDPOINT_PATH"), web.endpoint_path, base.endpoint_path, "/embeddings" if name == "embedding" else "/rerank"),
-            "timeout_seconds": self._field(os.getenv(f"{prefix}_TIMEOUT_SECONDS"), web.timeout_seconds, base.timeout_seconds, 30.0, value_type="float"),
-            "max_retries": self._field(os.getenv(f"{prefix}_MAX_RETRIES"), web.max_retries, base.max_retries, 1, value_type="int"),
+            "enabled": self._field(os.getenv(f"{prefix}_ENABLED"), web_raw.get("enabled"), base.enabled, False, value_type="bool"),
+            "base_url": self._field(os.getenv(base.base_url_env), web_raw.get("base_url"), base.base_url, None),
+            "model": self._field(os.getenv(base.model_env), web_raw.get("model"), base.model, None),
+            "endpoint_path": self._field(os.getenv(f"{prefix}_ENDPOINT_PATH"), web_raw.get("endpoint_path"), base.endpoint_path, "/embeddings" if name == "embedding" else "/rerank"),
+            "timeout_seconds": self._field(os.getenv(f"{prefix}_TIMEOUT_SECONDS"), web_raw.get("timeout_seconds"), base.timeout_seconds, 30.0, value_type="float"),
+            "max_retries": self._field(os.getenv(f"{prefix}_MAX_RETRIES"), web_raw.get("max_retries"), base.max_retries, 1, value_type="int"),
             "api_key": self._secret_field(os.getenv(base.api_key_env), secrets_data.get(f"{name}.api_key")),
         }
 
@@ -540,6 +584,24 @@ def _deep_update(target: dict[str, Any], updates: dict[str, Any]) -> None:
             _deep_update(target[key], value)
         else:
             target[key] = deepcopy(value)
+
+
+def _nested_value(data: dict[str, Any], section: str, field: str) -> Any:
+    value = data.get(section)
+    if not isinstance(value, dict):
+        return None
+    return value.get(field)
+
+
+def _sparse_projection(validated: Any, raw: Any) -> Any:
+    """Project validated/coerced values onto only keys explicitly present in raw."""
+    if isinstance(validated, dict) and isinstance(raw, dict):
+        return {
+            key: _sparse_projection(validated[key], raw_value)
+            for key, raw_value in raw.items()
+            if key in validated
+        }
+    return deepcopy(validated)
 
 
 def _expand_dotted_keys(updates: dict[str, Any]) -> dict[str, Any]:

@@ -596,6 +596,7 @@ class SQLiteMemoryBackend(MemoryBackend):
         return reranked[:limit]
 
     def retrieval_health(self) -> dict[str, Any]:
+        self._refresh_retrieval_clients()
         vector_count = 0
         dimension_counts: dict[int, int] = {}
         invalid_vectors = 0

@@ -85,8 +85,42 @@ def test_runtime_config_resolver_precedence_and_sources(tmp_path, monkeypatch) -
     assert effective["embedding"]["api_key"]["source"] == "secret_store"
 
 
-def make_webui_client(tmp_path, monkeypatch):
-    monkeypatch.setenv("WEBUI_SECRET_KEY", "dev-key")
+def test_runtime_config_resolver_uses_base_config_when_web_overlay_is_absent(tmp_path, monkeypatch) -> None:
+    config = AppConfig()
+    config.retrieval.mode = "hybrid"
+    config.retrieval.embedding.enabled = True
+    config.retrieval.embedding.base_url = "http://config.local/v1"
+    config.retrieval.embedding.model = "config-model"
+    web_store = WebConfigStore(tmp_path / "missing-web-config.yaml")
+    resolver = RuntimeConfigResolver(
+        config,
+        web_store,
+        SecretStore(tmp_path / "secrets.json.enc", secret_key="dev-key"),
+    )
+
+    effective = resolver.effective()
+
+    assert effective["retrieval"]["mode"] == {"value": "hybrid", "source": "config"}
+    assert effective["embedding"]["enabled"] == {"value": True, "source": "config"}
+    assert effective["embedding"]["base_url"] == {"value": "http://config.local/v1", "source": "config"}
+    assert effective["embedding"]["model"] == {"value": "config-model", "source": "config"}
+
+
+def test_web_config_patch_persists_only_explicit_overlay_fields(tmp_path) -> None:
+    store = WebConfigStore(tmp_path / "web_config.yaml")
+
+    updated = store.patch({"retrieval.mode": "hybrid"})
+    raw = store.load_raw()
+
+    assert updated.retrieval["mode"] == "hybrid"
+    assert raw == {"retrieval": {"mode": "hybrid"}}
+
+
+def make_webui_client(tmp_path, monkeypatch, *, secret_key: str | None = "dev-key"):
+    if secret_key is None:
+        monkeypatch.delenv("WEBUI_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("WEBUI_SECRET_KEY", secret_key)
     config = AppConfig()
     config.backend.sqlite_path = str(tmp_path / "memory.db")
     config.memory.require_user_confirmation = False
@@ -258,6 +292,39 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
     assert patched.status_code == 200
     assert secret.json()["embedding.api_key"]["masked"] != "plain-secret"
     assert "value" not in effective["embedding"]["api_key"]
+    assert effective["system"]["backend"]["sqlite_path"].endswith("memory.db")
+    assert effective["system"]["conversation_archive"]["enabled"] is False
+    assert effective["system"]["upload"]["configured_enabled"] is True
+    assert effective["system"]["upload"]["enabled"] is True
+    assert effective["system"]["upload"]["mcp_tools_enabled"] is False
+
+
+def test_webui_secret_api_returns_409_when_secret_store_is_not_configured(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch, secret_key=None)
+    token = login_webui(client)
+
+    response = client.patch(
+        "/admin/api/config/secrets",
+        headers={"x-csrf-token": token},
+        json={"embedding.api_key": "not-written"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == "secret_store_not_configured"
+
+
+def test_webui_config_invalid_patch_returns_400_without_persisting(tmp_path, monkeypatch) -> None:
+    client, app = make_webui_client(tmp_path, monkeypatch)
+    token = login_webui(client)
+
+    response = client.patch(
+        "/admin/api/config/web-config",
+        headers={"x-csrf-token": token},
+        json={"retrieval.mode": "invalid-mode"},
+    )
+
+    assert response.status_code == 400
+    assert not app.state.webui.web_config_store.path.exists()
 
 
 def test_webui_config_accepts_dotted_provider_fields(tmp_path, monkeypatch) -> None:

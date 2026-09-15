@@ -433,20 +433,71 @@ async def api_diff(request: Request) -> Response:
 
 
 async def api_config_effective(request: Request) -> Response:
-    return JSONResponse(_redact_effective(request.app.state.webui.resolver.effective()))
+    state = request.app.state.webui
+    effective = _redact_effective(state.resolver.effective())
+    effective["system"] = {
+        "server": {
+            "host": state.config.server.host,
+            "port": state.config.server.port,
+            "surface": state.config.server.surface,
+        },
+        "backend": {
+            "type": state.config.backend.type,
+            "sqlite_path": state.config.backend.sqlite_path,
+        },
+        "webui": {
+            "host": state.config.webui.host,
+            "port": state.config.webui.port,
+        },
+        "conversation_archive": {
+            "enabled": state.config.conversation_archive.enabled,
+            "staging_dir": state.config.conversation_archive.staging_dir,
+            "index_path": state.config.conversation_archive.index_path,
+            "vault_root": state.config.conversation_archive.vault_root,
+        },
+        "upload": {
+            "enabled": state.config.upload.enabled,
+            "mcp_tools_enabled": bool(
+                state.config.conversation_archive.enabled and state.config.upload.enabled
+            ),
+            "configured_enabled": state.config.upload.enabled,
+            "base_dir": state.config.upload.base_dir,
+            "upload_path": state.config.upload.upload_path,
+            "max_size_bytes": state.config.upload.max_size_bytes,
+        },
+    }
+    return JSONResponse(effective)
 
 
 async def api_config_web_patch(request: Request) -> Response:
-    updated = request.app.state.webui.web_config_store.patch(await request.json())
+    state = request.app.state.webui
+    payload = await request.json()
+    try:
+        updated = state.web_config_store.patch(payload)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    state.service.append_audit_event(
+        "config.web_runtime_updated",
+        metadata={"fields": sorted(payload)},
+    )
     return JSONResponse(updated.model_dump(mode="json"))
 
 
 async def api_config_secrets_patch(request: Request) -> Response:
     state = request.app.state.webui
     payload = await request.json()
+    if not state.secret_store.writable:
+        return JSONResponse(
+            {
+                "error": "secret_store_not_configured",
+                "message": "WEBUI_SECRET_KEY is required before WebUI secrets can be saved",
+            },
+            status_code=409,
+        )
     for key, value in payload.items():
         if key not in SAFE_SECRET_KEYS:
             return JSONResponse({"error": "unsupported_secret"}, status_code=400)
+    for key, value in payload.items():
         state.secret_store.save_secret(key, str(value))
     return JSONResponse({key: state.secret_store.masked(key) for key in payload})
 
@@ -456,6 +507,14 @@ async def api_config_secret_delete(request: Request) -> Response:
     key = f"{request.path_params['provider']}.{request.path_params['field']}"
     if key not in SAFE_SECRET_KEYS:
         return JSONResponse({"error": "unsupported_secret"}, status_code=400)
+    if not state.secret_store.writable:
+        return JSONResponse(
+            {
+                "error": "secret_store_not_configured",
+                "message": "WEBUI_SECRET_KEY is required before WebUI secrets can be updated",
+            },
+            status_code=409,
+        )
     return JSONResponse({"deleted": state.secret_store.delete_secret(key)})
 
 
@@ -626,7 +685,7 @@ async def api_conversations_status(request: Request) -> Response:
                 "embedding_version": None,
                 "embedding_dimension": None,
             },
-            status_code=404,
+            status_code=200,
         )
     try:
         retrieval = state.service.conversation_retrieval

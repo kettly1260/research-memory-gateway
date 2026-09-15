@@ -76,6 +76,10 @@ class ResearchMemoryService:
 
     @property
     def conversation_retrieval(self):
+        refresh = getattr(self.backend, "_refresh_retrieval_clients", None)
+        if callable(refresh):
+            refresh()
+        emb_client = getattr(self.backend, "embedding_client", None)
         if self._conversation_retrieval is None:
             from .conversations.index import ConversationIndexDatabase
             from .conversations.retrieval import ConversationRetrievalService
@@ -88,13 +92,18 @@ class ResearchMemoryService:
                     allowed_roots.append(vault_root)
                 except Exception:
                     pass
-            emb_client = getattr(self.backend, "embedding_client", None)
             index_db = ConversationIndexDatabase(index_path, embedding_client=emb_client)
             self._conversation_retrieval = ConversationRetrievalService(
                 index_db=index_db,
                 allowed_roots=allowed_roots,
                 embedding_client=emb_client,
             )
+        else:
+            # Runtime retrieval settings are hot-reloadable through WebUI.
+            # Keep the cached conversation retrieval layer on the same active
+            # embedding client as the main memory backend.
+            self._conversation_retrieval.embedding_client = emb_client
+            self._conversation_retrieval.index_db.embedding_client = emb_client
         return self._conversation_retrieval
 
     def propose_save(

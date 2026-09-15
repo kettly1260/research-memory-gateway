@@ -24,7 +24,10 @@ import {
   ChevronDown,
   ChevronUp,
   Database,
-  AlertTriangle
+  AlertTriangle,
+  Server,
+  MessagesSquare,
+  UploadCloud
 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -71,7 +74,7 @@ function ProviderForm({ provider, effective }: {
   const get = (field: string) => form[`${provider}.${field}`] ?? String(effective[field]?.value ?? '')
   const set = (field: string, value: string) => setForm((f) => ({ ...f, [`${provider}.${field}`]: value }))
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const configFields: Record<string, unknown> = {}
     const secretFields: Record<string, string> = {}
 
@@ -90,17 +93,18 @@ function ProviderForm({ provider, effective }: {
       }
     })
 
-    if (Object.keys(configFields).length > 0) {
-      patchWebConfig.mutate(configFields, {
-        onSuccess: () => toast.success(t('common.success')),
-        onError: (err) => toast.error(String(err)),
-      })
-    }
-    if (Object.keys(secretFields).length > 0) {
-      patchSecrets.mutate(secretFields, {
-        onSuccess: () => toast.success(t('config.secrets_saved')),
-        onError: (err) => toast.error(String(err)),
-      })
+    try {
+      // Save secrets first. If the secret store is unavailable, do not leave a
+      // provider enabled/configured with a missing credential.
+      if (Object.keys(secretFields).length > 0) {
+        await patchSecrets.mutateAsync(secretFields)
+      }
+      if (Object.keys(configFields).length > 0) {
+        await patchWebConfig.mutateAsync(configFields)
+      }
+      toast.success(t('common.success'))
+    } catch (err) {
+      toast.error(String(err))
     }
   }
 
@@ -674,6 +678,8 @@ export function Config() {
   const patchWebConfig = usePatchWebConfig()
   const testConnection = useTestConnection()
   const [retrievalMode, setRetrievalMode] = useState<string | null>(null)
+  const [nocturneTransport, setNocturneTransport] = useState<string | null>(null)
+  const [nocturneUrl, setNocturneUrl] = useState<string | null>(null)
 
   if (isLoading || !config) {
     return (
@@ -685,18 +691,110 @@ export function Config() {
   }
 
   const effectiveMode = retrievalMode ?? String(config.retrieval.mode.value)
+  const effectiveNocturneTransport = nocturneTransport ?? String(config.nocturne.transport.value)
+  const effectiveNocturneUrl = nocturneUrl ?? String(config.nocturne.url.value || '')
 
   return (
     <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6 animate-fade-in">
       <h1 className="text-2xl font-bold tracking-tight">{t('config.title')}</h1>
 
-      <Tabs defaultValue="retrieval">
+      <Tabs defaultValue="system">
         <TabsList>
+          <TabsTrigger value="system">{t('config.tab_system')}</TabsTrigger>
           <TabsTrigger value="retrieval">{t('config.tab_retrieval')}</TabsTrigger>
           <TabsTrigger value="embedding">{t('config.tab_embedding')}</TabsTrigger>
           <TabsTrigger value="rerank">{t('config.tab_rerank')}</TabsTrigger>
           <TabsTrigger value="nocturne">{t('config.tab_nocturne')}</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="system" className="mt-4 space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Server className="w-4 h-4 text-primary" />
+                {t('config.tab_system')}
+              </CardTitle>
+              <CardDescription>{t('config.system_desc')}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <div className="space-y-1">
+                  <Label>{t('config.mcp_surface')}</Label>
+                  <div className="text-sm font-mono break-all">{config.system.server.surface}</div>
+                </div>
+                <div className="space-y-1">
+                  <Label>{t('config.mcp_bind')}</Label>
+                  <div className="text-sm font-mono break-all">{config.system.server.host}:{config.system.server.port}</div>
+                </div>
+                <div className="space-y-1">
+                  <Label>{t('config.webui_bind')}</Label>
+                  <div className="text-sm font-mono break-all">{config.system.webui.host}:{config.system.webui.port}</div>
+                </div>
+                <div className="space-y-1">
+                  <Label>{t('config.backend_db')}</Label>
+                  <div className="text-sm font-mono break-all">{config.system.backend.sqlite_path}</div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 font-medium">
+                    <MessagesSquare className="w-4 h-4 text-primary" />
+                    {t('config.conversation_archive')}
+                  </div>
+                  <Badge variant={config.system.conversation_archive.enabled ? 'default' : 'secondary'}>
+                    {config.system.conversation_archive.enabled ? t('config.enabled') : t('config.disabled')}
+                  </Badge>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>{t('config.conversation_staging')}</Label>
+                    <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.conversation_archive.staging_dir}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{t('config.conversation_index')}</Label>
+                    <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.conversation_archive.index_path}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 font-medium">
+                    <UploadCloud className="w-4 h-4 text-primary" />
+                    {t('config.upload_service')}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={config.system.upload.enabled ? 'default' : 'secondary'}>
+                      {t('config.upload_http')}: {config.system.upload.enabled ? t('config.enabled') : t('config.disabled')}
+                    </Badge>
+                    <Badge variant={config.system.upload.mcp_tools_enabled ? 'default' : 'secondary'}>
+                      {t('config.upload_mcp_tools')}: {config.system.upload.mcp_tools_enabled ? t('config.enabled') : t('config.disabled')}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label>{t('config.upload_base_dir')}</Label>
+                    <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.upload.base_dir}</div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label>{t('config.upload_path')}</Label>
+                    <div className="text-xs font-mono break-all rounded bg-muted px-2 py-1.5">{config.system.upload.upload_path}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm text-muted-foreground">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                <div>
+                  <div className="font-medium text-foreground">{t('config.restart_required')}</div>
+                  <div className="text-xs mt-1">{t('config.startup_readonly_desc')}</div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         <TabsContent value="retrieval" className="mt-4 space-y-6">
           <Card>
@@ -718,8 +816,9 @@ export function Config() {
               </div>
               <Button
                 onClick={() => {
-                  patchWebConfig.mutate({ 'retrieval.mode': retrievalMode }, {
+                  patchWebConfig.mutate({ 'retrieval.mode': effectiveMode }, {
                     onSuccess: () => toast.success(t('common.success')),
+                    onError: (err) => toast.error(String(err)),
                   })
                 }}
                 disabled={patchWebConfig.isPending}
@@ -765,7 +864,7 @@ export function Config() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                   <Label>{t('config.transport')}</Label>
-                  <Select defaultValue={String(config.nocturne.transport.value)}>
+                  <Select value={effectiveNocturneTransport} onValueChange={(v) => { if (v !== null) setNocturneTransport(v) }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="unknown">{t('config.unknown')}</SelectItem>
@@ -778,10 +877,21 @@ export function Config() {
                 </div>
                 <div className="space-y-2">
                   <Label>URL</Label>
-                  <Input defaultValue={String(config.nocturne.url.value || '')} />
+                  <Input value={effectiveNocturneUrl} onChange={(e) => setNocturneUrl(e.target.value)} />
                 </div>
               </div>
               <div className="flex gap-2">
+                <Button onClick={() => {
+                  patchWebConfig.mutate({
+                    'nocturne.transport': effectiveNocturneTransport,
+                    'nocturne.url': effectiveNocturneUrl || null,
+                  }, {
+                    onSuccess: () => toast.success(t('common.success')),
+                    onError: (err) => toast.error(String(err)),
+                  })
+                }} disabled={patchWebConfig.isPending}>
+                  {t('config.save_nocturne')}
+                </Button>
                 <Button onClick={() => {
                   testConnection.mutate('nocturne')
                 }} disabled={testConnection.isPending}>
