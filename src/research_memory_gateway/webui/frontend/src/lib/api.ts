@@ -187,6 +187,8 @@ import type {
   ProposalsListResponse,
   SaveProposal,
   ConversationStatusResponse,
+  ConversationVectorizationDryRunResponse,
+  ConversationVectorizationJob,
   ConversationSearchResponse,
   ConversationRecallResponse,
   ConversationReadResponse,
@@ -422,6 +424,26 @@ export const api = {
   conversations: {
     status() {
       return request<ConversationStatusResponse>('/conversations/status')
+    },
+    vectorizationDryRun(params: { force?: boolean; limit?: number | 'all' } = {}) {
+      return request<ConversationVectorizationDryRunResponse>('/conversations/vectorization/dry-run', {
+        method: 'POST',
+        body: params,
+      })
+    },
+    vectorizationStart(params: { force?: boolean; limit?: number | 'all'; job_timeout_seconds?: number } = {}) {
+      return request<ConversationVectorizationJob>('/conversations/vectorization/start', {
+        method: 'POST',
+        body: params,
+      })
+    },
+    vectorizationJob(jobId: string) {
+      return request<ConversationVectorizationJob>(`/conversations/vectorization/jobs/${jobId}`)
+    },
+    vectorizationCancel(jobId: string) {
+      return request<ConversationVectorizationJob>(`/conversations/vectorization/jobs/${jobId}/cancel`, {
+        method: 'POST',
+      })
     },
     search(params: {
       query: string

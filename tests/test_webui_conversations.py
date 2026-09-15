@@ -4,6 +4,7 @@ import hashlib
 import math
 from pathlib import Path
 from unittest.mock import MagicMock
+import anyio
 import pytest
 from starlette.testclient import TestClient
 
@@ -15,6 +16,7 @@ from research_memory_gateway.conversations.index import ConversationIndexDatabas
 from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.service import ResearchMemoryService
 from research_memory_gateway.webui.app import build_webui_app
+from research_memory_gateway.webui.runtime import ConversationVectorizationJob
 from test_webui import login_webui
 
 NOTE_UV = """---
@@ -189,6 +191,97 @@ def test_conversations_api_status_embedding_disabled(tmp_path: Path, monkeypatch
     assert data["embedding_model"] is None
     assert data["embedding_version"] is None
     assert data["embedding_dimension"] is None
+
+
+def test_conversation_vectorization_detects_active_model_switch(tmp_path: Path, monkeypatch) -> None:
+    client, _app, _, _, _, mock_emb = setup_conversation_env(
+        tmp_path,
+        monkeypatch,
+        archive_enabled=True,
+        embedding_enabled=True,
+    )
+    token = login_webui(client)
+
+    # Existing index vectors were generated for bge-m3. Switching the active
+    # model must surface the whole archive as vectorization work.
+    mock_emb.model = "qwen3-embedding-0.6b-int4"
+
+    status = client.get("/admin/api/conversations/status")
+    assert status.status_code == 200
+    status_data = status.json()
+    assert status_data["embedding_model"] == "qwen3-embedding-0.6b-int4"
+    assert status_data["sections_with_embedding"] == 0
+    assert status_data["sections_without_embedding"] == status_data["sections"]
+
+    dry_run = client.post(
+        "/admin/api/conversations/vectorization/dry-run",
+        headers={"x-csrf-token": token},
+        json={},
+    )
+    assert dry_run.status_code == 200
+    dry_data = dry_run.json()
+    assert dry_data["documents"] == 2
+    assert dry_data["sections"] == status_data["sections"]
+    assert dry_data["embedding_model"] == "qwen3-embedding-0.6b-int4"
+
+    started = client.post(
+        "/admin/api/conversations/vectorization/start",
+        headers={"x-csrf-token": token},
+        json={"job_timeout_seconds": 600},
+    )
+    assert started.status_code == 202
+    job = started.json()
+    assert job["job_id"].startswith("cv_")
+    assert job["total"] == 2
+    assert job["total_sections"] == status_data["sections"]
+
+
+def test_conversation_vectorization_manager_completes_model_switch(tmp_path: Path, monkeypatch) -> None:
+    client, app, _, _, _, mock_emb = setup_conversation_env(
+        tmp_path,
+        monkeypatch,
+        archive_enabled=True,
+        embedding_enabled=True,
+    )
+    login_webui(client)
+    mock_emb.model = "qwen3-embedding-0.6b-int4"
+
+    manager = app.state.webui.conversation_vectors
+    index_db = app.state.webui.service.conversation_retrieval.index_db
+    candidates = index_db.embedding_backfill_candidates()
+    job = ConversationVectorizationJob(
+        job_id="cv_test",
+        total=len(candidates),
+        total_sections=sum(int(item["missing_sections"]) for item in candidates),
+    )
+
+    anyio.run(manager._run, job, candidates)
+
+    assert job.status == "completed"
+    assert job.failed == 0
+    assert job.embedded_sections == job.total_sections
+    completed_status = client.get("/admin/api/conversations/status").json()
+    assert completed_status["sections_with_embedding"] == completed_status["sections"]
+    assert completed_status["vector_coverage"] == 1.0
+
+
+def test_conversation_vectorization_disabled_archive_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    client, _app, _, _, _, _ = setup_conversation_env(
+        tmp_path,
+        monkeypatch,
+        archive_enabled=False,
+        embedding_enabled=True,
+    )
+    token = login_webui(client)
+
+    response = client.post(
+        "/admin/api/conversations/vectorization/start",
+        headers={"x-csrf-token": token},
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "conversation_archive_disabled"
 
 
 def test_conversations_api_search_and_filters(tmp_path: Path, monkeypatch) -> None:

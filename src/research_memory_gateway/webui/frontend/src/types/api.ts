@@ -314,6 +314,33 @@ export interface ConversationStatusResponse {
   embedding_dimension?: number | null
   source_system_distribution?: Record<string, number>
   thread_source_distribution?: Record<string, number>
+  vectorization_job?: ConversationVectorizationJob | null
+}
+
+export interface ConversationVectorizationDryRunResponse {
+  documents: number
+  sections: number
+  embedding_model?: string | null
+  embedding_version?: string | null
+}
+
+export interface ConversationVectorizationJob {
+  job_id: string
+  status: 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed'
+  total: number
+  completed: number
+  failed: number
+  skipped: number
+  total_sections: number
+  embedded_sections: number
+  cache_reused_sections: number
+  failed_sections: number
+  current_file?: string | null
+  started_at: string
+  updated_at: string
+  last_error?: string | null
+  cancel_requested: boolean
+  job_timeout_seconds: number
 }
 
 export interface ConversationSourceAnchor {

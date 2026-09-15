@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Generator, Sequence
 
 from research_memory_gateway.retrieval import EmbeddingClient, cosine_similarity
-from .chunking import ConversationChunk, HeadingChunker
+from .chunking import ConversationChunk, HeadingChunker, compute_embedding_identity
 
 
 @dataclass
@@ -905,6 +905,62 @@ class ConversationIndexDatabase:
             }
             for row in rows
         ]
+
+    def embedding_backfill_candidates(
+        self,
+        *,
+        force: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return indexed conversation files that need vectors for the active model.
+
+        The stored section identity may have been generated for a previous model.
+        Recompute the expected identity from the stored normalized section content so
+        model switches (for example BGE -> Qwen) are detected without rebuilding the
+        whole archive just to discover work.
+        """
+        embedding_client = self.embedding_client
+        if not embedding_client or not embedding_client.enabled or not embedding_client.model:
+            return []
+
+        model = embedding_client.model
+        version = self.embedding_version
+        with self._connect() as conn:
+            cached = {
+                str(row["embedding_identity"])
+                for row in conn.execute(
+                    """
+                    SELECT embedding_identity
+                    FROM conversation_embeddings
+                    WHERE model = ? AND version = ?
+                    """,
+                    (model, version),
+                ).fetchall()
+            }
+            rows = conn.execute(
+                """
+                SELECT vault_path, content, COALESCE(embedding_identity, '') AS embedding_identity
+                FROM conversation_sections
+                ORDER BY vault_path, chunk_index
+                """
+            ).fetchall()
+
+        by_path: dict[str, int] = {}
+        for row in rows:
+            expected_identity = compute_embedding_identity(str(row["content"]), model, version)
+            needs_embedding = expected_identity not in cached
+            needs_activation = str(row["embedding_identity"] or "") != expected_identity
+            if force or needs_embedding or needs_activation:
+                path = str(row["vault_path"])
+                by_path[path] = by_path.get(path, 0) + 1
+
+        candidates = [
+            {"vault_path": path, "missing_sections": missing_sections}
+            for path, missing_sections in by_path.items()
+        ]
+        if limit is not None:
+            candidates = candidates[: max(0, int(limit))]
+        return candidates
 
     def rebuild_from_markdown(self, markdown_paths: Sequence[str | Path]) -> int:
         with self._connect() as conn:

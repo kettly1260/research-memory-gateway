@@ -27,6 +27,7 @@ from ..service import ResearchMemoryService
 from .auth_routes import SessionManager, security_routes
 from .runtime import (
     BackfillManager,
+    ConversationVectorizationManager,
     ImportConfirmationRequired,
     ImportValidationError,
     UnsupportedImportPolicy,
@@ -55,7 +56,18 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         service = ResearchMemoryService(config, backend)
     sessions = SessionManager(config)
     backfills = BackfillManager(service)
-    state = WebState(config, service, auth_store, secret_store, web_config_store, resolver, sessions, backfills)
+    conversation_vectors = ConversationVectorizationManager(service)
+    state = WebState(
+        config,
+        service,
+        auth_store,
+        secret_store,
+        web_config_store,
+        resolver,
+        sessions,
+        backfills,
+        conversation_vectors,
+    )
 
     routes = [
         Route("/admin/api/memories", api_memories, methods=["GET", "POST"]),
@@ -90,6 +102,10 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/audit", api_audit_events, methods=["GET"]),
         Route("/admin/api/stats", api_stats, methods=["GET"]),
         Route("/admin/api/conversations/status", api_conversations_status, methods=["GET"]),
+        Route("/admin/api/conversations/vectorization/dry-run", api_conversations_vectorization_dry_run, methods=["POST"]),
+        Route("/admin/api/conversations/vectorization/start", api_conversations_vectorization_start, methods=["POST"]),
+        Route("/admin/api/conversations/vectorization/jobs/{job_id:str}", api_conversations_vectorization_job, methods=["GET"]),
+        Route("/admin/api/conversations/vectorization/jobs/{job_id:str}/cancel", api_conversations_vectorization_cancel, methods=["POST"]),
         Route("/admin/api/conversations/search", api_conversations_search, methods=["GET"]),
         Route("/admin/api/conversations/recall", api_conversations_recall, methods=["GET"]),
         Route("/admin/api/conversations/read", api_conversations_read, methods=["GET"]),
@@ -115,6 +131,7 @@ class WebState:
     resolver: RuntimeConfigResolver
     sessions: "SessionManager"
     backfills: BackfillManager
+    conversation_vectors: ConversationVectorizationManager
 
 
 class SecurityMiddleware:
@@ -684,6 +701,7 @@ async def api_conversations_status(request: Request) -> Response:
                 "embedding_model": None,
                 "embedding_version": None,
                 "embedding_dimension": None,
+                "vectorization_job": None,
             },
             status_code=200,
         )
@@ -702,7 +720,20 @@ async def api_conversations_status(request: Request) -> Response:
                 identity = ConversationIdentityStore(manifest_path).identity_stats()
         except Exception:
             identity = None
-        return JSONResponse({"enabled": True, **stats, "conversation_identity": identity})
+        running_job = None
+        running_job_id = state.conversation_vectors.running_job_id
+        if running_job_id:
+            job = state.conversation_vectors.jobs.get(running_job_id)
+            if job is not None:
+                running_job = job.as_dict()
+        return JSONResponse(
+            {
+                "enabled": True,
+                **stats,
+                "conversation_identity": identity,
+                "vectorization_job": running_job,
+            }
+        )
     except Exception as exc:
         return JSONResponse(
             {
@@ -717,9 +748,69 @@ async def api_conversations_status(request: Request) -> Response:
                 "embedding_model": None,
                 "embedding_version": None,
                 "embedding_dimension": None,
+                "vectorization_job": None,
             },
             status_code=500,
         )
+
+
+def _conversation_vectorization_options(payload: dict[str, Any]) -> tuple[bool, int | None, int]:
+    force = bool(payload.get("force", False))
+    raw_limit = payload.get("limit")
+    limit: int | None = None
+    if raw_limit not in (None, "", "all"):
+        limit = bounded_int(raw_limit, 1, 10000, 10000)
+    timeout = bounded_int(payload.get("job_timeout_seconds"), 60, 604800, 86400)
+    return force, limit, timeout
+
+
+async def api_conversations_vectorization_dry_run(request: Request) -> Response:
+    state = request.app.state.webui
+    if not state.config.conversation_archive.enabled:
+        return JSONResponse({"error": "conversation_archive_disabled"}, status_code=404)
+    payload = await request.json()
+    force, limit, _timeout = _conversation_vectorization_options(payload)
+    try:
+        return JSONResponse(state.conversation_vectors.dry_run(force=force, limit=limit))
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_conversations_vectorization_start(request: Request) -> Response:
+    state = request.app.state.webui
+    if not state.config.conversation_archive.enabled:
+        return JSONResponse({"error": "conversation_archive_disabled"}, status_code=404)
+    payload = await request.json()
+    force, limit, timeout = _conversation_vectorization_options(payload)
+    try:
+        job = state.conversation_vectors.start(
+            force=force,
+            limit=limit,
+            job_timeout_seconds=timeout,
+        )
+        return JSONResponse(job.as_dict(), status_code=202)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_conversations_vectorization_job(request: Request) -> Response:
+    state = request.app.state.webui
+    job = state.conversation_vectors.jobs.get(request.path_params["job_id"])
+    if job is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(job.as_dict())
+
+
+async def api_conversations_vectorization_cancel(request: Request) -> Response:
+    state = request.app.state.webui
+    job_id = request.path_params["job_id"]
+    if job_id not in state.conversation_vectors.jobs:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(state.conversation_vectors.cancel(job_id).as_dict())
 
 
 async def api_conversations_search(request: Request) -> Response:

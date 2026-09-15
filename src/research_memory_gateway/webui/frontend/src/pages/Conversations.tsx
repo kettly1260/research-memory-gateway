@@ -8,6 +8,7 @@ import {
   Cpu,
   FileText,
   Layers,
+  Loader2,
   MessagesSquare,
   Play,
   RefreshCw,
@@ -37,6 +38,10 @@ import {
 } from '@/components/ui/table'
 import {
   useConversationStatus,
+  useConversationVectorizationCancel,
+  useConversationVectorizationDryRun,
+  useConversationVectorizationJob,
+  useConversationVectorizationStart,
   useConversationSearch,
   useConversationRecall,
   useConversationRead,
@@ -79,6 +84,71 @@ export function Conversations() {
   // ─── Status Query ───
   const statusQuery = useConversationStatus()
   const status = statusQuery.data
+
+  // ─── Conversation Vectorization ───
+  const vectorDryRun = useConversationVectorizationDryRun()
+  const vectorStart = useConversationVectorizationStart()
+  const vectorCancel = useConversationVectorizationCancel()
+  const [vectorJobId, setVectorJobId] = React.useState<string | null>(null)
+  const effectiveVectorJobId = vectorJobId || (
+    status?.vectorization_job?.status === 'running'
+      ? status.vectorization_job.job_id
+      : null
+  )
+  const vectorJobQuery = useConversationVectorizationJob(effectiveVectorJobId)
+  const vectorJob = vectorJobQuery.data
+  const refreshedVectorJob = React.useRef<string | null>(null)
+
+  React.useEffect(() => {
+    if (!vectorJob || vectorJob.status === 'running') return
+    if (refreshedVectorJob.current === vectorJob.job_id) return
+    refreshedVectorJob.current = vectorJob.job_id
+    void statusQuery.refetch()
+  }, [vectorJob, statusQuery])
+
+  const handleVectorDryRun = async () => {
+    try {
+      const result = await vectorDryRun.mutateAsync({})
+      toast.success(t('conversations.vectorDryRunResult', {
+        documents: result.documents,
+        sections: result.sections,
+      }))
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  const handleVectorStart = async () => {
+    try {
+      const job = await vectorStart.mutateAsync({ job_timeout_seconds: 86400 })
+      setVectorJobId(job.job_id)
+      refreshedVectorJob.current = null
+      toast.success(t('conversations.vectorStarted', {
+        documents: job.total,
+        sections: job.total_sections,
+      }))
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  const handleVectorCancel = async () => {
+    if (!effectiveVectorJobId) return
+    try {
+      await vectorCancel.mutateAsync(effectiveVectorJobId)
+      toast.success(t('conversations.vectorCancelRequested'))
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  const vectorJobRunning = vectorJob?.status === 'running' || status?.vectorization_job?.status === 'running'
+  const vectorProcessed = vectorJob
+    ? vectorJob.completed + vectorJob.failed + vectorJob.skipped
+    : 0
+  const vectorProgressPct = vectorJob?.total
+    ? Math.min(100, Math.round((vectorProcessed / vectorJob.total) * 100))
+    : 0
 
   // ─── Search State & Query ───
   const [searchInput, setSearchInput] = React.useState('')
@@ -192,7 +262,7 @@ export function Conversations() {
             <MessagesSquare className="size-6 text-primary" />
             <h1 className="text-2xl font-bold tracking-tight">{t('conversations.title')}</h1>
             <Badge variant="outline" className="text-xs font-normal">
-              Read-Only
+              {t('conversations.archiveReadOnly')}
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
@@ -307,6 +377,156 @@ export function Conversations() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ─── Conversation Vectorization ─── */}
+      {status?.enabled && (
+        <Card className="rounded-lg border-blue-500/20 bg-blue-500/[0.025]">
+          <CardHeader className="pb-3">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Sparkles className="size-4 text-blue-600" />
+                  {t('conversations.vectorizationTitle')}
+                </CardTitle>
+                <CardDescription className="mt-1">
+                  {t('conversations.vectorizationDesc')}
+                </CardDescription>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleVectorDryRun}
+                  disabled={vectorDryRun.isPending || vectorJobRunning || !status.embedding_model}
+                >
+                  {vectorDryRun.isPending ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Search className="size-3.5 mr-1.5" />
+                  )}
+                  {t('conversations.vectorDryRun')}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleVectorStart}
+                  disabled={
+                    vectorStart.isPending ||
+                    vectorJobRunning ||
+                    !status.embedding_model ||
+                    status.sections_without_embedding === 0
+                  }
+                >
+                  {vectorStart.isPending || vectorJobRunning ? (
+                    <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Play className="size-3.5 mr-1.5" />
+                  )}
+                  {status.sections_with_embedding > 0
+                    ? t('conversations.vectorCompleteMissing')
+                    : t('conversations.vectorStart')}
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3 text-sm">
+              <div className="rounded-md border bg-background/70 p-3">
+                <div className="text-xs text-muted-foreground">{t('conversations.vectorMissing')}</div>
+                <div className="mt-1 font-semibold">{status.sections_without_embedding}</div>
+              </div>
+              <div className="rounded-md border bg-background/70 p-3">
+                <div className="text-xs text-muted-foreground">{t('conversations.activeModel')}</div>
+                <div className="mt-1 font-mono text-xs break-all">{status.embedding_model || '—'}</div>
+              </div>
+              <div className="rounded-md border bg-background/70 p-3">
+                <div className="text-xs text-muted-foreground">{t('conversations.vectorWriteScope')}</div>
+                <div className="mt-1 text-xs">{t('conversations.vectorIndexOnly')}</div>
+              </div>
+            </div>
+
+            {!status.embedding_model && (
+              <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+                <AlertCircle className="size-4 shrink-0" />
+                {t('conversations.vectorEmbeddingDisabled')}
+              </div>
+            )}
+
+            {vectorJob && (
+              <div className="space-y-3 rounded-lg border bg-background/80 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    {vectorJobRunning && <Loader2 className="size-4 animate-spin text-blue-600" />}
+                    {t('conversations.vectorJobStatus')}
+                  </div>
+                  <Badge
+                    variant={vectorJob.status === 'failed' ? 'destructive' : 'secondary'}
+                    className={vectorJob.status === 'completed' ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : ''}
+                  >
+                    {t(`conversations.vectorStatus_${vectorJob.status}`)}
+                  </Badge>
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>{t('conversations.vectorDocumentsProgress')}</span>
+                    <span>{vectorProcessed} / {vectorJob.total} ({vectorProgressPct}%)</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-blue-600 transition-all duration-300"
+                      style={{ width: `${vectorProgressPct}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-center text-xs">
+                  <div className="rounded border p-2">
+                    <div className="font-semibold text-emerald-600">{vectorJob.embedded_sections}</div>
+                    <div className="mt-0.5 text-muted-foreground">{t('conversations.vectorNew')}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="font-semibold">{vectorJob.cache_reused_sections}</div>
+                    <div className="mt-0.5 text-muted-foreground">{t('conversations.vectorReused')}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="font-semibold text-destructive">{vectorJob.failed_sections}</div>
+                    <div className="mt-0.5 text-muted-foreground">{t('conversations.vectorFailed')}</div>
+                  </div>
+                  <div className="rounded border p-2">
+                    <div className="font-semibold">{vectorJob.completed}</div>
+                    <div className="mt-0.5 text-muted-foreground">{t('conversations.vectorDocumentsDone')}</div>
+                  </div>
+                </div>
+
+                {vectorJob.current_file && vectorJobRunning && (
+                  <div className="truncate text-[11px] font-mono text-muted-foreground" title={vectorJob.current_file}>
+                    {vectorJob.current_file}
+                  </div>
+                )}
+
+                {vectorJob.last_error && (
+                  <div className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                    {vectorJob.last_error}
+                  </div>
+                )}
+
+                {vectorJobRunning && (
+                  <div className="flex justify-end">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleVectorCancel}
+                      disabled={vectorCancel.isPending}
+                    >
+                      {t('conversations.vectorCancel')}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ─── Source & Role Distribution ─── */}
       {status && (status.source_system_distribution || status.thread_source_distribution) && (

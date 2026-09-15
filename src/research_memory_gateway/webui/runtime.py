@@ -345,6 +345,196 @@ class BackfillManager:
             }
 
 
+@dataclass
+class ConversationVectorizationJob:
+    job_id: str
+    status: str = "running"
+    total: int = 0
+    completed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    total_sections: int = 0
+    embedded_sections: int = 0
+    cache_reused_sections: int = 0
+    failed_sections: int = 0
+    current_file: str | None = None
+    started_at: str = field(default_factory=utc_now)
+    updated_at: str = field(default_factory=utc_now)
+    last_error: str | None = None
+    cancel_requested: bool = False
+    job_timeout_seconds: int = 86400
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.__dict__.copy()
+
+
+class ConversationVectorizationManager:
+    """Background vector backfill for the conversation archive index.
+
+    Archive Markdown remains untouched. Each candidate file is re-indexed against
+    the currently active embedding model so section identities and cached vectors
+    move together after a model switch.
+    """
+
+    def __init__(self, service: ResearchMemoryService) -> None:
+        self.service = service
+        self.jobs: dict[str, ConversationVectorizationJob] = {}
+        self.running_job_id: str | None = None
+        self.tasks: dict[str, asyncio.Task[None]] = {}
+
+    def dry_run(self, *, force: bool = False, limit: int | None = None) -> dict[str, Any]:
+        retrieval = self.service.conversation_retrieval
+        candidates = retrieval.index_db.embedding_backfill_candidates(force=force, limit=limit)
+        stats = retrieval.index_db.stats()
+        result = {
+            "documents": len(candidates),
+            "sections": sum(int(item["missing_sections"]) for item in candidates),
+            "embedding_model": stats.get("embedding_model"),
+            "embedding_version": stats.get("embedding_version"),
+        }
+        self.service.append_audit_event(
+            "conversation.vectorization_dry_run",
+            metadata={"documents": result["documents"], "sections": result["sections"]},
+        )
+        return result
+
+    def start(
+        self,
+        *,
+        force: bool = False,
+        limit: int | None = None,
+        job_timeout_seconds: int = 86400,
+    ) -> ConversationVectorizationJob:
+        if self.running_job_id and self.jobs[self.running_job_id].status == "running":
+            raise RuntimeError("Only one conversation vectorization job can run at a time")
+
+        retrieval = self.service.conversation_retrieval
+        embedding_client = retrieval.embedding_client
+        if embedding_client is None or not embedding_client.enabled or not embedding_client.model:
+            raise RuntimeError("Conversation embedding is not configured or enabled")
+
+        candidates = retrieval.index_db.embedding_backfill_candidates(force=force, limit=limit)
+        job = ConversationVectorizationJob(
+            job_id=f"cv_{secrets.token_hex(8)}",
+            total=len(candidates),
+            total_sections=sum(int(item["missing_sections"]) for item in candidates),
+            job_timeout_seconds=bounded_int(job_timeout_seconds, 60, 604800, 86400),
+        )
+        self.jobs[job.job_id] = job
+        self.running_job_id = job.job_id
+        self.service.append_audit_event(
+            "conversation.vectorization_started",
+            metadata={
+                "job_id": job.job_id,
+                "documents": job.total,
+                "sections": job.total_sections,
+            },
+        )
+        task = asyncio.create_task(self._run(job, candidates))
+        self.tasks[job.job_id] = task
+        task.add_done_callback(lambda _task, job_id=job.job_id: self.tasks.pop(job_id, None))
+        return job
+
+    def cancel(self, job_id: str) -> ConversationVectorizationJob:
+        job = self.jobs[job_id]
+        job.cancel_requested = True
+        job.updated_at = utc_now()
+        self.service.append_audit_event(
+            "conversation.vectorization_cancel_requested",
+            metadata={"job_id": job_id},
+        )
+        return job
+
+    async def _run(
+        self,
+        job: ConversationVectorizationJob,
+        candidates: list[dict[str, Any]],
+    ) -> None:
+        retrieval = self.service.conversation_retrieval
+        index_db = retrieval.index_db
+        index_db.reset_embedding_stats()
+        started = time.monotonic()
+        try:
+            if not candidates:
+                job.status = "completed"
+                self.service.append_audit_event(
+                    "conversation.vectorization_completed",
+                    metadata={
+                        "job_id": job.job_id,
+                        "status": job.status,
+                        "completed_documents": 0,
+                        "failed_documents": 0,
+                        "embedded_sections": 0,
+                        "cache_reused_sections": 0,
+                        "failed_sections": 0,
+                    },
+                )
+                return
+
+            for item in candidates:
+                if job.cancel_requested:
+                    job.status = "cancelled"
+                    break
+                if time.monotonic() - started > job.job_timeout_seconds:
+                    job.status = "failed"
+                    job.last_error = "job_timeout"
+                    break
+
+                path = str(item["vault_path"])
+                job.current_file = path
+                job.updated_at = utc_now()
+                try:
+                    await asyncio.to_thread(index_db.index_file, path)
+                    job.completed += 1
+                except FileNotFoundError:
+                    job.failed += 1
+                    job.last_error = f"missing_file: {path}"
+                except Exception as exc:
+                    job.failed += 1
+                    job.last_error = f"{exc.__class__.__name__}: {exc}"
+
+                emb_stats = index_db.embedding_stats
+                job.embedded_sections = int(emb_stats["new_embedding_requests"])
+                job.cache_reused_sections = int(emb_stats["cache_reused"])
+                job.failed_sections = int(emb_stats["failures"])
+                job.updated_at = utc_now()
+
+            if job.status == "running":
+                job.status = "completed_with_errors" if job.failed or job.failed_sections else "completed"
+
+            event_name = (
+                "conversation.vectorization_completed"
+                if job.status in {"completed", "completed_with_errors"}
+                else "conversation.vectorization_failed"
+                if job.status == "failed"
+                else "conversation.vectorization_cancelled"
+            )
+            self.service.append_audit_event(
+                event_name,
+                metadata={
+                    "job_id": job.job_id,
+                    "status": job.status,
+                    "completed_documents": job.completed,
+                    "failed_documents": job.failed,
+                    "embedded_sections": job.embedded_sections,
+                    "cache_reused_sections": job.cache_reused_sections,
+                    "failed_sections": job.failed_sections,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - defensive background guard
+            job.status = "failed"
+            job.last_error = f"{exc.__class__.__name__}: {exc}"
+            self.service.append_audit_event(
+                "conversation.vectorization_failed",
+                metadata={"job_id": job.job_id, "error": job.last_error},
+            )
+        finally:
+            job.current_file = None
+            job.updated_at = utc_now()
+            if self.running_job_id == job.job_id:
+                self.running_job_id = None
+
+
 def scope_to_statuses(scope: str) -> list[str]:
     if scope == "all":
         return [status.value for status in MemoryStatus]

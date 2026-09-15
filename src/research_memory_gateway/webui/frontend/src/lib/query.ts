@@ -31,6 +31,7 @@ export const queryKeys = {
   audit: ['audit'] as const,
   conversations: {
     status: ['conversations', 'status'] as const,
+    vectorizationJob: (id: string) => ['conversations', 'vectorization', id] as const,
     search: (params?: Record<string, string | undefined>) => ['conversations', 'search', params] as const,
     recall: (params?: Record<string, string | undefined>) => ['conversations', 'recall', params] as const,
     read: (params?: Record<string, string | undefined>) => ['conversations', 'read', params] as const,
@@ -372,6 +373,42 @@ export function useConversationStatus() {
     queryKey: queryKeys.conversations.status,
     queryFn: () => api.conversations.status(),
     retry: false,
+  })
+}
+
+export function useConversationVectorizationDryRun() {
+  return useMutation({
+    mutationFn: (params: { force?: boolean; limit?: number | 'all' } = {}) =>
+      api.conversations.vectorizationDryRun(params),
+  })
+}
+
+export function useConversationVectorizationStart() {
+  return useMutation({
+    mutationFn: (params: { force?: boolean; limit?: number | 'all'; job_timeout_seconds?: number } = {}) =>
+      api.conversations.vectorizationStart(params),
+  })
+}
+
+export function useConversationVectorizationJob(jobId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.conversations.vectorizationJob(jobId || ''),
+    queryFn: () => api.conversations.vectorizationJob(jobId!),
+    enabled: !!jobId,
+    refetchInterval: (query) => {
+      const job = query.state.data
+      return job && job.status === 'running' ? 1500 : false
+    },
+  })
+}
+
+export function useConversationVectorizationCancel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => api.conversations.vectorizationCancel(jobId),
+    onSuccess: (_, jobId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.conversations.vectorizationJob(jobId) })
+    },
   })
 }
 
