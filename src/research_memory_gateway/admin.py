@@ -92,9 +92,17 @@ def backfill_embeddings(
             """,
             params,
         ).fetchall()
+        generation = backend.get_vector_generation(connection=connection)
+        model = getattr(backend.embedding_client, "model", "") or "__default__"
         existing_ids = {
             row["memory_id"]
-            for row in connection.execute("SELECT memory_id FROM memory_embeddings").fetchall()
+            for row in connection.execute(
+                """
+                SELECT memory_id FROM memory_embeddings
+                WHERE model = ? AND generation = ?
+                """,
+                (model, generation),
+            ).fetchall()
         }
 
     result = _backfill_result(status="ok")
@@ -118,15 +126,23 @@ def backfill_embeddings(
             continue
         with backend._connect() as connection:
             connection.execute(
-                "DELETE FROM memory_embeddings WHERE memory_id = ?",
-                (memory.memory_id,),
-            )
-            connection.execute(
                 """
-                INSERT INTO memory_embeddings(memory_id, embedding, updated_at)
-                VALUES (?, ?, ?)
+                INSERT INTO memory_embeddings(
+                    memory_id, model, generation, dimension, embedding, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_id, model, generation) DO UPDATE SET
+                    dimension=excluded.dimension,
+                    embedding=excluded.embedding,
+                    updated_at=excluded.updated_at
                 """,
-                (memory.memory_id, json.dumps(embedding), memory.updated_at),
+                (
+                    memory.memory_id,
+                    model,
+                    generation,
+                    len(embedding),
+                    json.dumps(embedding),
+                    memory.updated_at,
+                ),
             )
             connection.execute("DELETE FROM embedding_backfill_needed WHERE memory_id = ?", (memory.memory_id,))
         result["backfilled"] += 1

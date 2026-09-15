@@ -65,6 +65,24 @@ class ResearchMemoryService:
         self._media_index = None
 
     @property
+    def vector_generation(self) -> int:
+        getter = getattr(self.backend, "get_vector_generation", None)
+        if callable(getter):
+            return int(getter())
+        return 1
+
+    def advance_vector_generation(self, *, reason: str = "manual_rebuild") -> int:
+        advance = getattr(self.backend, "advance_vector_generation", None)
+        if not callable(advance):
+            raise RuntimeError("vector_generation_not_supported")
+        generation = int(advance(reason=reason))
+        if self._conversation_retrieval is not None:
+            self._conversation_retrieval.index_db.set_vector_generation(generation)
+        if self._media_index is not None:
+            self._media_index.set_vector_generation(generation)
+        return generation
+
+    @property
     def upload_manager(self):
         if self._upload_manager is None:
             from .uploads import UploadManager
@@ -93,7 +111,11 @@ class ResearchMemoryService:
                     allowed_roots.append(vault_root)
                 except Exception:
                     pass
-            index_db = ConversationIndexDatabase(index_path, embedding_client=emb_client)
+            index_db = ConversationIndexDatabase(
+                index_path,
+                embedding_client=emb_client,
+                vector_generation=self.vector_generation,
+            )
             self._conversation_retrieval = ConversationRetrievalService(
                 index_db=index_db,
                 allowed_roots=allowed_roots,
@@ -105,6 +127,7 @@ class ResearchMemoryService:
             # embedding client as the main memory backend.
             self._conversation_retrieval.embedding_client = emb_client
             self._conversation_retrieval.index_db.embedding_client = emb_client
+            self._conversation_retrieval.index_db.set_vector_generation(self.vector_generation)
         return self._conversation_retrieval
 
     @property
@@ -127,11 +150,12 @@ class ResearchMemoryService:
             self._media_index = MediaIndexDatabase(
                 self.config.media_index.resolve_index_path(),
                 embedding_client=emb_client,
-                embedding_version=self.config.media_index.embedding_version,
+                vector_generation=self.vector_generation,
                 max_image_bytes=self.config.media_index.max_image_bytes,
             )
         else:
             self._media_index.embedding_client = emb_client
+            self._media_index.set_vector_generation(self.vector_generation)
         return self._media_index
 
     def propose_save(

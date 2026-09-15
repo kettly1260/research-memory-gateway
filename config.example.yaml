@@ -108,8 +108,9 @@ media_index:
   # submitted, so enabling this does not consume model/GPU resources while idle.
   enabled: true
   index_path: ./data/research-media.sqlite
-  embedding_version: v1
   max_image_bytes: 33554432
+  # Vector generations are managed internally by RMG and are never sent to the
+  # embedding provider. Use the WebUI rebuild controls after model/weight changes.
   # Media reuses retrieval.embedding exactly. Image bytes are sent to the same
   # endpoint/model as data: URIs in the existing `input` field. RMG does not
   # probe or maintain a list of models that support image vectors.

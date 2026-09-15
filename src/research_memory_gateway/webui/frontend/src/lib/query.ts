@@ -27,6 +27,8 @@ export const queryKeys = {
   retrieval: {
     vectorCoverage: ['retrieval', 'vector-coverage'] as const,
     backfillJob: (id: string) => ['retrieval', 'backfill', id] as const,
+    vectorIndexStatus: ['retrieval', 'vector-index', 'status'] as const,
+    vectorRebuildJob: (id: string) => ['retrieval', 'vector-rebuild', id] as const,
   },
   audit: ['audit'] as const,
   conversations: {
@@ -35,6 +37,10 @@ export const queryKeys = {
     search: (params?: Record<string, string | undefined>) => ['conversations', 'search', params] as const,
     recall: (params?: Record<string, string | undefined>) => ['conversations', 'recall', params] as const,
     read: (params?: Record<string, string | undefined>) => ['conversations', 'read', params] as const,
+  },
+  media: {
+    status: ['media', 'status'] as const,
+    vectorizationJob: (id: string) => ['media', 'vectorization', id] as const,
   },
 }
 
@@ -275,6 +281,98 @@ export function useBackfillCancel() {
     mutationFn: (jobId: string) => api.retrieval.backfillCancel(jobId),
     onSuccess: (_, jobId) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.backfillJob(jobId) })
+    },
+  })
+}
+
+export function useVectorIndexStatus() {
+  return useQuery({
+    queryKey: queryKeys.retrieval.vectorIndexStatus,
+    queryFn: () => api.retrieval.vectorIndexStatus(),
+    refetchInterval: (query) => query.state.data?.rebuild_job?.status === 'running' ? 1500 : false,
+  })
+}
+
+export function useVectorRebuildDryRun() {
+  return useMutation({
+    mutationFn: (params: { new_generation?: boolean } = {}) => api.retrieval.vectorRebuildDryRun(params),
+  })
+}
+
+export function useVectorRebuildStart() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { new_generation?: boolean; reason?: string; job_timeout_seconds?: number } = {}) =>
+      api.retrieval.vectorRebuildStart(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.vectorIndexStatus })
+    },
+  })
+}
+
+export function useVectorRebuildJob(jobId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.retrieval.vectorRebuildJob(jobId || ''),
+    queryFn: () => api.retrieval.vectorRebuildJob(jobId!),
+    enabled: !!jobId,
+    refetchInterval: (query) => query.state.data?.status === 'running' ? 1500 : false,
+  })
+}
+
+export function useVectorRebuildCancel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => api.retrieval.vectorRebuildCancel(jobId),
+    onSuccess: (_, jobId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.vectorRebuildJob(jobId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.vectorIndexStatus })
+    },
+  })
+}
+
+export function useMediaStatus() {
+  return useQuery({
+    queryKey: queryKeys.media.status,
+    queryFn: () => api.media.status(),
+    refetchInterval: (query) => query.state.data?.vectorization_job?.status === 'running' ? 1500 : false,
+  })
+}
+
+export function useMediaVectorizationDryRun() {
+  return useMutation({
+    mutationFn: (params: { force?: boolean; limit?: number | 'all' } = {}) => api.media.vectorizationDryRun(params),
+  })
+}
+
+export function useMediaVectorizationStart() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: { force?: boolean; limit?: number | 'all'; job_timeout_seconds?: number } = {}) =>
+      api.media.vectorizationStart(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.media.status })
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.vectorIndexStatus })
+    },
+  })
+}
+
+export function useMediaVectorizationJob(jobId: string | null) {
+  return useQuery({
+    queryKey: queryKeys.media.vectorizationJob(jobId || ''),
+    queryFn: () => api.media.vectorizationJob(jobId!),
+    enabled: !!jobId,
+    refetchInterval: (query) => query.state.data?.status === 'running' ? 1500 : false,
+  })
+}
+
+export function useMediaVectorizationCancel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (jobId: string) => api.media.vectorizationCancel(jobId),
+    onSuccess: (_, jobId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.media.vectorizationJob(jobId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.media.status })
+      queryClient.invalidateQueries({ queryKey: queryKeys.retrieval.vectorIndexStatus })
     },
   })
 }

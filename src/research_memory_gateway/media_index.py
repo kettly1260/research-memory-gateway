@@ -54,15 +54,32 @@ class MediaIndexDatabase:
         db_path: str | Path,
         *,
         embedding_client: EmbeddingClient | None = None,
-        embedding_version: str = "v1",
+        embedding_version: str | None = None,
+        vector_generation: int | None = None,
         max_image_bytes: int = 32 * 1024 * 1024,
     ) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.embedding_client = embedding_client
-        self.embedding_version = embedding_version
+        if vector_generation is not None:
+            self.vector_generation: int | str = int(vector_generation)
+            self.embedding_version = self._generation_cache_key(int(vector_generation))
+        else:
+            self.embedding_version = embedding_version or "v1"
+            self.vector_generation = self.embedding_version
         self.max_image_bytes = max(1, int(max_image_bytes))
         self._init_db()
+
+    def set_vector_generation(self, generation: int) -> None:
+        """Switch the active RMG-local vector generation."""
+        self.vector_generation = int(generation)
+        self.embedding_version = self._generation_cache_key(int(generation))
+
+    @staticmethod
+    def _generation_cache_key(generation: int) -> str:
+        # Adopt the existing v1 cache as generation 1. Unlike legacy Research
+        # Memory vectors, Media vectors already stored model + version safely.
+        return "v1" if generation == 1 else f"g{generation}"
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
@@ -104,6 +121,17 @@ class MediaIndexDatabase:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_media_resources_parent ON media_resources(parent_resource_id)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_blobs (
+                    content_hash TEXT PRIMARY KEY,
+                    mime_type TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    content BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
             )
             connection.execute(
                 """
@@ -189,6 +217,10 @@ class MediaIndexDatabase:
                 ).fetchone()[0]
             )
             embeddings = int(connection.execute("SELECT COUNT(*) FROM media_embeddings").fetchone()[0])
+            cached_blobs = int(connection.execute("SELECT COUNT(*) FROM media_blobs").fetchone()[0])
+            cached_blob_bytes = int(
+                connection.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM media_blobs").fetchone()[0]
+            )
             covered = 0
             dimension = None
             if active_model:
@@ -216,11 +248,14 @@ class MediaIndexDatabase:
             "resources": resources,
             "images": images,
             "embeddings": embeddings,
+            "cached_blobs": cached_blobs,
+            "cached_blob_bytes": cached_blob_bytes,
             "resources_with_active_embedding": covered,
             "resources_without_active_embedding": max(0, resources - covered),
             "vector_coverage": round(covered / resources, 4) if resources else (1.0 if active_model else 0.0),
             "embedding_model": active_model,
             "embedding_version": active_version,
+            "vector_generation": self.vector_generation if active_model else None,
             "embedding_dimension": dimension,
             "image_embedding_state": self._state_get("image_embedding_state") or "unknown",
             "image_embedding_last_error": self._state_get("image_embedding_last_error"),
@@ -232,6 +267,101 @@ class MediaIndexDatabase:
             "image_embedding_last_model": self._state_get("image_embedding_last_model"),
             "image_embedding_last_attempt_at": self._state_get("image_embedding_last_attempt_at"),
         }
+
+    def embedding_backfill_candidates(
+        self,
+        *,
+        force: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return media resources missing a vector for the active identity."""
+        client = self.embedding_client
+        if client is None or not client.enabled or not client.model:
+            return []
+        params: list[Any] = [client.model, self.embedding_version]
+        where = ""
+        if not force:
+            where = """
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM media_embeddings e
+                    WHERE e.content_hash = r.content_hash
+                      AND e.model = ? AND e.version = ?
+                )
+            """
+        else:
+            params = []
+        sql = f"""
+            SELECT r.*, CASE WHEN b.content_hash IS NULL THEN 0 ELSE 1 END AS has_cached_content
+            FROM media_resources r
+            LEFT JOIN media_blobs b ON b.content_hash = r.content_hash
+            {where}
+            ORDER BY r.indexed_at, r.resource_id
+        """
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(max(0, int(limit)))
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            locator = str(row["locator"])
+            path = Path(locator)
+            has_cached_content = bool(row["has_cached_content"])
+            candidates.append(
+                {
+                    "resource_id": str(row["resource_id"]),
+                    "locator": locator,
+                    "mime_type": str(row["mime_type"]),
+                    "content_hash": str(row["content_hash"]),
+                    "source_system": str(row["source_system"]),
+                    "source_resource_id": str(row["source_resource_id"]),
+                    "parent_resource_id": str(row["parent_resource_id"]),
+                    "rebuildable": (path.exists() and path.is_file()) or has_cached_content,
+                    "has_cached_content": has_cached_content,
+                }
+            )
+        return candidates
+
+    def reembed_resource(self, resource_id: str, *, force: bool = False) -> dict[str, Any]:
+        """Re-embed one stored media resource from its persisted local locator."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM media_resources WHERE resource_id = ?",
+                (resource_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Media resource not found: {resource_id}")
+        locator = str(row["locator"])
+        path = Path(locator)
+        if path.exists() and path.is_file():
+            content = path.read_bytes()
+        else:
+            with self._connect() as connection:
+                blob = connection.execute(
+                    "SELECT content FROM media_blobs WHERE content_hash = ?",
+                    (row["content_hash"],),
+                ).fetchone()
+            if blob is None:
+                raise FileNotFoundError(f"Media source is unavailable and no cached content exists: {locator}")
+            content = bytes(blob["content"])
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return self.index_image_bytes(
+            content,
+            locator=locator,
+            mime_type=str(row["mime_type"]),
+            source_system=str(row["source_system"]),
+            source_resource_id=str(row["source_resource_id"]),
+            parent_resource_id=str(row["parent_resource_id"]),
+            caption=str(row["caption"]),
+            ocr_text=str(row["ocr_text"]),
+            metadata=metadata,
+            force=force,
+        )
 
     def index_image_file(
         self,
@@ -304,6 +434,14 @@ class MediaIndexDatabase:
         resource_id = _resource_id(source_system, source_resource_id, locator)
         now = _utc_now()
         with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO media_blobs(
+                    content_hash, mime_type, size_bytes, content, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (content_hash, mime_type, len(content), content, now),
+            )
             connection.execute(
                 """
                 INSERT INTO media_resources(

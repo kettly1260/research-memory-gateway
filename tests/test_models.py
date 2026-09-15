@@ -19,6 +19,7 @@ from research_memory_gateway.config import (
 )
 from research_memory_gateway.models import (
     ExportFormat,
+    MemoryStatus,
     MemoryType,
     ProposalStatus,
     ResearchMemory,
@@ -47,6 +48,13 @@ class FakeEmbeddingClient:
         if "photocatalysis" in text.lower():
             return [0.0, 1.0]
         return [1.0, 0.0]
+
+
+class NamedFakeEmbeddingClient(FakeEmbeddingClient):
+    last_error = None
+
+    def __init__(self, model: str) -> None:
+        self.model = model
 
 
 class FakeRerankClient:
@@ -181,6 +189,56 @@ def test_sqlite_hybrid_search_uses_vector_candidates(tmp_path) -> None:
     assert len(results) == 1
     assert results[0].memory.memory_id == memory.memory_id
     assert results[0].match_reason.startswith("vector:cosine=")
+
+
+def test_vector_generation_and_model_identity_control_active_memory_vectors(tmp_path) -> None:
+    retrieval = RetrievalConfig(mode="hybrid", embedding={"enabled": True})
+    backend = SQLiteMemoryBackend(str(tmp_path / "memory.db"), retrieval)
+    backend.embedding_client = NamedFakeEmbeddingClient("model-a")
+    memory = ResearchMemory.model_validate(
+        {
+            "project": "demo",
+            "topic": "Generation test",
+            "memory_type": "material_system",
+            "title": "Generation-aware vector",
+            "summary": "A vector lifecycle test.",
+        }
+    )
+
+    backend.save(memory)
+    first = backend.vector_coverage(statuses=[status.value for status in MemoryStatus])
+    assert first["vector_generation"] == 1
+    assert first["embedding_model"] == "model-a"
+    assert first["embedded"] == 1
+
+    backend.embedding_client = NamedFakeEmbeddingClient("model-b")
+    switched = backend.vector_coverage(statuses=[status.value for status in MemoryStatus])
+    assert switched["embedding_model"] == "model-b"
+    assert switched["embedded"] == 0
+    assert switched["missing"] == 1
+
+    backend.save(memory)
+    assert backend.vector_coverage(statuses=[status.value for status in MemoryStatus])["embedded"] == 1
+
+    generation = backend.advance_vector_generation(reason="same_name_weights_changed")
+    assert generation == 2
+    stale = backend.vector_coverage(statuses=[status.value for status in MemoryStatus])
+    assert stale["vector_generation"] == 2
+    assert stale["embedded"] == 0
+
+    backend.save(memory)
+    rebuilt = backend.vector_coverage(statuses=[status.value for status in MemoryStatus])
+    assert rebuilt["embedded"] == 1
+    with backend._connect() as connection:
+        rows = connection.execute(
+            "SELECT model, generation FROM memory_embeddings WHERE memory_id = ? ORDER BY generation, model",
+            (memory.memory_id,),
+        ).fetchall()
+    assert {(row["model"], row["generation"]) for row in rows} == {
+        ("model-a", 1),
+        ("model-b", 1),
+        ("model-b", 2),
+    }
 
 
 def test_sqlite_hybrid_search_can_rerank_candidates(tmp_path) -> None:
@@ -610,7 +668,10 @@ def test_backfill_embeddings_force_rebuilds_existing_vector(tmp_path, monkeypatc
         str(config_path), BackfillOptions(force=True), embedding_client=FakeEmbeddingClient()
     )
 
-    assert result_without_force["skipped_existing"] == 1
+    # Legacy vectors have no trustworthy model/generation identity. They stay
+    # stored as historical cache rows but are stale for the active generation.
+    assert result_without_force["backfilled"] == 1
+    assert result_without_force["skipped_existing"] == 0
     assert result_with_force["backfilled"] == 1
 
 
@@ -1254,13 +1315,17 @@ def test_legacy_database_is_upgraded_without_losing_memories(tmp_path) -> None:
     assert backend.get(memory.memory_id).title == "Legacy memory"
     with backend._connect() as connection:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(memories)").fetchall()}
+        embedding_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(memory_embeddings)").fetchall()
+        }
         migration_versions = [
             row["version"]
             for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
         ]
 
     assert {"memory_status", "status_changed_at", "status_change_reason"} <= columns
-    assert migration_versions == [1, 2, 3, 4, 5]
+    assert {"model", "generation", "dimension"} <= embedding_columns
+    assert migration_versions == [1, 2, 3, 4, 5, 6]
 
 
 def test_integrity_audit_repairs_missing_fts_and_orphan_embeddings(tmp_path) -> None:

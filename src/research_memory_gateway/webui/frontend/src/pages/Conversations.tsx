@@ -364,7 +364,7 @@ export function Conversations() {
               {t('conversations.activeModel')}
             </CardTitle>
             <Badge variant="outline" className="text-[10px] uppercase font-mono">
-              {status?.embedding_version ?? 'v1'}
+              {status?.vector_generation != null ? `g${status.vector_generation}` : '—'}
             </Badge>
           </CardHeader>
           <CardContent>

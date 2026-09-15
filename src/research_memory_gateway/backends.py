@@ -18,7 +18,7 @@ from .retrieval import EmbeddingClient, RerankClient, cosine_similarity
 
 
 logger = getLogger(__name__)
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ACTIVE_STATUSES = (MemoryStatus.active.value,)
 ALL_STATUSES = tuple(status.value for status in MemoryStatus)
 
@@ -140,6 +140,7 @@ class SQLiteMemoryBackend(MemoryBackend):
             (3, "webui_api_keys_and_connections", self._migration_api_keys_and_connections),
             (4, "embedding_backfill_state", self._migration_embedding_backfill_state),
             (5, "memory_proposals_and_versions", self._migration_memory_proposals),
+            (6, "vector_index_generations", self._migration_vector_index_generations),
         ]
 
     def _migration_initial_schema(self, connection: sqlite3.Connection) -> None:
@@ -287,6 +288,94 @@ class SQLiteMemoryBackend(MemoryBackend):
             """
         )
 
+    def _migration_vector_index_generations(self, connection: sqlite3.Connection) -> None:
+        """Add RMG-internal vector generations without changing provider APIs.
+
+        The generation is local index metadata only. Existing legacy vectors
+        are preserved with an unknown model/generation and therefore remain
+        stored but inactive until an explicit rebuild creates current vectors.
+        """
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(memory_embeddings)").fetchall()
+        }
+        if not {"model", "generation", "dimension"}.issubset(columns):
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_embeddings_v2 (
+                    memory_id TEXT NOT NULL,
+                    model TEXT NOT NULL DEFAULT '',
+                    generation INTEGER NOT NULL DEFAULT 0,
+                    dimension INTEGER NOT NULL DEFAULT 0,
+                    embedding TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(memory_id, model, generation),
+                    FOREIGN KEY(memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
+                )
+                """
+            )
+            legacy_rows = connection.execute(
+                "SELECT memory_id, embedding, updated_at FROM memory_embeddings"
+            ).fetchall()
+            for row in legacy_rows:
+                dimension = 0
+                try:
+                    payload = json.loads(row["embedding"])
+                    if isinstance(payload, list):
+                        dimension = len(payload)
+                except (TypeError, json.JSONDecodeError):
+                    pass
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO memory_embeddings_v2(
+                        memory_id, model, generation, dimension, embedding, updated_at
+                    ) VALUES (?, '', 0, ?, ?, ?)
+                    """,
+                    (row["memory_id"], dimension, row["embedding"], row["updated_at"]),
+                )
+            connection.execute("DROP TABLE memory_embeddings")
+            connection.execute("ALTER TABLE memory_embeddings_v2 RENAME TO memory_embeddings")
+
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_embeddings_active "
+            "ON memory_embeddings(model, generation, dimension)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vector_index_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                generation INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO vector_index_state(singleton, generation, updated_at, reason)
+            VALUES (1, 1, ?, 'initial')
+            """,
+            (now,),
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vector_index_generations (
+                generation INTEGER PRIMARY KEY,
+                model TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO vector_index_generations(generation, model, reason, created_at)
+            SELECT generation, '', reason, updated_at
+            FROM vector_index_state WHERE singleton = 1
+            """
+        )
+
     def save(self, memory: ResearchMemory) -> ResearchMemory:
         self._refresh_retrieval_clients()
         data = memory.model_dump_json()
@@ -329,15 +418,26 @@ class SQLiteMemoryBackend(MemoryBackend):
             if self.embedding_client.enabled:
                 embedding = self.embedding_client.embed(memory_to_search_document(memory))
                 if embedding:
-                    connection.execute(
-                        "DELETE FROM memory_embeddings WHERE memory_id = ?", (memory.memory_id,)
-                    )
+                    model = getattr(self.embedding_client, "model", "") or "__default__"
+                    generation = self.get_vector_generation(connection=connection)
                     connection.execute(
                         """
-                        INSERT INTO memory_embeddings(memory_id, embedding, updated_at)
-                        VALUES (?, ?, ?)
+                        INSERT INTO memory_embeddings(
+                            memory_id, model, generation, dimension, embedding, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(memory_id, model, generation) DO UPDATE SET
+                            dimension=excluded.dimension,
+                            embedding=excluded.embedding,
+                            updated_at=excluded.updated_at
                         """,
-                        (memory.memory_id, json.dumps(embedding), memory.updated_at),
+                        (
+                            memory.memory_id,
+                            model,
+                            generation,
+                            len(embedding),
+                            json.dumps(embedding),
+                            memory.updated_at,
+                        ),
                     )
                     self._clear_backfill_needed(connection, memory.memory_id)
                 else:
@@ -493,8 +593,11 @@ class SQLiteMemoryBackend(MemoryBackend):
             )
             return []
 
-        filters: list[str] = []
-        params: list[Any] = []
+        active_model = getattr(self.embedding_client, "model", "") or "__default__"
+        active_generation = self.get_vector_generation()
+
+        filters: list[str] = ["e.model = ?", "e.generation = ?", "e.dimension = ?"]
+        params: list[Any] = [active_model, active_generation, len(query_embedding)]
         if project:
             filters.append("m.project = ?")
             params.append(project)
@@ -598,10 +701,19 @@ class SQLiteMemoryBackend(MemoryBackend):
     def retrieval_health(self) -> dict[str, Any]:
         self._refresh_retrieval_clients()
         vector_count = 0
+        active_vector_count = 0
         dimension_counts: dict[int, int] = {}
         invalid_vectors = 0
+        active_model = (
+            getattr(self.embedding_client, "model", "") or "__default__"
+            if self.embedding_client.enabled
+            else ""
+        )
+        active_generation = self.get_vector_generation()
         with self._connect() as connection:
-            rows = connection.execute("SELECT embedding FROM memory_embeddings").fetchall()
+            rows = connection.execute(
+                "SELECT model, generation, dimension, embedding FROM memory_embeddings"
+            ).fetchall()
         for row in rows:
             try:
                 embedding = json.loads(row["embedding"])
@@ -609,6 +721,8 @@ class SQLiteMemoryBackend(MemoryBackend):
                     raise TypeError
                 dimension_counts[len(embedding)] = dimension_counts.get(len(embedding), 0) + 1
                 vector_count += 1
+                if row["model"] == active_model and int(row["generation"]) == active_generation:
+                    active_vector_count += 1
             except (TypeError, json.JSONDecodeError):
                 invalid_vectors += 1
         return {
@@ -618,9 +732,11 @@ class SQLiteMemoryBackend(MemoryBackend):
             "embedding": _client_health(self.embedding_client),
             "rerank": _client_health(self.rerank_client),
             "stored_embedding_count": vector_count,
+            "active_stored_embedding_count": active_vector_count,
             "stored_embedding_dimensions": dimension_counts,
             "invalid_stored_embeddings": invalid_vectors,
             "last_vector_dimension_mismatches": self.last_vector_dimension_mismatches,
+            "vector_generation": active_generation,
         }
 
     def health(self) -> dict[str, Any]:
@@ -1030,7 +1146,115 @@ class SQLiteMemoryBackend(MemoryBackend):
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def _has_embedding(self, connection: sqlite3.Connection, memory_id: str) -> bool:
+    def get_vector_generation(self, *, connection: sqlite3.Connection | None = None) -> int:
+        """Return the active RMG-local vector generation.
+
+        This value is index lifecycle metadata only and is never forwarded to
+        the configured embedding provider.
+        """
+        if connection is not None:
+            row = connection.execute(
+                "SELECT generation FROM vector_index_state WHERE singleton = 1"
+            ).fetchone()
+            return int(row["generation"]) if row is not None else 1
+        with self._connect() as owned:
+            row = owned.execute(
+                "SELECT generation FROM vector_index_state WHERE singleton = 1"
+            ).fetchone()
+        return int(row["generation"]) if row is not None else 1
+
+    def advance_vector_generation(self, *, reason: str = "manual_rebuild") -> int:
+        """Start a new internal generation for same-name model/weight changes."""
+        self._refresh_retrieval_clients()
+        now = datetime.now(timezone.utc).isoformat()
+        model = getattr(self.embedding_client, "model", "") or "__default__"
+        with self._connect() as connection:
+            current = self.get_vector_generation(connection=connection)
+            generation = current + 1
+            connection.execute(
+                """
+                UPDATE vector_index_state
+                SET generation = ?, updated_at = ?, reason = ?
+                WHERE singleton = 1
+                """,
+                (generation, now, reason),
+            )
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO vector_index_generations(
+                    generation, model, reason, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (generation, model, reason, now),
+            )
+        return generation
+
+    def vector_generation_history(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT generation, model, reason, created_at
+                FROM vector_index_generations
+                ORDER BY generation DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def vector_coverage(self, *, statuses: list[str] | None = None) -> dict[str, Any]:
+        """Coverage for the current model + internal generation only."""
+        self._refresh_retrieval_clients()
+        active_model = (
+            getattr(self.embedding_client, "model", "") or "__default__"
+            if self.embedding_client.enabled
+            else ""
+        )
+        generation = self.get_vector_generation()
+        params: list[Any] = []
+        status_filters = _status_sql(_normalize_statuses(statuses), params, alias="m")
+        where = f"WHERE {' AND '.join(status_filters)}" if status_filters else ""
+        with self._connect() as connection:
+            total = int(connection.execute(f"SELECT COUNT(*) FROM memories m {where}", params).fetchone()[0])
+            active_params: list[Any] = [active_model, generation, *params]
+            active_where = ["e.model = ?", "e.generation = ?", *status_filters]
+            embedded = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(DISTINCT m.memory_id)
+                    FROM memories m
+                    JOIN memory_embeddings e ON e.memory_id = m.memory_id
+                    WHERE {' AND '.join(active_where)}
+                    """,
+                    active_params,
+                ).fetchone()[0]
+            ) if active_model else 0
+        return {
+            "total": total,
+            "embedded": embedded,
+            "missing": max(0, total - embedded),
+            "vector_coverage": round(embedded / total, 4) if total else (1.0 if active_model else 0.0),
+            "embedding_model": active_model or None,
+            "vector_generation": generation,
+        }
+
+    def _has_embedding(
+        self,
+        connection: sqlite3.Connection,
+        memory_id: str,
+        *,
+        active_only: bool = False,
+    ) -> bool:
+        active_model = getattr(self.embedding_client, "model", "") or "__default__"
+        if active_only and self.embedding_client.enabled and active_model:
+            row = connection.execute(
+                """
+                SELECT 1 FROM memory_embeddings
+                WHERE memory_id = ? AND model = ? AND generation = ?
+                """,
+                (memory_id, active_model, self.get_vector_generation(connection=connection)),
+            ).fetchone()
+            return row is not None
         row = connection.execute(
             "SELECT 1 FROM memory_embeddings WHERE memory_id = ?",
             (memory_id,),

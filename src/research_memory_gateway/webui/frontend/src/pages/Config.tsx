@@ -41,6 +41,16 @@ import {
   useBackfillJob,
   useBackfillStart,
   useBackfillCancel,
+  useVectorIndexStatus,
+  useVectorRebuildDryRun,
+  useVectorRebuildStart,
+  useVectorRebuildJob,
+  useVectorRebuildCancel,
+  useMediaStatus,
+  useMediaVectorizationDryRun,
+  useMediaVectorizationStart,
+  useMediaVectorizationJob,
+  useMediaVectorizationCancel,
   useProjects,
   useTaxonomy
 } from '@/lib/query'
@@ -199,6 +209,255 @@ function ProviderForm({ provider, effective }: {
       </div>
 
       <ConnectionStatus result={testConnection.data ?? null} />
+    </div>
+  )
+}
+
+function UnifiedVectorIndexSection() {
+  const { t } = useTranslation()
+  const statusQuery = useVectorIndexStatus()
+  const dryRun = useVectorRebuildDryRun()
+  const rebuildStart = useVectorRebuildStart()
+  const rebuildCancel = useVectorRebuildCancel()
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const status = statusQuery.data
+  const effectiveJobId = activeJobId || status?.rebuild_job?.job_id || null
+  const jobQuery = useVectorRebuildJob(effectiveJobId)
+  const job = jobQuery.data || status?.rebuild_job || null
+
+  useEffect(() => {
+    if (!job || job.status === 'running') return
+    void statusQuery.refetch()
+  }, [job?.status, job?.job_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const startRebuild = (newGeneration: boolean) => {
+    rebuildStart.mutate(
+      {
+        new_generation: newGeneration,
+        reason: newGeneration ? 'webui_new_generation_rebuild' : 'webui_stale_rebuild',
+        job_timeout_seconds: 86400,
+      },
+      {
+        onSuccess: (started) => {
+          setActiveJobId(started.job_id)
+          toast.success(newGeneration ? t('config.vector_generation_started') : t('config.vector_rebuild_started'))
+        },
+        onError: (err) => toast.error(String(err)),
+      },
+    )
+  }
+
+  const runDryRun = () => {
+    dryRun.mutate(
+      { new_generation: false },
+      {
+        onSuccess: (result) => toast.success(t('config.vector_unified_dry_run_result', {
+          memories: result.memory.total,
+          sections: result.conversation.sections,
+          media: result.media.resources,
+        })),
+        onError: (err) => toast.error(String(err)),
+      },
+    )
+  }
+
+  const running = job?.status === 'running'
+  const memoryPct = status?.memory.total
+    ? Math.round(((status.memory.embedded || 0) / status.memory.total) * 100)
+    : 100
+  const conversationPct = Math.round((status?.conversation.vector_coverage || 0) * 100)
+  const mediaPct = Math.round((status?.media.vector_coverage || 0) * 100)
+
+  return (
+    <Card className="border-primary/20">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Database className="w-4 h-4 text-primary" />
+              {t('config.vector_index_lifecycle')}
+            </CardTitle>
+            <CardDescription className="mt-1">{t('config.vector_index_lifecycle_desc')}</CardDescription>
+          </div>
+          <Button variant="ghost" size="sm" onClick={() => { void statusQuery.refetch() }} disabled={statusQuery.isFetching}>
+            <RefreshCw className={`w-4 h-4 mr-1.5 ${statusQuery.isFetching ? 'animate-spin' : ''}`} />
+            {t('common.refresh')}
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="text-xs text-muted-foreground">{t('config.vector_active_model')}</div>
+            <div className="font-mono text-sm mt-1 break-all">{status?.embedding_model || t('config.not_configured')}</div>
+          </div>
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="text-xs text-muted-foreground">{t('config.vector_generation')}</div>
+            <div className="font-mono text-sm mt-1">{status?.vector_generation ?? '—'}</div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-lg border p-3 space-y-1">
+            <div className="text-sm font-medium">Research Memory</div>
+            <div className="text-2xl font-semibold">{memoryPct}%</div>
+            <div className="text-xs text-muted-foreground">
+              {status?.memory.embedded ?? 0} / {status?.memory.total ?? 0}
+            </div>
+          </div>
+          <div className="rounded-lg border p-3 space-y-1">
+            <div className="text-sm font-medium">Conversation</div>
+            <div className="text-2xl font-semibold">{conversationPct}%</div>
+            <div className="text-xs text-muted-foreground">
+              {status?.conversation.sections_with_embedding ?? 0} / {status?.conversation.sections ?? 0} {t('config.vector_sections')}
+            </div>
+          </div>
+          <div className="rounded-lg border p-3 space-y-1">
+            <div className="text-sm font-medium">Media</div>
+            <div className="text-2xl font-semibold">{mediaPct}%</div>
+            <div className="text-xs text-muted-foreground">
+              {status?.media.resources_with_active_embedding ?? 0} / {status?.media.resources ?? 0}
+            </div>
+          </div>
+        </div>
+
+        {dryRun.data && (
+          <div className="rounded-lg border bg-muted/30 p-3 text-xs">
+            {t('config.vector_unified_dry_run_result', {
+              memories: dryRun.data.memory.total,
+              sections: dryRun.data.conversation.sections,
+              media: dryRun.data.media.resources,
+            })}
+          </div>
+        )}
+
+        {job && (
+          <div className="rounded-lg border p-3 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-medium">
+                {t('config.vector_rebuild_job')} · g{job.generation}
+              </div>
+              <Badge variant={job.status === 'running' ? 'default' : job.status === 'completed' ? 'secondary' : 'outline'}>
+                {job.status}
+              </Badge>
+            </div>
+            <div className="grid gap-2 md:grid-cols-3">
+              {Object.entries(job.subjobs).map(([name, subjob]) => {
+                const processed = subjob.completed + subjob.failed + subjob.skipped
+                const pct = subjob.total > 0 ? Math.min(100, Math.round((processed / subjob.total) * 100)) : 100
+                return (
+                  <div key={name} className="rounded bg-muted px-2 py-2 text-xs">
+                    <div className="flex justify-between gap-2"><span>{name}</span><span>{pct}%</span></div>
+                    <div className="text-muted-foreground mt-1">{processed} / {subjob.total} · {subjob.status}</div>
+                  </div>
+                )
+              })}
+            </div>
+            {job.last_error && <div className="text-xs text-destructive break-all">{job.last_error}</div>}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={runDryRun} disabled={running || dryRun.isPending}>
+            {dryRun.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+            {t('config.vector_scan_stale')}
+          </Button>
+          <Button onClick={() => startRebuild(false)} disabled={running || rebuildStart.isPending}>
+            <Play className="w-4 h-4 mr-2" />
+            {t('config.vector_rebuild_stale')}
+          </Button>
+          <Button variant="outline" onClick={() => startRebuild(true)} disabled={running || rebuildStart.isPending}>
+            <RefreshCw className="w-4 h-4 mr-2" />
+            {t('config.vector_new_generation')}
+          </Button>
+          {running && effectiveJobId && (
+            <Button variant="destructive" onClick={() => rebuildCancel.mutate(effectiveJobId)} disabled={rebuildCancel.isPending}>
+              <Square className="w-4 h-4 mr-2" />
+              {t('common.cancel')}
+            </Button>
+          )}
+        </div>
+        <div className="text-xs text-muted-foreground">{t('config.vector_generation_hint')}</div>
+        <MediaVectorizationControls />
+      </CardContent>
+    </Card>
+  )
+}
+
+function MediaVectorizationControls() {
+  const { t } = useTranslation()
+  const statusQuery = useMediaStatus()
+  const dryRun = useMediaVectorizationDryRun()
+  const start = useMediaVectorizationStart()
+  const cancel = useMediaVectorizationCancel()
+  const [jobId, setJobId] = useState<string | null>(null)
+  const effectiveJobId = jobId || statusQuery.data?.vectorization_job?.job_id || null
+  const jobQuery = useMediaVectorizationJob(effectiveJobId)
+  const job = jobQuery.data || statusQuery.data?.vectorization_job || null
+  const running = job?.status === 'running'
+  const processed = job ? job.completed + job.failed + job.skipped : 0
+  const pct = job?.total ? Math.min(100, Math.round((processed / job.total) * 100)) : 0
+
+  useEffect(() => {
+    if (!job || job.status === 'running') return
+    void statusQuery.refetch()
+  }, [job?.status, job?.job_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="border-t pt-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={running || dryRun.isPending}
+          onClick={() => dryRun.mutate({}, {
+            onSuccess: (result) => toast.success(t('config.media_dry_run_result', {
+              resources: result.resources,
+              unavailable: result.unavailable,
+            })),
+            onError: (err) => toast.error(String(err)),
+          })}
+        >
+          {t('config.media_scan_vectors')}
+        </Button>
+        <Button
+          size="sm"
+          disabled={running || start.isPending}
+          onClick={() => start.mutate({ job_timeout_seconds: 86400 }, {
+            onSuccess: (started) => {
+              setJobId(started.job_id)
+              toast.success(t('config.media_vectorization_started'))
+            },
+            onError: (err) => toast.error(String(err)),
+          })}
+        >
+          <Play className="w-3.5 h-3.5 mr-1.5" />
+          {t('config.media_start_vectors')}
+        </Button>
+        {running && effectiveJobId && (
+          <Button size="sm" variant="destructive" onClick={() => cancel.mutate(effectiveJobId)}>
+            <Square className="w-3.5 h-3.5 mr-1.5" />
+            {t('common.cancel')}
+          </Button>
+        )}
+      </div>
+      {dryRun.data && (
+        <div className="text-xs text-muted-foreground">
+          {t('config.media_dry_run_result', { resources: dryRun.data.resources, unavailable: dryRun.data.unavailable })}
+        </div>
+      )}
+      {job && (
+        <div className="space-y-1.5 text-xs">
+          <div className="flex justify-between gap-2">
+            <span>{job.status}</span>
+            <span>{processed}/{job.total} · {pct}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
+            <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+          </div>
+          {job.last_error && <div className="text-destructive break-all">{job.last_error}</div>}
+        </div>
+      )}
     </div>
   )
 }
@@ -881,6 +1140,7 @@ export function Config() {
               </Button>
             </CardContent>
           </Card>
+          <UnifiedVectorIndexSection />
           <VectorBackfillSection />
         </TabsContent>
 

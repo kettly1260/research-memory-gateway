@@ -195,9 +195,9 @@ export interface EffectiveConfig {
     media_index: {
       enabled: boolean
       index_path: string
-      embedding_version: string
       max_image_bytes: number
       shares_embedding_provider: boolean
+      vector_generation: number
       resources: number
       images: number
       embeddings: number
@@ -227,6 +227,9 @@ export interface VectorCoverageResponse {
   total: number
   embedded: number
   missing: number
+  vector_coverage?: number
+  embedding_model?: string | null
+  vector_generation?: number
 }
 
 // ─── Backfill ───
@@ -329,6 +332,7 @@ export interface ConversationStatusResponse {
   vector_coverage: number
   embedding_model?: string | null
   embedding_version?: string | null
+  vector_generation?: number | string | null
   embedding_dimension?: number | null
   source_system_distribution?: Record<string, number>
   thread_source_distribution?: Record<string, number>
@@ -340,6 +344,7 @@ export interface ConversationVectorizationDryRunResponse {
   sections: number
   embedding_model?: string | null
   embedding_version?: string | null
+  vector_generation?: number | string | null
 }
 
 export interface ConversationVectorizationJob {
@@ -359,6 +364,89 @@ export interface ConversationVectorizationJob {
   last_error?: string | null
   cancel_requested: boolean
   job_timeout_seconds: number
+}
+
+// ─── Media Vectorization ───
+
+export interface MediaStatusResponse {
+  enabled: boolean
+  error?: string
+  resources: number
+  images: number
+  embeddings: number
+  resources_with_active_embedding: number
+  resources_without_active_embedding: number
+  vector_coverage: number
+  embedding_model?: string | null
+  vector_generation?: number | string | null
+  embedding_dimension?: number | null
+  image_embedding_state?: string
+  image_embedding_last_status_code?: number | null
+  vectorization_job?: MediaVectorizationJob | null
+}
+
+export interface MediaVectorizationDryRunResponse {
+  resources: number
+  rebuildable: number
+  unavailable: number
+  embedding_model?: string | null
+  vector_generation?: number | string | null
+}
+
+export interface MediaVectorizationJob {
+  job_id: string
+  status: 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed'
+  total: number
+  completed: number
+  failed: number
+  skipped: number
+  cache_reused: number
+  unavailable: number
+  current_resource_id?: string | null
+  started_at: string
+  updated_at: string
+  last_error?: string | null
+  cancel_requested: boolean
+  job_timeout_seconds: number
+}
+
+// ─── Unified Vector Index Lifecycle ───
+
+export interface UnifiedVectorIndexStatus {
+  embedding_model?: string | null
+  vector_generation: number
+  memory: VectorCoverageResponse
+  conversation: Partial<ConversationStatusResponse> & {
+    documents: number
+    sections: number
+    vector_coverage: number
+  }
+  media: Partial<MediaStatusResponse> & {
+    resources: number
+    vector_coverage: number
+  }
+  rebuild_job?: UnifiedVectorRebuildJob | null
+}
+
+export interface UnifiedVectorRebuildDryRunResponse {
+  new_generation: boolean
+  current_generation: number
+  next_generation: number
+  memory: { total: number; memory_ids: string[] }
+  conversation: { documents: number; sections: number }
+  media: { resources: number; rebuildable: number; unavailable: number }
+}
+
+export interface UnifiedVectorRebuildJob {
+  job_id: string
+  status: 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed'
+  generation: number
+  embedding_model?: string | null
+  new_generation: boolean
+  subjobs: Record<string, BackfillJob | ConversationVectorizationJob | MediaVectorizationJob>
+  started_at: string
+  updated_at: string
+  last_error?: string | null
 }
 
 export interface ConversationSourceAnchor {

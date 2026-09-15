@@ -175,6 +175,7 @@ def test_conversations_api_status_counts(tmp_path: Path, monkeypatch) -> None:
     assert data["embedding_model"] == "bge-m3"
     assert data["embedding_dimension"] == 1024
     assert data["embedding_version"] == "v1"
+    assert data["vector_generation"] == 1
 
 
 def test_conversations_api_status_embedding_disabled(tmp_path: Path, monkeypatch) -> None:
@@ -190,6 +191,7 @@ def test_conversations_api_status_embedding_disabled(tmp_path: Path, monkeypatch
     assert data["vector_coverage"] == 0.0
     assert data["embedding_model"] is None
     assert data["embedding_version"] is None
+    assert data["vector_generation"] is None
     assert data["embedding_dimension"] is None
 
 
@@ -234,6 +236,41 @@ def test_conversation_vectorization_detects_active_model_switch(tmp_path: Path, 
     assert job["job_id"].startswith("cv_")
     assert job["total"] == 2
     assert job["total_sections"] == status_data["sections"]
+
+
+def test_conversation_vector_generation_marks_same_model_vectors_stale(tmp_path: Path, monkeypatch) -> None:
+    client, app, _, _, _, _ = setup_conversation_env(
+        tmp_path,
+        monkeypatch,
+        archive_enabled=True,
+        embedding_enabled=True,
+    )
+    token = login_webui(client)
+
+    initial = client.get("/admin/api/conversations/status")
+    assert initial.status_code == 200
+    initial_data = initial.json()
+    assert initial_data["vector_generation"] == 1
+    assert initial_data["vector_coverage"] == 1.0
+
+    generation = app.state.webui.service.advance_vector_generation(reason="same_name_weights_changed")
+    assert generation == 2
+
+    stale = client.get("/admin/api/conversations/status")
+    stale_data = stale.json()
+    assert stale_data["embedding_model"] == "bge-m3"
+    assert stale_data["vector_generation"] == 2
+    assert stale_data["sections_with_embedding"] == 0
+    assert stale_data["sections_without_embedding"] == stale_data["sections"]
+
+    dry_run = client.post(
+        "/admin/api/conversations/vectorization/dry-run",
+        headers={"x-csrf-token": token},
+        json={},
+    )
+    assert dry_run.status_code == 200
+    assert dry_run.json()["sections"] == stale_data["sections"]
+    assert dry_run.json()["vector_generation"] == 2
 
 
 def test_conversation_vectorization_manager_completes_model_switch(tmp_path: Path, monkeypatch) -> None:

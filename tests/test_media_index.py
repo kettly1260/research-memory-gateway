@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
+from research_memory_gateway.backends import SQLiteMemoryBackend
+from research_memory_gateway.config import AppConfig
 from research_memory_gateway.media_index import MediaIndexDatabase
+from research_memory_gateway.service import ResearchMemoryService
+from research_memory_gateway.webui.runtime import MediaVectorizationJob, MediaVectorizationManager
 
 
 class FakeMultimodalEmbeddingClient:
@@ -129,3 +134,62 @@ def test_media_index_does_not_prejudge_image_capability(tmp_path: Path) -> None:
     recovered_status = index.stats()
     assert recovered_status["image_embedding_state"] == "ready"
     assert recovered_status["image_embedding_last_status_code"] == 200
+
+
+def test_media_generation_reuses_legacy_v1_then_marks_new_generation_stale(tmp_path: Path) -> None:
+    client = FakeMultimodalEmbeddingClient()
+    index = MediaIndexDatabase(tmp_path / "media.sqlite", embedding_client=client, vector_generation=1)
+    image = _write_image(tmp_path / "sample.png", b"fake-png-red")
+
+    index.index_image_file(image, source_resource_id="sample")
+    assert index.embedding_version == "v1"
+    assert index.stats()["vector_coverage"] == 1.0
+    assert index.stats()["cached_blobs"] == 1
+
+    index.set_vector_generation(2)
+    assert index.embedding_version == "g2"
+    assert index.stats()["resources_with_active_embedding"] == 0
+    image.unlink()
+    candidates = index.embedding_backfill_candidates()
+    assert len(candidates) == 1
+    assert candidates[0]["rebuildable"] is True
+    assert candidates[0]["has_cached_content"] is True
+
+    rebuilt = index.reembed_resource(candidates[0]["resource_id"])
+    assert rebuilt["embedded"] is True
+    assert rebuilt["cached"] is False
+    assert index.stats()["vector_coverage"] == 1.0
+
+
+def test_media_batch_stops_after_first_permanent_image_rejection(tmp_path: Path) -> None:
+    config = AppConfig()
+    config.backend.sqlite_path = str(tmp_path / "memory.sqlite")
+    config.media_index.index_path = str(tmp_path / "media.sqlite")
+    backend = SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval)
+    working = FakeMultimodalEmbeddingClient()
+    backend.embedding_client = working
+    service = ResearchMemoryService(config, backend)
+    index = service.media_index
+
+    first = _write_image(tmp_path / "one.png", b"fake-png-one")
+    second = _write_image(tmp_path / "two.png", b"fake-png-two")
+    index.index_image_file(first, source_resource_id="one")
+    index.index_image_file(second, source_resource_id="two")
+    service.advance_vector_generation(reason="test_rejection")
+
+    rejecting = RejectingImageEmbeddingClient()
+    backend.embedding_client = rejecting
+    index.embedding_client = rejecting
+    manager = MediaVectorizationManager(service)
+    candidates = index.embedding_backfill_candidates()
+    job = MediaVectorizationJob(job_id="mv_test", total=len(candidates))
+    manager.jobs[job.job_id] = job
+    manager.running_job_id = job.job_id
+
+    asyncio.run(manager._run(job, candidates, force=False))
+
+    assert len(candidates) == 2
+    assert rejecting.image_calls == 1
+    assert job.status == "failed"
+    assert job.failed == 1
+    assert job.last_error == "image_input_rejected:http_400"

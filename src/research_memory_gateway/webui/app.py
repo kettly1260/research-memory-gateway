@@ -30,6 +30,8 @@ from .runtime import (
     ConversationVectorizationManager,
     ImportConfirmationRequired,
     ImportValidationError,
+    MediaVectorizationManager,
+    UnifiedVectorRebuildManager,
     UnsupportedImportPolicy,
     bounded_int,
     diff_json,
@@ -57,6 +59,13 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
     sessions = SessionManager(config)
     backfills = BackfillManager(service)
     conversation_vectors = ConversationVectorizationManager(service)
+    media_vectors = MediaVectorizationManager(service)
+    vector_rebuilds = UnifiedVectorRebuildManager(
+        service,
+        backfills,
+        conversation_vectors,
+        media_vectors,
+    )
     state = WebState(
         config,
         service,
@@ -67,6 +76,8 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         sessions,
         backfills,
         conversation_vectors,
+        media_vectors,
+        vector_rebuilds,
     )
 
     routes = [
@@ -96,6 +107,11 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/retrieval/backfill/start", api_backfill_start, methods=["POST"]),
         Route("/admin/api/retrieval/backfill/jobs/{job_id:str}", api_backfill_job, methods=["GET"]),
         Route("/admin/api/retrieval/backfill/jobs/{job_id:str}/cancel", api_backfill_cancel, methods=["POST"]),
+        Route("/admin/api/retrieval/vector-index/status", api_vector_index_status, methods=["GET"]),
+        Route("/admin/api/retrieval/vector-index/rebuild/dry-run", api_vector_rebuild_dry_run, methods=["POST"]),
+        Route("/admin/api/retrieval/vector-index/rebuild/start", api_vector_rebuild_start, methods=["POST"]),
+        Route("/admin/api/retrieval/vector-index/rebuild/jobs/{job_id:str}", api_vector_rebuild_job, methods=["GET"]),
+        Route("/admin/api/retrieval/vector-index/rebuild/jobs/{job_id:str}/cancel", api_vector_rebuild_cancel, methods=["POST"]),
         Route("/admin/api/import/json/validate", api_import_validate, methods=["POST"]),
         Route("/admin/api/import/json/execute", api_import_execute, methods=["POST"]),
         Route("/admin/api/export", api_export, methods=["POST"]),
@@ -109,6 +125,11 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/conversations/search", api_conversations_search, methods=["GET"]),
         Route("/admin/api/conversations/recall", api_conversations_recall, methods=["GET"]),
         Route("/admin/api/conversations/read", api_conversations_read, methods=["GET"]),
+        Route("/admin/api/media/status", api_media_status, methods=["GET"]),
+        Route("/admin/api/media/vectorization/dry-run", api_media_vectorization_dry_run, methods=["POST"]),
+        Route("/admin/api/media/vectorization/start", api_media_vectorization_start, methods=["POST"]),
+        Route("/admin/api/media/vectorization/jobs/{job_id:str}", api_media_vectorization_job, methods=["GET"]),
+        Route("/admin/api/media/vectorization/jobs/{job_id:str}/cancel", api_media_vectorization_cancel, methods=["POST"]),
         *security_routes(),
         Mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "dist" / "assets"), name="admin-assets"),
         Route("/admin/favicon.svg", serve_favicon, methods=["GET"]),
@@ -132,6 +153,8 @@ class WebState:
     sessions: "SessionManager"
     backfills: BackfillManager
     conversation_vectors: ConversationVectorizationManager
+    media_vectors: MediaVectorizationManager
+    vector_rebuilds: UnifiedVectorRebuildManager
 
 
 class SecurityMiddleware:
@@ -459,6 +482,7 @@ async def api_config_effective(request: Request) -> Response:
         "resources_with_active_embedding": 0,
         "resources_without_active_embedding": 0,
         "vector_coverage": 0.0,
+        "vector_generation": state.service.vector_generation,
         "image_embedding_state": "unknown",
         "image_embedding_last_error": None,
         "image_embedding_last_status_code": None,
@@ -470,6 +494,7 @@ async def api_config_effective(request: Request) -> Response:
         if media_index_path.exists():
             try:
                 media_status.update(state.service.media_index.stats())
+                media_status.pop("embedding_version", None)
             except Exception:
                 # Configuration/status rendering must not make the whole page
                 # unavailable if a media DB is temporarily unreadable.
@@ -497,7 +522,6 @@ async def api_config_effective(request: Request) -> Response:
         "media_index": {
             "enabled": state.config.media_index.enabled,
             "index_path": state.config.media_index.index_path,
-            "embedding_version": state.config.media_index.embedding_version,
             "max_image_bytes": state.config.media_index.max_image_bytes,
             "shares_embedding_provider": True,
             **media_status,
@@ -641,6 +665,59 @@ async def api_backfill_cancel(request: Request) -> Response:
     return JSONResponse(request.app.state.webui.backfills.cancel(request.path_params["job_id"]).as_dict())
 
 
+async def api_vector_index_status(request: Request) -> Response:
+    try:
+        return JSONResponse(request.app.state.webui.vector_rebuilds.overview())
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_vector_rebuild_dry_run(request: Request) -> Response:
+    payload = await request.json()
+    try:
+        result = request.app.state.webui.vector_rebuilds.dry_run(
+            new_generation=bool(payload.get("new_generation", False))
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return JSONResponse(result)
+
+
+async def api_vector_rebuild_start(request: Request) -> Response:
+    payload = await request.json()
+    reason = str(payload.get("reason") or "manual_rebuild").strip()[:200] or "manual_rebuild"
+    timeout = bounded_int(payload.get("job_timeout_seconds"), 60, 604800, 86400)
+    try:
+        job = request.app.state.webui.vector_rebuilds.start(
+            new_generation=bool(payload.get("new_generation", False)),
+            reason=reason,
+            job_timeout_seconds=timeout,
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return JSONResponse(job, status_code=202)
+
+
+async def api_vector_rebuild_job(request: Request) -> Response:
+    manager = request.app.state.webui.vector_rebuilds
+    job_id = request.path_params["job_id"]
+    if job_id not in manager.jobs:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(manager.get(job_id))
+
+
+async def api_vector_rebuild_cancel(request: Request) -> Response:
+    manager = request.app.state.webui.vector_rebuilds
+    job_id = request.path_params["job_id"]
+    if job_id not in manager.jobs:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(manager.cancel(job_id))
+
+
 async def api_import_validate(request: Request) -> Response:
     payload = await request.json()
     result = import_validate(request.app.state.webui.service, payload)
@@ -730,6 +807,7 @@ async def api_conversations_status(request: Request) -> Response:
                 "vector_coverage": 0.0,
                 "embedding_model": None,
                 "embedding_version": None,
+                "vector_generation": None,
                 "embedding_dimension": None,
                 "vectorization_job": None,
             },
@@ -777,6 +855,7 @@ async def api_conversations_status(request: Request) -> Response:
                 "vector_coverage": 0.0,
                 "embedding_model": None,
                 "embedding_version": None,
+                "vector_generation": None,
                 "embedding_dimension": None,
                 "vectorization_job": None,
             },
@@ -841,6 +920,94 @@ async def api_conversations_vectorization_cancel(request: Request) -> Response:
     if job_id not in state.conversation_vectors.jobs:
         return JSONResponse({"error": "not_found"}, status_code=404)
     return JSONResponse(state.conversation_vectors.cancel(job_id).as_dict())
+
+
+async def api_media_status(request: Request) -> Response:
+    state = request.app.state.webui
+    if not state.config.media_index.enabled:
+        return JSONResponse(
+            {
+                "enabled": False,
+                "resources": 0,
+                "images": 0,
+                "embeddings": 0,
+                "resources_with_active_embedding": 0,
+                "resources_without_active_embedding": 0,
+                "vector_coverage": 0.0,
+                "embedding_model": None,
+                "vector_generation": None,
+                "embedding_dimension": None,
+                "vectorization_job": None,
+            }
+        )
+    try:
+        stats = state.service.media_index.stats()
+        running_job = None
+        running_job_id = state.media_vectors.running_job_id
+        if running_job_id:
+            job = state.media_vectors.jobs.get(running_job_id)
+            if job is not None:
+                running_job = job.as_dict()
+        return JSONResponse({"enabled": True, **stats, "vectorization_job": running_job})
+    except Exception as exc:
+        return JSONResponse({"enabled": True, "error": str(exc)}, status_code=500)
+
+
+def _media_vectorization_options(payload: dict[str, Any]) -> tuple[bool, int | None, int]:
+    force = bool(payload.get("force", False))
+    raw_limit = payload.get("limit")
+    limit: int | None = None
+    if raw_limit not in (None, "", "all"):
+        limit = bounded_int(raw_limit, 1, 1000000, 1000000)
+    timeout = bounded_int(payload.get("job_timeout_seconds"), 60, 604800, 86400)
+    return force, limit, timeout
+
+
+async def api_media_vectorization_dry_run(request: Request) -> Response:
+    state = request.app.state.webui
+    if not state.config.media_index.enabled:
+        return JSONResponse({"error": "media_index_disabled"}, status_code=404)
+    force, limit, _timeout = _media_vectorization_options(await request.json())
+    try:
+        return JSONResponse(state.media_vectors.dry_run(force=force, limit=limit))
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+async def api_media_vectorization_start(request: Request) -> Response:
+    state = request.app.state.webui
+    if not state.config.media_index.enabled:
+        return JSONResponse({"error": "media_index_disabled"}, status_code=404)
+    force, limit, timeout = _media_vectorization_options(await request.json())
+    try:
+        job = state.media_vectors.start(
+            force=force,
+            limit=limit,
+            job_timeout_seconds=timeout,
+        )
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return JSONResponse(job.as_dict(), status_code=202)
+
+
+async def api_media_vectorization_job(request: Request) -> Response:
+    state = request.app.state.webui
+    job = state.media_vectors.jobs.get(request.path_params["job_id"])
+    if job is None:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(job.as_dict())
+
+
+async def api_media_vectorization_cancel(request: Request) -> Response:
+    state = request.app.state.webui
+    job_id = request.path_params["job_id"]
+    if job_id not in state.media_vectors.jobs:
+        return JSONResponse({"error": "not_found"}, status_code=404)
+    return JSONResponse(state.media_vectors.cancel(job_id).as_dict())
 
 
 async def api_conversations_search(request: Request) -> Response:

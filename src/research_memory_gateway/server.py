@@ -460,7 +460,7 @@ def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
             **(data.get("media_index", {}) if isinstance(data.get("media_index"), dict) else {}),
             "enabled": bool(config.media_index.enabled),
             "index_path": config.media_index.index_path,
-            "embedding_version": config.media_index.embedding_version,
+            "vector_generation": getattr(service, "vector_generation", None) if service is not None else None,
             "mcp_tools_enabled": bool(config.media_index.enabled),
             "shares_embedding_provider": True,
         }

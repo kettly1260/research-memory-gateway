@@ -226,7 +226,6 @@ class MediaIndexConfig(BaseModel):
 
     enabled: bool = True
     index_path: str = "./data/research-media.sqlite"
-    embedding_version: str = "v1"
     max_image_bytes: int = 32 * 1024 * 1024
 
     def resolve_index_path(self, base_dir: str | Path | None = None) -> Path:

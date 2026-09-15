@@ -192,6 +192,12 @@ import type {
   ConversationSearchResponse,
   ConversationRecallResponse,
   ConversationReadResponse,
+  MediaStatusResponse,
+  MediaVectorizationDryRunResponse,
+  MediaVectorizationJob,
+  UnifiedVectorIndexStatus,
+  UnifiedVectorRebuildDryRunResponse,
+  UnifiedVectorRebuildJob,
 } from '@/types/api'
 
 export const api = {
@@ -325,6 +331,40 @@ export const api = {
     },
     backfillCancel(jobId: string) {
       return request<BackfillJob>(`/retrieval/backfill/jobs/${jobId}/cancel`, { method: 'POST' })
+    },
+    vectorIndexStatus() {
+      return request<UnifiedVectorIndexStatus>('/retrieval/vector-index/status')
+    },
+    vectorRebuildDryRun(params: { new_generation?: boolean } = {}) {
+      return request<UnifiedVectorRebuildDryRunResponse>('/retrieval/vector-index/rebuild/dry-run', { method: 'POST', body: params })
+    },
+    vectorRebuildStart(params: { new_generation?: boolean; reason?: string; job_timeout_seconds?: number } = {}) {
+      return request<UnifiedVectorRebuildJob>('/retrieval/vector-index/rebuild/start', { method: 'POST', body: params })
+    },
+    vectorRebuildJob(jobId: string) {
+      return request<UnifiedVectorRebuildJob>(`/retrieval/vector-index/rebuild/jobs/${jobId}`)
+    },
+    vectorRebuildCancel(jobId: string) {
+      return request<UnifiedVectorRebuildJob>(`/retrieval/vector-index/rebuild/jobs/${jobId}/cancel`, { method: 'POST' })
+    },
+  },
+
+  // ─── Media Index ───
+  media: {
+    status() {
+      return request<MediaStatusResponse>('/media/status')
+    },
+    vectorizationDryRun(params: { force?: boolean; limit?: number | 'all' } = {}) {
+      return request<MediaVectorizationDryRunResponse>('/media/vectorization/dry-run', { method: 'POST', body: params })
+    },
+    vectorizationStart(params: { force?: boolean; limit?: number | 'all'; job_timeout_seconds?: number } = {}) {
+      return request<MediaVectorizationJob>('/media/vectorization/start', { method: 'POST', body: params })
+    },
+    vectorizationJob(jobId: string) {
+      return request<MediaVectorizationJob>(`/media/vectorization/jobs/${jobId}`)
+    },
+    vectorizationCancel(jobId: string) {
+      return request<MediaVectorizationJob>(`/media/vectorization/jobs/${jobId}/cancel`, { method: 'POST' })
     },
   },
 

@@ -1,6 +1,7 @@
 import pytest
 from starlette.testclient import TestClient
 
+from research_memory_gateway.backends import SQLiteMemoryBackend
 from research_memory_gateway.config import (
     AppConfig,
     AuthStore,
@@ -11,6 +12,7 @@ from research_memory_gateway.config import (
 )
 from research_memory_gateway.models import MemoryStatus
 from research_memory_gateway.nocturne import NocturneReservedConnector
+from research_memory_gateway.service import ResearchMemoryService
 from research_memory_gateway.webui.app import build_webui_app
 
 
@@ -35,6 +37,15 @@ class SlowEmbeddingClient:
 
         self.calls += 1
         time.sleep(0.05)
+        return [1.0, 0.0]
+
+
+class NamedMultimodalEmbeddingClient(FakeEmbeddingClient):
+    model = "test-multimodal"
+    last_error = None
+    last_status_code = 200
+
+    def embed_image_bytes(self, content: bytes, *, mime_type: str = "image/png") -> list[float] | None:
         return [1.0, 0.0]
 
 
@@ -148,6 +159,74 @@ def login_webui(client: TestClient) -> str:
     payload = json.loads(base64.urlsafe_b64decode(payload_b64))
 
     return payload["csrf"]
+
+
+def test_effective_config_does_not_create_media_index(tmp_path, monkeypatch) -> None:
+    client, _app = make_webui_client(tmp_path, monkeypatch)
+    login_webui(client)
+    media_path = tmp_path / "media.sqlite"
+    assert media_path.exists() is False
+
+    response = client.get("/admin/api/config/effective")
+
+    assert response.status_code == 200
+    assert response.json()["system"]["media_index"]["vector_generation"] == 1
+    assert media_path.exists() is False
+
+
+def test_unified_vector_index_status_and_generation_rebuild_api(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WEBUI_SECRET_KEY", "dev-key")
+    config = AppConfig()
+    config.backend.sqlite_path = str(tmp_path / "memory.db")
+    config.memory.require_user_confirmation = False
+    config.webui.enabled = True
+    config.webui.initial_password = "admin-pass"
+    config.webui.auth_store_path = str(tmp_path / "auth.json")
+    config.webui.web_config_path = str(tmp_path / "web_config.yaml")
+    config.webui.secret_store_path = str(tmp_path / "secrets.json.enc")
+    config.media_index.index_path = str(tmp_path / "media.sqlite")
+
+    backend = SQLiteMemoryBackend(config.backend.sqlite_path, config.retrieval)
+    backend.embedding_client = NamedMultimodalEmbeddingClient()
+    service = ResearchMemoryService(config, backend)
+    app = build_webui_app(config, service)
+    client = TestClient(app)
+    token = login_webui(client)
+
+    status = client.get("/admin/api/retrieval/vector-index/status")
+    assert status.status_code == 200
+    status_data = status.json()
+    assert status_data["embedding_model"] == "test-multimodal"
+    assert status_data["vector_generation"] == 1
+    assert status_data["memory"]["total"] == 0
+    assert status_data["conversation"]["sections"] == 0
+    assert status_data["media"]["resources"] == 0
+
+    effective = client.get("/admin/api/config/effective")
+    assert effective.status_code == 200
+    media_config = effective.json()["system"]["media_index"]
+    assert media_config["vector_generation"] == 1
+    assert "embedding_version" not in media_config
+
+    dry_run = client.post(
+        "/admin/api/retrieval/vector-index/rebuild/dry-run",
+        headers={"x-csrf-token": token},
+        json={"new_generation": True},
+    )
+    assert dry_run.status_code == 200
+    assert dry_run.json()["next_generation"] == 2
+
+    started = client.post(
+        "/admin/api/retrieval/vector-index/rebuild/start",
+        headers={"x-csrf-token": token},
+        json={"new_generation": True, "reason": "test_weight_change"},
+    )
+    assert started.status_code == 202
+    started_data = started.json()
+    assert started_data["generation"] == 2
+    assert started_data["new_generation"] is True
+    assert service.vector_generation == 2
+    assert service.media_index.vector_generation == 2
 
 
 def test_webui_login_session_csrf_and_memory_api(tmp_path, monkeypatch) -> None:

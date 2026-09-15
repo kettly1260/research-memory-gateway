@@ -78,18 +78,38 @@ class ConversationIndexDatabase:
         self,
         db_path: str | Path,
         embedding_client: EmbeddingClient | None = None,
-        embedding_version: str = "v1",
+        embedding_version: str | None = None,
+        vector_generation: int | None = None,
     ) -> None:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.embedding_client = embedding_client
-        self.embedding_version = embedding_version
+        if vector_generation is not None:
+            self.vector_generation: int | str = int(vector_generation)
+            self.embedding_version = self._generation_cache_key(int(vector_generation))
+        else:
+            # ``embedding_version`` remains as a compatibility input for old
+            # CLI/tests. Production service paths use the RMG-local generation.
+            self.embedding_version = embedding_version or "v1"
+            self.vector_generation = self.embedding_version
         self.chunker = HeadingChunker()
         self.stats_new_embeddings: int = 0
         self.stats_cache_reused: int = 0
         self.stats_failures: int = 0
         self.stats_dimension_mismatches: int = 0
         self._init_db()
+
+    def set_vector_generation(self, generation: int) -> None:
+        """Switch the active local index generation without touching providers."""
+        self.vector_generation = int(generation)
+        self.embedding_version = self._generation_cache_key(int(generation))
+
+    @staticmethod
+    def _generation_cache_key(generation: int) -> str:
+        # Generation 1 adopts the pre-generation v1 cache so upgrades do not
+        # needlessly re-embed trustworthy Conversation vectors that already
+        # carry an explicit model identity. New generations use RMG-local keys.
+        return "v1" if generation == 1 else f"g{generation}"
 
     def reset_embedding_stats(self) -> None:
         self.stats_new_embeddings = 0
@@ -166,6 +186,7 @@ class ConversationIndexDatabase:
                 "vector_coverage": vector_coverage,
                 "embedding_model": active_model,
                 "embedding_version": active_version,
+                "vector_generation": self.vector_generation if active_model else None,
                 "embedding_dimension": active_dim,
                 "source_system_distribution": source_system_distribution,
                 "thread_source_distribution": thread_source_distribution,
