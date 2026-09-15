@@ -198,6 +198,17 @@ export interface EffectiveConfig {
       embedding_version: string
       max_image_bytes: number
       shares_embedding_provider: boolean
+      resources: number
+      images: number
+      embeddings: number
+      resources_with_active_embedding: number
+      resources_without_active_embedding: number
+      vector_coverage: number
+      image_embedding_state: 'unknown' | 'ready' | 'image_input_rejected' | 'error' | 'status_unavailable'
+      image_embedding_last_error: string | null
+      image_embedding_last_status_code: number | null
+      image_embedding_last_model: string | null
+      image_embedding_last_attempt_at: string | null
     }
     upload: {
       enabled: boolean

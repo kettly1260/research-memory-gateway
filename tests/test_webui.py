@@ -129,6 +129,7 @@ def make_webui_client(tmp_path, monkeypatch, *, secret_key: str | None = "dev-ke
     config.webui.auth_store_path = str(tmp_path / "auth.json")
     config.webui.web_config_path = str(tmp_path / "web_config.yaml")
     config.webui.secret_store_path = str(tmp_path / "secrets.json.enc")
+    config.media_index.index_path = str(tmp_path / "media.sqlite")
     app = build_webui_app(config)
     client = TestClient(app)
     return client, app
@@ -275,7 +276,7 @@ def test_webui_proposal_batch_review_and_save(tmp_path, monkeypatch) -> None:
 
 
 def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> None:
-    client, _app = make_webui_client(tmp_path, monkeypatch)
+    client, app = make_webui_client(tmp_path, monkeypatch)
     token = login_webui(client)
     patched = client.patch(
         "/admin/api/config/web-config",
@@ -287,6 +288,13 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
         headers={"x-csrf-token": token},
         json={"embedding.api_key": "plain-secret"},
     )
+    app.state.webui.service.media_index._state_set(
+        image_embedding_state="image_input_rejected",
+        image_embedding_last_error="http_error",
+        image_embedding_last_status_code=415,
+        image_embedding_last_model="test-model",
+        image_embedding_last_attempt_at="2026-09-15T00:00:00+00:00",
+    )
     effective = client.get("/admin/api/config/effective").json()
 
     assert patched.status_code == 200
@@ -296,6 +304,8 @@ def test_webui_config_secret_masking_and_env_override(tmp_path, monkeypatch) -> 
     assert effective["system"]["conversation_archive"]["enabled"] is False
     assert effective["system"]["media_index"]["enabled"] is True
     assert effective["system"]["media_index"]["shares_embedding_provider"] is True
+    assert effective["system"]["media_index"]["image_embedding_state"] == "image_input_rejected"
+    assert effective["system"]["media_index"]["image_embedding_last_status_code"] == 415
     assert effective["system"]["upload"]["configured_enabled"] is True
     assert effective["system"]["upload"]["enabled"] is True
     assert effective["system"]["upload"]["mcp_tools_enabled"] is False

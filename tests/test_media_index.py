@@ -117,3 +117,15 @@ def test_media_index_does_not_prejudge_image_capability(tmp_path: Path) -> None:
     assert status["resources"] == 1
     assert status["embeddings"] == 0
     assert status["vector_coverage"] == 0.0
+    assert status["image_embedding_state"] == "image_input_rejected"
+    assert status["image_embedding_last_status_code"] == 400
+
+    # A later successful image request clears the warning without maintaining
+    # any static model capability table.
+    working_client = FakeMultimodalEmbeddingClient()
+    index.embedding_client = working_client
+    recovered = index.index_image_file(image, source_resource_id="sample")
+    assert recovered["embedded"] is True
+    recovered_status = index.stats()
+    assert recovered_status["image_embedding_state"] == "ready"
+    assert recovered_status["image_embedding_last_status_code"] == 200

@@ -452,6 +452,28 @@ async def api_diff(request: Request) -> Response:
 async def api_config_effective(request: Request) -> Response:
     state = request.app.state.webui
     effective = _redact_effective(state.resolver.effective())
+    media_status: dict[str, Any] = {
+        "resources": 0,
+        "images": 0,
+        "embeddings": 0,
+        "resources_with_active_embedding": 0,
+        "resources_without_active_embedding": 0,
+        "vector_coverage": 0.0,
+        "image_embedding_state": "unknown",
+        "image_embedding_last_error": None,
+        "image_embedding_last_status_code": None,
+        "image_embedding_last_model": None,
+        "image_embedding_last_attempt_at": None,
+    }
+    if state.config.media_index.enabled:
+        media_index_path = state.config.media_index.resolve_index_path()
+        if media_index_path.exists():
+            try:
+                media_status.update(state.service.media_index.stats())
+            except Exception:
+                # Configuration/status rendering must not make the whole page
+                # unavailable if a media DB is temporarily unreadable.
+                media_status["image_embedding_state"] = "status_unavailable"
     effective["system"] = {
         "server": {
             "host": state.config.server.host,
@@ -478,6 +500,7 @@ async def api_config_effective(request: Request) -> Response:
             "embedding_version": state.config.media_index.embedding_version,
             "max_image_bytes": state.config.media_index.max_image_bytes,
             "shares_embedding_provider": True,
+            **media_status,
         },
         "upload": {
             "enabled": state.config.upload.enabled,

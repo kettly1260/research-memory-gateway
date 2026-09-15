@@ -2,6 +2,7 @@ import json
 import sqlite3
 
 import anyio
+import httpx
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import Response
@@ -319,6 +320,88 @@ def test_embedding_client_image_uses_same_endpoint_and_input_field(monkeypatch) 
     payload = FakeClient.payloads[0]
     assert payload["model"] == "shared-multimodal-model"
     assert payload["input"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.parametrize("status_code", [400, 415, 422])
+def test_embedding_client_does_not_retry_permanent_image_4xx(monkeypatch, status_code: int) -> None:
+    class FakeResponse:
+        def __init__(self, code: int) -> None:
+            self.status_code = code
+
+        def raise_for_status(self) -> None:
+            request = httpx.Request("POST", "http://models.local/v1/embeddings")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError("permanent client error", request=request, response=response)
+
+        def json(self) -> dict:
+            return {}
+
+    class FakeClient:
+        calls: list[str] = []
+
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            type(self).calls.append(url)
+            return FakeResponse(status_code)
+
+    monkeypatch.setattr("research_memory_gateway.retrieval.httpx.Client", FakeClient)
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            enabled=True,
+            base_url="http://models.local/v1",
+            endpoint_path="/embeddings",
+            max_retries=3,
+        )
+    )
+
+    vector = client.embed_image_bytes(b"not-supported", mime_type="image/png")
+
+    assert vector is None
+    assert FakeClient.calls == ["http://models.local/v1/embeddings"]
+    assert client.last_status_code == status_code
+
+
+def test_embedding_client_retries_transient_429(monkeypatch) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                request = httpx.Request("POST", "http://models.local/v1/embeddings")
+                response = httpx.Response(self.status_code, request=request)
+                raise httpx.HTTPStatusError("transient", request=request, response=response)
+
+        def json(self) -> dict:
+            return {"data": [{"embedding": [0.1, 0.9]}]}
+
+    class FakeClient:
+        calls = 0
+
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            type(self).calls += 1
+            return FakeResponse(429 if type(self).calls == 1 else 200)
+
+    monkeypatch.setattr("research_memory_gateway.retrieval.httpx.Client", FakeClient)
+    monkeypatch.setattr("research_memory_gateway.retrieval.time.sleep", lambda _seconds: None)
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            enabled=True,
+            base_url="http://models.local/v1",
+            endpoint_path="/embeddings",
+            max_retries=1,
+        )
+    )
+
+    vector = client.embed("retry me")
+
+    assert vector == [0.1, 0.9]
+    assert FakeClient.calls == 2
 
 
 def test_rerank_client_extracts_results_index_relevance_score() -> None:

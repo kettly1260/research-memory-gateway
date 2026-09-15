@@ -18,6 +18,17 @@ from .config import EmbeddingConfig, RerankConfig
 logger = getLogger(__name__)
 
 
+def _is_retryable_http_status(status_code: int) -> bool:
+    """Retry only transient provider failures.
+
+    Permanent client errors (including unsupported input/media types such as
+    400/415/422) must fail immediately so a model that does not accept an
+    image is not hammered repeatedly.  404 path fallback is handled
+    separately by ``EmbeddingClient._post_json``.
+    """
+    return status_code in {HTTPStatus.REQUEST_TIMEOUT, HTTPStatus.TOO_MANY_REQUESTS} or 500 <= status_code < 600
+
+
 class RetrievalFailureReason(str, Enum):
     DISABLED = "disabled"
     NOT_CONFIGURED = "not_configured"
@@ -177,25 +188,49 @@ class EmbeddingClient:
     def _post_json(self, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any] | None:
         attempts = max(1, self.config.max_retries + 1)
         last_exception: Exception | None = None
+        candidate_urls = self._candidate_urls()
         for attempt in range(attempts):
             client = self._get_client()
-            for url in self._candidate_urls():
+            retry_attempt = False
+            for index, url in enumerate(candidate_urls):
                 try:
                     response = client.post(url, json=payload, headers=headers)
                     self.last_status_code = response.status_code
-                    if response.status_code == HTTPStatus.NOT_FOUND and url != self._candidate_urls()[-1]:
+                    if response.status_code == HTTPStatus.NOT_FOUND and index + 1 < len(candidate_urls):
                         continue
                     response.raise_for_status()
                     data = response.json()
                     if not isinstance(data, dict):
                         raise ValueError("JSON response is not an object")
                     return data
-                except (httpx.HTTPError, ValueError) as exc:
+                except httpx.HTTPStatusError as exc:
                     last_exception = exc
-                    if isinstance(exc, (httpx.RequestError, httpx.TimeoutException)):
-                        self.close()
-            if attempt + 1 < attempts:
+                    status_code = exc.response.status_code
+                    self.last_status_code = status_code
+                    if not _is_retryable_http_status(status_code):
+                        self.last_error = RetrievalFailureReason.HTTP_ERROR.value
+                        logger.warning(
+                            "Embedding request failed without retry (HTTP %s): %s",
+                            status_code,
+                            exc,
+                        )
+                        return None
+                    retry_attempt = True
+                    break
+                except httpx.RequestError as exc:
+                    last_exception = exc
+                    self.close()
+                    retry_attempt = True
+                    break
+                except ValueError as exc:
+                    self.last_error = RetrievalFailureReason.INVALID_RESPONSE.value
+                    logger.warning("Embedding response was invalid; not retrying: %s", exc)
+                    return None
+            if retry_attempt and attempt + 1 < attempts:
                 time.sleep(min(0.1 * (attempt + 1), 0.5))
+                continue
+            if retry_attempt:
+                break
 
         self.last_error = RetrievalFailureReason.HTTP_ERROR.value
         logger.warning("Embedding request failed after %s attempt(s): %s", attempts, last_exception)
@@ -300,8 +335,24 @@ class RerankClient:
                 if not isinstance(data, dict):
                     raise ValueError("JSON response is not an object")
                 return data
-            except (httpx.HTTPError, ValueError) as exc:
+            except httpx.HTTPStatusError as exc:
                 last_exception = exc
+                status_code = exc.response.status_code
+                self.last_status_code = status_code
+                if not _is_retryable_http_status(status_code):
+                    self.last_error = RetrievalFailureReason.HTTP_ERROR.value
+                    logger.warning(
+                        "Rerank request failed without retry (HTTP %s): %s",
+                        status_code,
+                        exc,
+                    )
+                    return None
+            except httpx.RequestError as exc:
+                last_exception = exc
+            except ValueError as exc:
+                self.last_error = RetrievalFailureReason.INVALID_RESPONSE.value
+                logger.warning("Rerank response was invalid; not retrying: %s", exc)
+                return None
             if attempt + 1 < attempts:
                 time.sleep(min(0.1 * (attempt + 1), 0.5))
 

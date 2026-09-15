@@ -783,6 +783,33 @@ export function Config() {
                     </div>
                   </div>
                 </div>
+                <div className="grid gap-3 md:grid-cols-4 text-xs">
+                  <div className="rounded bg-muted px-2 py-1.5">
+                    {t('config.media_resources')}: {config.system.media_index.resources}
+                  </div>
+                  <div className="rounded bg-muted px-2 py-1.5">
+                    {t('config.media_images')}: {config.system.media_index.images}
+                  </div>
+                  <div className="rounded bg-muted px-2 py-1.5">
+                    {t('config.media_vectors')}: {config.system.media_index.embeddings}
+                  </div>
+                  <div className="rounded bg-muted px-2 py-1.5">
+                    {t('config.media_vector_coverage')}: {(config.system.media_index.vector_coverage * 100).toFixed(1)}%
+                  </div>
+                </div>
+                {config.system.media_index.image_embedding_state === 'image_input_rejected' && (
+                  <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+                    <div>
+                      <div className="font-medium text-foreground">{t('config.media_image_rejected_title')}</div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {t('config.media_image_rejected_desc', {
+                          status: config.system.media_index.image_embedding_last_status_code ?? '4xx',
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="rounded-lg border p-4 space-y-3">

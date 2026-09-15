@@ -122,6 +122,60 @@ class MediaIndexDatabase:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_media_embeddings_model ON media_embeddings(model, version)"
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS media_index_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+
+    def _state_get(self, key: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM media_index_state WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return str(row["value"]) if row is not None else None
+
+    def _state_set(self, **values: str | int | None) -> None:
+        with self._connect() as connection:
+            for key, value in values.items():
+                if value is None:
+                    connection.execute("DELETE FROM media_index_state WHERE key = ?", (key,))
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO media_index_state(key, value) VALUES (?, ?)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                        """,
+                        (key, str(value)),
+                    )
+
+    def _record_image_embedding_result(self, *, success: bool) -> None:
+        client = self.embedding_client
+        status_code = client.last_status_code if client is not None else None
+        error = client.last_error if client is not None else None
+        if success:
+            state = "ready"
+            error = None
+            status_code = 200 if status_code is None else status_code
+        elif status_code in {400, 415, 422}:
+            # This is deliberately phrased as a downstream rejection rather
+            # than a model-capability verdict. The configured provider/model
+            # may be changed at any time without RMG maintaining a capability
+            # registry.
+            state = "image_input_rejected"
+        else:
+            state = "error"
+        self._state_set(
+            image_embedding_state=state,
+            image_embedding_last_error=error,
+            image_embedding_last_status_code=status_code,
+            image_embedding_last_model=(client.model if client is not None else ""),
+            image_embedding_last_attempt_at=_utc_now(),
+        )
 
     def stats(self) -> dict[str, Any]:
         client = self.embedding_client
@@ -168,6 +222,15 @@ class MediaIndexDatabase:
             "embedding_model": active_model,
             "embedding_version": active_version,
             "embedding_dimension": dimension,
+            "image_embedding_state": self._state_get("image_embedding_state") or "unknown",
+            "image_embedding_last_error": self._state_get("image_embedding_last_error"),
+            "image_embedding_last_status_code": (
+                int(status_code)
+                if (status_code := self._state_get("image_embedding_last_status_code"))
+                else None
+            ),
+            "image_embedding_last_model": self._state_get("image_embedding_last_model"),
+            "image_embedding_last_attempt_at": self._state_get("image_embedding_last_attempt_at"),
         }
 
     def index_image_file(
@@ -315,6 +378,7 @@ class MediaIndexDatabase:
 
         vector = client.embed_image_bytes(content, mime_type=mime_type)
         if not vector:
+            self._record_image_embedding_result(success=False)
             return {
                 "resource_id": resource_id,
                 "content_hash": content_hash,
@@ -325,6 +389,8 @@ class MediaIndexDatabase:
                 "model": model,
                 "version": version,
             }
+
+        self._record_image_embedding_result(success=True)
 
         with self._connect() as connection:
             existing_dim = connection.execute(
@@ -401,6 +467,10 @@ class MediaIndexDatabase:
                 raise ValueError(f"Unsupported media type for image query: {mime_type}")
             query_vector = client.embed_image_bytes(path.read_bytes(), mime_type=mime_type)
             query_kind = "image"
+            if query_vector:
+                self._record_image_embedding_result(success=True)
+            else:
+                self._record_image_embedding_result(success=False)
         else:
             query_vector = client.embed((query or "").strip())
             query_kind = "text"
