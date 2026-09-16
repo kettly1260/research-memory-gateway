@@ -39,7 +39,7 @@ class EmbeddingConfig(BaseModel):
     api_key: SecretStr | None = None
     model: str | None = None
     endpoint_path: str = "/embeddings"
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 300.0
     max_retries: int = 1
 
 
