@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 
 import anyio
 import httpx
@@ -460,6 +461,92 @@ def test_embedding_client_retries_transient_429(monkeypatch) -> None:
 
     assert vector == [0.1, 0.9]
     assert FakeClient.calls == 2
+
+
+def test_embedding_client_uses_thread_local_http_clients(monkeypatch) -> None:
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"embedding": [0.2, 0.8]}]}
+
+    barrier = threading.Barrier(2)
+
+    class FakeClient:
+        instances: list["FakeClient"] = []
+
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+            self.owner_thread = threading.get_ident()
+            self.is_closed = False
+            type(self).instances.append(self)
+
+        def post(self, url: str, json: dict, headers: dict) -> FakeResponse:
+            assert self.owner_thread == threading.get_ident()
+            barrier.wait(timeout=5)
+            return FakeResponse()
+
+        def close(self) -> None:
+            assert self.owner_thread == threading.get_ident()
+            self.is_closed = True
+
+    monkeypatch.setattr("research_memory_gateway.retrieval.httpx.Client", FakeClient)
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            enabled=True,
+            base_url="http://models.local/v1",
+            model="embedding-model",
+            max_retries=0,
+        )
+    )
+    results: list[list[float] | None] = [None, None]
+
+    def worker(index: int) -> None:
+        results[index] = client.embed(f"query-{index}")
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert results == [[0.2, 0.8], [0.2, 0.8]]
+    assert len(FakeClient.instances) == 2
+    assert len({instance.owner_thread for instance in FakeClient.instances}) == 2
+
+
+def test_embedding_client_does_not_retry_read_timeout(monkeypatch) -> None:
+    class FakeClient:
+        calls = 0
+
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+            self.is_closed = False
+
+        def post(self, url: str, json: dict, headers: dict):
+            type(self).calls += 1
+            request = httpx.Request("POST", url)
+            raise httpx.ReadTimeout("slow inference", request=request)
+
+        def close(self) -> None:
+            self.is_closed = True
+
+    monkeypatch.setattr("research_memory_gateway.retrieval.httpx.Client", FakeClient)
+    client = EmbeddingClient(
+        EmbeddingConfig(
+            enabled=True,
+            base_url="http://models.local/v1",
+            model="embedding-model",
+            max_retries=3,
+        )
+    )
+
+    assert client.embed("long query") is None
+    assert FakeClient.calls == 1
+    assert client.last_error == "http_error"
 
 
 def test_rerank_client_extracts_results_index_relevance_score() -> None:

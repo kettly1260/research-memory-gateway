@@ -3,8 +3,9 @@ from __future__ import annotations
 import base64
 import math
 import os
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from http import HTTPStatus
 from logging import getLogger
@@ -55,7 +56,7 @@ class EmbeddingClient:
     last_error: str | None = None
     last_status_code: int | None = None
     last_vector_dimensions: int | None = None
-    _client: Any = None
+    _client_local: Any = field(default_factory=threading.local, repr=False)
 
     @property
     def enabled(self) -> bool:
@@ -172,18 +173,26 @@ class EmbeddingClient:
         return candidates
 
     def _get_client(self) -> Any:
-        if self._client is None or getattr(self._client, "is_closed", False):
-            self._client = httpx.Client(timeout=self.config.timeout_seconds)
-        return self._client
+        client = getattr(self._client_local, "client", None)
+        if client is None or getattr(client, "is_closed", False):
+            client = httpx.Client(timeout=self.config.timeout_seconds)
+            self._client_local.client = client
+        return client
 
     def close(self) -> None:
-        if self._client is not None:
-            if hasattr(self._client, "close"):
+        # Embedding calls may run concurrently in asyncio.to_thread(). A
+        # process-wide shared httpx.Client lets one timeout close sockets that
+        # another worker is still using, producing Bad file descriptor errors.
+        # Keep one client per worker thread and only close the current thread's
+        # client here.
+        client = getattr(self._client_local, "client", None)
+        if client is not None:
+            if hasattr(client, "close"):
                 try:
-                    self._client.close()
+                    client.close()
                 except Exception:
                     pass
-            self._client = None
+            self._client_local.client = None
 
     def _post_json(self, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any] | None:
         attempts = max(1, self.config.max_retries + 1)
@@ -217,6 +226,16 @@ class EmbeddingClient:
                         return None
                     retry_attempt = True
                     break
+                except httpx.ReadTimeout as exc:
+                    # A read timeout means the inference may still be running
+                    # server-side. Retrying the same payload immediately can
+                    # duplicate expensive long-text work and amplify queue
+                    # pressure, so fail this logical request without retrying.
+                    last_exception = exc
+                    self.close()
+                    self.last_error = RetrievalFailureReason.HTTP_ERROR.value
+                    logger.warning("Embedding request timed out; not retrying in-flight inference: %s", exc)
+                    return None
                 except httpx.RequestError as exc:
                     last_exception = exc
                     self.close()

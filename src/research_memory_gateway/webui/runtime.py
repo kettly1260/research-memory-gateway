@@ -182,7 +182,7 @@ class BackfillJob:
     cancel_requested: bool = False
     batch_size: int = 8
     concurrency: int = 2
-    request_timeout_seconds: int = 30
+    request_timeout_seconds: int = 300
     job_timeout_seconds: int = 1800
 
     def as_dict(self) -> dict[str, Any]:
@@ -222,7 +222,7 @@ class BackfillManager:
             job_id=f"bf_{secrets.token_hex(8)}",
             batch_size=bounded_int(options.get("batch_size"), 1, 32, 8),
             concurrency=bounded_int(options.get("concurrency"), 1, 4, 2),
-            request_timeout_seconds=bounded_int(options.get("request_timeout_seconds"), 5, 120, 30),
+            request_timeout_seconds=bounded_int(options.get("request_timeout_seconds"), 5, 900, 300),
             job_timeout_seconds=bounded_int(options.get("job_timeout_seconds"), 60, 86400, 1800),
         )
         self.jobs[job.job_id] = job
@@ -870,7 +870,7 @@ class UnifiedVectorRebuildManager:
                     "force": False,
                     "concurrency": 2,
                     "batch_size": 8,
-                    "request_timeout_seconds": 30,
+                    "request_timeout_seconds": 300,
                     "job_timeout_seconds": min(job_timeout_seconds, 86400),
                 }
             )
@@ -984,8 +984,8 @@ def validate_backfill_options(payload: dict[str, Any]) -> dict[str, Any]:
     data["request_timeout_seconds"] = bounded_int(
         data.get("request_timeout_seconds"),
         5,
-        120,
-        30,
+        900,
+        300,
     )
     data["job_timeout_seconds"] = bounded_int(data.get("job_timeout_seconds"), 60, 86400, 1800)
     return data
