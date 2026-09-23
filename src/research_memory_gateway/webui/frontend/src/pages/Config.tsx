@@ -462,7 +462,7 @@ function MediaVectorizationControls() {
   )
 }
 
-function VectorBackfillSection() {
+function VectorBackfillSection({ defaultRequestTimeout }: { defaultRequestTimeout: number }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const { data: coverage, isLoading: isCoverageLoading, refetch: refetchCoverage } = useVectorCoverage()
@@ -483,7 +483,7 @@ function VectorBackfillSection() {
   // Advanced options states
   const [concurrency, setConcurrency] = useState<number>(2)
   const [batchSize, setBatchSize] = useState<number>(8)
-  const [requestTimeout, setRequestTimeout] = useState<number>(30)
+  const [requestTimeout, setRequestTimeout] = useState<number>(defaultRequestTimeout)
   const [jobTimeout, setJobTimeout] = useState<number>(1800)
 
   // Job states
@@ -770,10 +770,10 @@ function VectorBackfillSection() {
                   <Input
                     type="number"
                     min={5}
-                    max={120}
+                    max={900}
                     className="h-8 text-xs"
                     value={requestTimeout}
-                    onChange={(e) => { setRequestTimeout(parseInt(e.target.value, 10) || 30) }}
+                    onChange={(e) => { setRequestTimeout(parseInt(e.target.value, 10) || defaultRequestTimeout) }}
                   />
                 </div>
 
@@ -1141,7 +1141,7 @@ export function Config() {
             </CardContent>
           </Card>
           <UnifiedVectorIndexSection />
-          <VectorBackfillSection />
+          <VectorBackfillSection defaultRequestTimeout={config.backfill.default_request_timeout_seconds} />
         </TabsContent>
 
         <TabsContent value="embedding" className="mt-4">

@@ -14,6 +14,7 @@ from research_memory_gateway.models import MemoryStatus
 from research_memory_gateway.nocturne import NocturneReservedConnector
 from research_memory_gateway.service import ResearchMemoryService
 from research_memory_gateway.webui.app import build_webui_app
+from research_memory_gateway.webui.runtime import validate_backfill_options
 
 
 class FakeEmbeddingClient:
@@ -47,6 +48,13 @@ class NamedMultimodalEmbeddingClient(FakeEmbeddingClient):
 
     def embed_image_bytes(self, content: bytes, *, mime_type: str = "image/png") -> list[float] | None:
         return [1.0, 0.0]
+
+
+def test_backfill_timeout_defaults_match_long_inference_budget() -> None:
+    assert WebRuntimeConfig().backfill.default_request_timeout_seconds == 300
+    assert validate_backfill_options({})["request_timeout_seconds"] == 300
+    assert validate_backfill_options({"request_timeout_seconds": 900})["request_timeout_seconds"] == 900
+    assert validate_backfill_options({"request_timeout_seconds": 901})["request_timeout_seconds"] == 900
 
 
 def test_auth_store_bootstraps_and_initial_password_stops_applying(tmp_path) -> None:

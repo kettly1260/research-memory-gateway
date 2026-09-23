@@ -172,6 +172,13 @@ export interface EffectiveConfig {
     token: ConfigValue
     [key: string]: ConfigValue
   }
+  backfill: {
+    default_scope: string
+    default_batch_size: number
+    default_concurrency: number
+    default_request_timeout_seconds: number
+    default_job_timeout_seconds: number
+  }
   system: {
     server: {
       host: string

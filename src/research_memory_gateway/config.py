@@ -97,7 +97,7 @@ class WebRuntimeBackfillConfig(BaseModel):
     default_scope: str = "active"
     default_batch_size: int = 8
     default_concurrency: int = 2
-    default_request_timeout_seconds: int = 30
+    default_request_timeout_seconds: int = 300
     default_job_timeout_seconds: int = 1800
 
 

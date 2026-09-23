@@ -329,7 +329,7 @@ backfill:
   default_scope: active
   default_batch_size: 8
   default_concurrency: 2
-  default_request_timeout_seconds: 30
+  default_request_timeout_seconds: 300
   default_job_timeout_seconds: 1800
 ```
 
@@ -824,7 +824,7 @@ start 支持：
   "limit": 100,
   "batch_size": 8,
   "concurrency": 2,
-  "request_timeout_seconds": 30,
+  "request_timeout_seconds": 300,
   "job_timeout_seconds": 1800
 }
 ```
@@ -834,7 +834,7 @@ start 支持：
 ```text
 concurrency: 1-4
 batch_size: 1-32
-request_timeout_seconds: 5-120
+request_timeout_seconds: 5-900
 job_timeout_seconds: 60-86400
 limit: bounded unless explicit all
 ```
