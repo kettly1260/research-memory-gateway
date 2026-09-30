@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kettly1260/research-memory-gateway/schemas/conversation-ingest-v1.json",
+  "title": "Research Memory Gateway conversation ingest protocol",
+  "description": "Language-neutral wire contract for the non-MCP conversation ingest API. Mirror of src/research_memory_gateway/ingest/schema.py (server) and bridge/src/event.rs (client). schema_version is explicit in every payload; unknown versions are rejected, never silently reinterpreted.",
+  "x-schema-version": 1,
+  "$defs": {
+    "EventType": {
+      "type": "string",
+      "description": "Canonical normalized event type. Adapters map provider-native events onto this vocabulary; the gateway never sees provider event names.",
+      "enum": [
+        "session_start",
+        "user_prompt",
+        "assistant_message",
+        "system_message",
+        "tool_call",
+        "tool_result",
+        "turn_end",
+        "session_end"
+      ]
+    },
+    "Role": {
+      "type": "string",
+      "enum": ["user", "assistant", "system", "tool"]
+    },
+    "RejectionCode": {
+      "type": "string",
+      "description": "Stable, machine-readable rejection reason. Clients must switch on this value, never on the human-readable message.",
+      "enum": [
+        "unsupported_schema_version",
+        "invalid_payload",
+        "missing_required_field",
+        "invalid_event_type",
+        "invalid_role",
+        "content_too_large",
+        "metadata_too_large",
+        "event_id_conflict",
+        "session_id_mismatch",
+        "ingest_disabled",
+        "archive_write_failed",
+        "internal_error"
+      ]
+    },
+    "IngestEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "source_system", "event_type"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 256,
+          "description": "End-to-end idempotency key. Stable for a given logical event across replays."
+        },
+        "schema_version": {"type": "integer", "const": 1},
+        "source_system": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_account_namespace": {"type": "string", "maxLength": 512},
+        "session_id": {"type": "string", "maxLength": 512},
+        "conversation_id": {"type": "string", "maxLength": 512},
+        "thread_id": {"type": "string", "maxLength": 512},
+        "branch_id": {"type": "string", "maxLength": 512},
+        "message_id": {"type": "string", "maxLength": 512},
+        "turn_id": {"type": "string", "maxLength": 512},
+        "event_type": {"$ref": "#/$defs/EventType"},
+        "role": {"$ref": "#/$defs/Role"},
+        "content": {"type": "string"},
+        "timestamp": {"type": "string", "maxLength": 64},
+        "metadata": {"type": "object"}
+      }
+    },
+    "BatchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "events"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "client_id": {"type": "string", "maxLength": 512},
+        "events": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {"$ref": "#/$defs/IngestEvent"}
+        }
+      }
+    },
+    "RejectedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code"],
+      "properties": {
+        "event_id": {"type": "string"},
+        "code": {"$ref": "#/$defs/RejectionCode"},
+        "message": {"type": "string"}
+      }
+    },
+    "BatchResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "accepted", "duplicates", "rejected", "session"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "accepted": {"type": "array", "items": {"type": "string"}},
+        "duplicates": {"type": "array", "items": {"type": "string"}},
+        "rejected": {"type": "array", "items": {"$ref": "#/$defs/RejectedEvent"}},
+        "session": {"type": ["object", "null"]}
+      }
+    },
+    "SessionEndRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "source_system"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "client_id": {"type": "string", "maxLength": 512},
+        "source_system": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_account_namespace": {"type": "string", "maxLength": 512},
+        "session_id": {"type": "string", "maxLength": 512},
+        "conversation_id": {"type": "string", "maxLength": 512},
+        "thread_id": {"type": "string", "maxLength": 512},
+        "branch_id": {"type": "string", "maxLength": 512},
+        "last_message_id": {"type": "string", "maxLength": 512},
+        "observed_message_count": {"type": "integer", "minimum": 0},
+        "ended_at": {"type": "string", "maxLength": 64}
+      }
+    },
+    "SnapshotMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role"],
+      "properties": {
+        "message_id": {"type": "string", "maxLength": 512},
+        "turn_id": {"type": "string", "maxLength": 512},
+        "role": {"$ref": "#/$defs/Role"},
+        "content": {"type": "string"},
+        "timestamp": {"type": "string", "maxLength": 64},
+        "event_id": {"type": "string", "maxLength": 256}
+      }
+    },
+    "SnapshotRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "source_system", "messages"],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "client_id": {"type": "string", "maxLength": 512},
+        "source_system": {"type": "string", "minLength": 1, "maxLength": 64},
+        "source_account_namespace": {"type": "string", "maxLength": 512},
+        "session_id": {"type": "string", "maxLength": 512},
+        "conversation_id": {"type": "string", "maxLength": 512},
+        "thread_id": {"type": "string", "maxLength": 512},
+        "branch_id": {"type": "string", "maxLength": 512},
+        "title": {"type": "string", "maxLength": 512},
+        "model": {"type": "string", "maxLength": 512},
+        "messages": {"type": "array", "items": {"$ref": "#/$defs/SnapshotMessage"}},
+        "metadata": {"type": "object"},
+        "ended": {"type": "boolean"}
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/BatchRequest"},
+    {"$ref": "#/$defs/BatchResponse"},
+    {"$ref": "#/$defs/SessionEndRequest"},
+    {"$ref": "#/$defs/SnapshotRequest"}
+  ]
+}

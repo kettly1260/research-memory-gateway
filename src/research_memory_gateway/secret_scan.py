@@ -54,7 +54,8 @@ _URL_USERINFO_RE = re.compile(
 _LABELED_SECRET_RE = re.compile(
     r"(?P<label>\b(?:api[ _-]?(?:key|token)|auth(?:entication)?[ _-]?token|token|"
     r"access[ _-]?token|refresh[ _-]?token|"
-    r"password|passwd|pwd|secret|authorization|cookie|session(?:[ _-]?(?:id|token|key))?|"
+    r"password|passwd|pwd|secret[ _-]?access[ _-]?key|secret|authorization|cookie|"
+    r"session(?:[ _-]?(?:id|token|key))?|"
     r"connection[ _-]?string|private[ _-]?key|aws[ _-]?secret[ _-]?access[ _-]?key)\b)"
     r"(?P<sep>\s*(?:(?:is|=|:|：)\s*)?)"
     r"(?P<quote>[\"']?)(?P<value>[^\s,;，；\"']{6,})(?P=quote)",

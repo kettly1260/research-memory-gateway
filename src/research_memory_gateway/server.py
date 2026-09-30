@@ -436,6 +436,24 @@ def _mount_uploads_if_enabled(app: Starlette, config: AppConfig, mcp: MCPServer)
             app.mount(config.upload.upload_path, tus_app)
 
 
+def _mount_ingest_if_service(app: Starlette, mcp: MCPServer) -> None:
+    """Mount the non-MCP conversation ingest API on the same port as MCP.
+
+    The write path (``bridge -> HTTP ingest``) and the read path (``MCP``) are
+    deliberately two surfaces of one process sharing one auth model, one archive
+    and one index.  Routes are always mounted; when ingest is disabled the
+    handlers answer ``503 ingest_disabled`` instead of 404 so the bridge can tell
+    "not configured" apart from "wrong URL".
+    """
+    service = getattr(mcp, "_rmg_service", None)
+    if service is None:
+        return
+    from .ingest.routes import build_ingest_routes
+
+    for route in build_ingest_routes(service.conversation_ingest):
+        app.add_route(route.path, route.endpoint, methods=list(route.methods or ["GET"]))
+
+
 def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
     service = getattr(mcp, "_rmg_service", None)
     config = getattr(mcp, "_rmg_config", None)
@@ -471,6 +489,23 @@ def _mount_health_if_service(app: Starlette, mcp: MCPServer) -> None:
             ),
             "path": config.upload.upload_path,
         }
+        if service is not None:
+            try:
+                ingest_stats = service.conversation_ingest.stats()
+            except Exception as exc:  # pragma: no cover - defensive
+                ingest_stats = {"enabled": False, "error": exc.__class__.__name__}
+            data["conversation_ingest"] = {
+                "enabled": ingest_stats.get("enabled", False),
+                "schema_version": ingest_stats.get("schema_version"),
+                "accepted_total": ingest_stats.get("accepted_total", 0),
+                "duplicate_total": ingest_stats.get("duplicate_total", 0),
+                "rejected_total": ingest_stats.get("rejected_total", 0),
+                "last_ingest_at": ingest_stats.get("last_ingest_at", ""),
+                "stored_events": ingest_stats.get("stored_events", 0),
+                "open_sessions": ingest_stats.get("open_sessions", 0),
+                "source_distribution": ingest_stats.get("source_distribution", {}),
+                "endpoint": "/api/conversations/events/batch",
+            }
         return JSONResponse(data)
 
     app.add_route("/health", _health_handler, methods=["GET"])
@@ -484,6 +519,7 @@ def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: A
     # with 421 even when uvicorn itself is bound to 0.0.0.0.
     app = mcp.streamable_http_app(host=config.server.host)
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
@@ -494,6 +530,7 @@ def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) ->
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
     app = mcp.sse_app(host=config.server.host)
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
@@ -532,6 +569,7 @@ def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfi
         lifespan=combined_lifespan,
     )
     _mount_uploads_if_enabled(app, config, mcp)
+    _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
     if auth_token or config.backend.type == "sqlite":
         app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)

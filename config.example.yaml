@@ -114,3 +114,23 @@ media_index:
   # Media reuses retrieval.embedding exactly. Image bytes are sent to the same
   # endpoint/model as data: URIs in the existing `input` field. RMG does not
   # probe or maintain a list of models that support image vectors.
+
+conversation_ingest:
+  # Non-MCP HTTP ingest used by research-memory-bridge for automatic capture.
+  # Requires conversation_archive.enabled above; when either is false the write
+  # endpoints answer 503 `ingest_disabled` instead of 404.
+  enabled: true
+  # Durable ledger of captured events. The materialized Markdown note is the
+  # long-term archive; this SQLite file is the idempotency/retry ledger.
+  state_path: ./data/conversation-ingest.sqlite
+  # A batch larger than this is refused as a whole (code `invalid_payload`).
+  max_batch_events: 500
+  # A single event larger than this is refused (code `content_too_large`), so a
+  # runaway tool payload cannot fill the archive.
+  max_content_chars: 400000
+  # ACKed events of ended sessions are pruned after this many days. Pruning only
+  # touches the ledger; archived notes are never truncated.
+  retention_days: 30
+  # Report `missing_event_count` on session end so the bridge can run a
+  # transcript reconciliation pass.
+  reconcile_on_session_end: true

@@ -96,6 +96,9 @@ class ConversationRetrievalService:
     ) -> dict[str, Any]:
         # Multi-source ambiguity guard: a bare provider conversation id may be
         # reused by several source systems.  Refuse silently picking one.
+        # `source_system` is itself a disambiguator (the MCP tool documents it as
+        # such), so a caller that already scopes by source system is not
+        # ambiguous and must not be blocked.
         if (
             conversation_id
             and not source_key
@@ -103,6 +106,10 @@ class ConversationRetrievalService:
             and not source_conversation_id
         ):
             owners = self.index_db.resolve_conversation_ambiguity(conversation_id)
+            if source_system:
+                owners = [
+                    owner for owner in owners if owner.get("source_system") == source_system
+                ]
             if len(owners) > 1:
                 return {
                     "query": query,
