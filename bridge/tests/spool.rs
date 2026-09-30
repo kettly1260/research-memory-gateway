@@ -208,7 +208,8 @@ fn prune_acked_keeps_pending_rows() {
 fn prune_acked_deletes_rows_older_than_the_retention_window() {
     let home = TestHome::new();
     let spool = Spool::open(&home.spool_path()).expect("spool");
-    spool.enqueue(&event("rmb1_old00001", "old")).expect("insert");
+    let old = event("rmb1_old00001", "old");
+    spool.enqueue(&old).expect("insert");
     let claimed = spool.claim_batch(1).expect("claim");
     spool.ack(&[claimed[0].event_id.clone()]).expect("ack");
 
