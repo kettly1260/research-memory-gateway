@@ -125,7 +125,12 @@ jobs:
           Copy-Item "README.md" $staging
           Compress-Archive -Path $staging -DestinationPath "${{ matrix.archive }}"
           $hash = (Get-FileHash "${{ matrix.archive }}" -Algorithm SHA256).Hash.ToLower()
-          "$hash  ${{ matrix.archive }}" | Out-File -Encoding ascii "${{ matrix.archive }}.sha256"
+          # Write with an explicit LF: `Out-File` would emit CRLF, and the release
+          # job concatenates these files into one SHA256SUMS that `sha256sum -c`
+          # must be able to read on every platform.
+          $line = "$hash  ${{ matrix.archive }}`n"
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Get-Location) "${{ matrix.archive }}.sha256"), $line)
           Get-Content "${{ matrix.archive }}.sha256"
 
       - name: Upload build artifact
@@ -161,13 +166,16 @@ jobs:
         run: |
           set -euo pipefail
           ls -la
-          cat ./*.sha256 > SHA256SUMS
+          # Strip CR defensively: a CRLF line would make `sha256sum -c` fail with
+          # "No such file or directory" on the trailing carriage return.
+          cat ./*.sha256 | tr -d '\r' > combined.sha256
           # Normalise to "<hash>  <file>" and keep one line per artifact.
-          awk '{print $1"  "$2}' SHA256SUMS | sort -k2 > SHA256SUMS.tmp
-          mv SHA256SUMS.tmp SHA256SUMS
-          rm -f ./*.sha256
+          awk 'NF >= 2 {print $1"  "$2}' combined.sha256 | sort -k2 > SHA256SUMS
+          rm -f ./*.sha256 combined.sha256
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
+          echo "--- verifying ---"
+          sha256sum -c SHA256SUMS
 
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
