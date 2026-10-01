@@ -1,0 +1,22 @@
+{
+  "source_system": "cursor",
+  "session_id": "cursor-session-1",
+  "conversation_id": "cursor-session-1",
+  "events": [
+    {
+      "event_type": "user_prompt",
+      "role": "user",
+      "content": "Summarise the Fe stock preparation.",
+      "message_id": "cursor-msg-1",
+      "timestamp": "2026-09-30T10:00:00Z",
+      "metadata": {"title": "Cursor session"}
+    },
+    {
+      "event_type": "assistant_message",
+      "role": "assistant",
+      "content": "10 mM Fe(NO3)3 in 0.1 M HNO3.",
+      "message_id": "cursor-msg-2",
+      "timestamp": "2026-09-30T10:00:05Z"
+    }
+  ]
+}

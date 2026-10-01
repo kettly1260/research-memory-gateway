@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "derivation_version": 1,
+  "note": "Generated from src/research_memory_gateway/ingest/identity.py. Both the Python and the Rust suite assert these values so the two implementations cannot drift.",
+  "cases": [
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "codex",
+        "source_account_namespace": "",
+        "conversation_id": "019daac2-3bb1-7201-86c3-8707bf242cd9",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "msg_01ABCdef",
+        "turn_id": "turn-1",
+        "event_type": "user_prompt",
+        "content": "Fe3+ stock is 10 mM in 0.1 M HNO3."
+      },
+      "content_identity": "df59032db439edc4e9b292048daf3810361dc9146b6d45fe7fb9312c1f905d5d",
+      "event_id": "rmb1_03843830f8462d8941fc03750ec7f6575bafae3feceacd1e1d9d898a3383288c",
+      "event_content_hash": "349d581ff0659b7b48cac4830e2068ebeb3be148b8a69a4af70002d42b183d4b"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "codex",
+        "source_account_namespace": "",
+        "conversation_id": "conv-2",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "",
+        "turn_id": "t-9",
+        "event_type": "assistant_message",
+        "content": "The Fe3+ stock concentration is 10 mM.\r\nSecond line with trailing spaces   \n"
+      },
+      "content_identity": "eb412cf4d4e5a2e170073a24ad52c615de764869e34129249ed564d6b2af8d64",
+      "event_id": "rmb1_021430f1b11ef346bdb04e139a890f6b6353ddc03c6b28b1d3300cd7b78fe92c",
+      "event_content_hash": "5b9de15d4ec81e97ca51966e009154effbf94c43ab547ba1e50c4f6777cf5674"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "claude-code",
+        "source_account_namespace": "abc123",
+        "conversation_id": "3ba920a2-714f-4aad-a556-0b9b2a18587e",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "",
+        "turn_id": "",
+        "event_type": "user_prompt",
+        "content": "之前 Fe 的硝酸溶液怎么配的？浓度是多少？"
+      },
+      "content_identity": "c6d8084e183ffa2a6317f114e66545bfa70638348bdb5b1c5ea51b66fc93c0d9",
+      "event_id": "rmb1_52ed730e4028f6efc2c3dafbd6fefa860080561910ee790d6fb80123aa7bd4e7",
+      "event_content_hash": "cad750da9b7c95ea3339448de089cb22765554fffd95a0f4169633d00de7a50d"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "claude-code",
+        "source_account_namespace": "abc123",
+        "conversation_id": "sess-3",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "550e8400-e29b-41d4-a716-446655440000",
+        "turn_id": "",
+        "event_type": "user_prompt",
+        "content": "  leading and trailing whitespace must not change identity  "
+      },
+      "content_identity": "0b086ddb1bdd5e876cb0aba7db406d303be21fbdb4200155a137ba00e51719d0",
+      "event_id": "rmb1_ba084a79a83e12a4db0902a8fd023033de0d710bf85d3820610c9655e2791321",
+      "event_content_hash": "c9d05c5e714b9dfee479f046e000b0bf040661c2999ce7f0aef1fff50d75f759"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "generic",
+        "source_account_namespace": "",
+        "conversation_id": "c-4",
+        "thread_id": "th-1",
+        "branch_id": "br-2",
+        "message_id": "m-4",
+        "turn_id": "t-4",
+        "event_type": "assistant_message",
+        "content": "IC50 = 12.5 µM; ΔG° = -23.4 kJ/mol; 结果如下：NaCl 0.9%"
+      },
+      "content_identity": "ca8bde81a718a884ebe5572273d111163e62f3eb21663cebea946be57aa3068e",
+      "event_id": "rmb1_56472fc76c5977bc1bd14c45fbd75a4d504cf3c640258860d14ba56413591e2a",
+      "event_content_hash": "38d25d5a92f1e083070e17b3742f854359eb9407a46ef9e9aa17123c71473206"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "codex",
+        "source_account_namespace": "",
+        "conversation_id": "c-5",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "m-5",
+        "turn_id": "t-5",
+        "event_type": "tool_result",
+        "content": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+      },
+      "content_identity": "2e79a11a4e20f94908ab4cd99578f1a83819fbff7f20fd63c1e22fde40137c9b",
+      "event_id": "rmb1_3751710756852792bc8f727513acffe20581a2f5af05f1f28a07d9f4af65df09",
+      "event_content_hash": "842847c7a9807ca9a3781e7204d2460d209349fa21e56b2f00fcbefa26483164"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "codex",
+        "source_account_namespace": "",
+        "conversation_id": "c-6",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "m-6",
+        "turn_id": "",
+        "event_type": "assistant_message",
+        "content": "emoji 🧪 and combining é vs é NFC check"
+      },
+      "content_identity": "83fae74045ab1b4a07b79f655d369a29bad474a85f748c01e4e2d69c53522f16",
+      "event_id": "rmb1_b43dd7306c051b741c81f1da36a5e845bab03463fb7a7f7caf63ff58c73e632e",
+      "event_content_hash": "e5e0d38fc1d4a445b7aabef618eb5d3d1cd51d795bab428a94fcbf7446442133"
+    },
+    {
+      "inputs": {
+        "schema_version": 1,
+        "source_system": "codex",
+        "source_account_namespace": "",
+        "conversation_id": "c-7",
+        "thread_id": "",
+        "branch_id": "",
+        "message_id": "",
+        "turn_id": "",
+        "event_type": "assistant_message",
+        "content": "no provider id at all -> content anchored"
+      },
+      "content_identity": "6f0922afec1221edb06cde89a8ca839d2f061f6f0a9af9d4c41ea6ee96ac72d5",
+      "event_id": "rmb1_b81118285e45b4443718b454cc47b1d5d9e758272bbb146b0cb95f9128e64767",
+      "event_content_hash": "bdec5531d598c44b2086045be742a5e6e27187932d4f881475db98d167b60622"
+    }
+  ],
+  "session_key_cases": [
+    {
+      "source_system": "codex",
+      "source_account_namespace": "",
+      "session_id": "s1",
+      "conversation_id": "c1",
+      "thread_id": "",
+      "branch_id": "",
+      "session_key": "2d07d656275e25d0b8cbba9bb35be6608b4ef0db5b7a8a115650c685e5248289"
+    },
+    {
+      "source_system": "Claude-Code",
+      "source_account_namespace": "ns",
+      "session_id": "s2",
+      "conversation_id": "c2",
+      "thread_id": "t",
+      "branch_id": "b",
+      "session_key": "f526291db2d218d9d0e00f73fea24b4761ea6b143942c4f8bc2cf4e27ef00201"
+    }
+  ],
+  "account_namespace_cases": [
+    {
+      "source_system": "codex",
+      "label": "legacy-default-v1",
+      "hash": "e669f96e96a38298d384994504f6057b2bb79e82ccab3620fabc37a6257fae5b"
+    },
+    {
+      "source_system": "claude-code",
+      "label": "default-v1",
+      "hash": "008f85f6149d76273cd59a778984cfe1082430795bd2b8d55f941f6a9a79dac3"
+    }
+  ]
+}

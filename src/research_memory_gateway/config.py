@@ -216,6 +216,41 @@ class ConversationArchiveConfig(BaseModel):
         return resolved
 
 
+class ConversationIngestConfig(BaseModel):
+    """Non-MCP HTTP conversation ingest (``research-memory-bridge`` write path).
+
+    This is the durable server-side ledger for hook-captured events.  It is
+    intentionally independent of the MCP surface: MCP stays the read path.
+    """
+
+    enabled: bool = True
+    state_path: str = "./data/conversation-ingest.sqlite"
+    #: Hard cap on events per batch request.  Larger batches are rejected with
+    #: ``invalid_payload`` rather than silently truncated.
+    max_batch_events: int = 500
+    #: Per-event content cap.  Oversized events are rejected with
+    #: ``content_too_large`` so a runaway tool payload cannot fill the archive.
+    max_content_chars: int = 400_000
+    #: ACKed events for ended sessions are pruned after this many days so the
+    #: ledger cannot grow without bound.  The materialized Markdown note is the
+    #: durable archive and is never pruned here.
+    retention_days: int = 30
+    #: Report missing-event counts on session-end so the bridge can trigger a
+    #: transcript reconciliation pass.
+    reconcile_on_session_end: bool = True
+
+    def resolve_state_path(self, base_dir: str | Path | None = None) -> Path:
+        base = Path(base_dir or ".").resolve()
+        path = Path(self.state_path)
+        resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+        if not path.is_absolute():
+            try:
+                resolved.relative_to(base)
+            except ValueError:
+                raise PermissionError(f"state_path escapes base directory: {self.state_path}")
+        return resolved
+
+
 class MediaIndexConfig(BaseModel):
     """Persistent multimodal resource index.
 
@@ -274,6 +309,7 @@ class AppConfig(BaseModel):
     export: ExportConfig = Field(default_factory=ExportConfig)
     webui: WebUIConfig = Field(default_factory=WebUIConfig)
     conversation_archive: ConversationArchiveConfig = Field(default_factory=ConversationArchiveConfig)
+    conversation_ingest: ConversationIngestConfig = Field(default_factory=ConversationIngestConfig)
     media_index: MediaIndexConfig = Field(default_factory=MediaIndexConfig)
     upload: UploadConfig = Field(default_factory=UploadConfig)
 

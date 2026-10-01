@@ -11,3 +11,10 @@ config.yaml
 *.db
 *.db-*
 src/*.egg-info
+# The Rust bridge is a client and is deliberately NOT part of the gateway image.
+bridge
+.tmp
+scratch
+docs
+tests
+benchmarks

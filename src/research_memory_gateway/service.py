@@ -63,6 +63,7 @@ class ResearchMemoryService:
         self._conversation_retrieval = None
         self._upload_manager = None
         self._media_index = None
+        self._conversation_ingest = None
 
     @property
     def vector_generation(self) -> int:
@@ -129,6 +130,20 @@ class ResearchMemoryService:
             self._conversation_retrieval.index_db.embedding_client = emb_client
             self._conversation_retrieval.index_db.set_vector_generation(self.vector_generation)
         return self._conversation_retrieval
+
+    @property
+    def conversation_ingest(self):
+        """Lazily opened non-MCP conversation ingest service.
+
+        This is the *write* path used by ``research-memory-bridge`` lifecycle
+        hooks.  It shares the conversation archive, index and retrieval objects
+        with the MCP read path so an ingested event is immediately searchable.
+        """
+        if self._conversation_ingest is None:
+            from .ingest.service import ConversationIngestService
+
+            self._conversation_ingest = ConversationIngestService(self.config, self)
+        return self._conversation_ingest
 
     @property
     def media_index(self):

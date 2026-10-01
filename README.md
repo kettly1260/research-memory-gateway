@@ -26,6 +26,123 @@ V2 hardening 进一步保证：科研分类优先依据“测量/观察/条件/�
 
 服务支持三种工具面：`agent`（默认 4 工具）、`admin`（V1 管理工具）、`full`（两者同时暴露，供调试/迁移）。
 
+## Automatic Conversation Capture / Research Memory Bridge
+
+上面的 MCP 是**读**路径：由模型主动调用 `conversation_search` / `conversation_recall` / `conversation_read` / `recall_memory`。
+本版本新增 `research-memory-bridge`，负责**写**路径：自动捕获 Codex / Claude Code 的会话事件并上传到网关，**完全不消耗模型上下文**，也不要求模型“每轮记得调用 memory 工具”。
+
+```text
+Agent
+  | 生命周期 hook / transcript adapter
+  v
+research-memory-bridge        归一化 -> 脱敏 -> 本地持久 spool -> 重试 -> 批量上传
+  | HTTP ingest API
+  v
+research-memory-gateway       完整对话归档 + FTS + embedding + 检索
+  ^
+  | Streamable HTTP MCP（读路径，未改动，也没有改成 stdio）
+Agent
+```
+
+### Architecture
+
+| 关注点 | 归属 |
+|---|---|
+| 采集、归一化、脱敏、spool、重试、批量上传、transcript 对账 | bridge（Rust） |
+| 归档、FTS、embedding、rerank、检索排序、prompt 注入 | gateway（Python） |
+
+bridge 是**薄客户端**，不是第二套 memory server：没有 MCP server、WebUI、embedding、reranker、向量库、LLM。
+它也**不复制**网关的检索代码，不把 Research-AI-Hub / Obsidian 当作对话归档，二者仍是彼此独立的权威层。
+
+写入与读取的协议细节见 [`docs/CONVERSATION_INGEST_PROTOCOL.md`](docs/CONVERSATION_INGEST_PROTOCOL.md)；
+bridge 的完整说明见 [`docs/RESEARCH_MEMORY_BRIDGE.md`](docs/RESEARCH_MEMORY_BRIDGE.md)。
+
+### Installation
+
+```bash
+# 1. 取二进制（GitHub Release 资产）或自行编译
+cd bridge && cargo build --release --locked
+
+# 2. 初始化配置（token 只放在环境变量里，不写进配置文件）
+research-memory-bridge config init --server-url http://<gateway>:8787
+export RESEARCH_MEMORY_TOKEN=...      # Linux/macOS/WSL；Windows 用 setx
+
+# 3. 安装 hook
+research-memory-bridge install-hooks --agent codex
+research-memory-bridge install-hooks --agent claude-code
+
+# 4. 自检
+research-memory-bridge doctor
+```
+
+持久目录使用平台标准 user data 目录（Windows `%APPDATA%`），可用 `--home` 或
+`RESEARCH_MEMORY_BRIDGE_HOME` 覆盖：`config.toml`、`spool.sqlite`、`logs/`、`backups/`。
+安装是幂等的、修改前会备份，`uninstall-hooks` 只删除自己写入的内容。
+
+### Codex Setup
+
+Codex 通过 `~/.codex/config.toml` 的 `notify` 在 `agent-turn-complete` 时调用命令，
+payload 以**最后一个命令行参数**传入（不是 stdin）。安装后写入：
+
+```toml
+notify = ["C:\\path\\to\\research-memory-bridge.exe", "capture", "--agent", "codex", "--bridge-managed"]
+```
+
+- Codex 只支持**一个** `notify` 命令；已有别的命令时安装器会拒绝，需 `--force`（原值会备份，`uninstall-hooks` 可还原）。
+- 修改是**外科式**的：`config.toml` 的注释、键序、其它 table 均原样保留。
+- Codex 目前**没有** `SessionStart` / `SessionEnd` / tool lifecycle。因此 turn 结束**不会**被当成会话结束，
+  会话收尾使用显式兜底：`research-memory-bridge finalize-session --agent codex --session-id <id>`。
+- `last-assistant-message` 是**摘要**而非完整回复，完整文本由 transcript 对账补齐。
+
+### Claude Code Setup
+
+Claude Code 通过 `~/.claude/settings.json` 的 `hooks` 调用命令，事件 JSON 走 **stdin**。安装的映射：
+
+| 事件 | 映射 |
+|---|---|
+| `SessionStart` | `session_start` |
+| `UserPromptSubmit` | `user_prompt`（以 `prompt_id` 为锚点） |
+| `Stop` | `turn_end`（回合边界，**不是**会话结束） |
+| `SessionEnd` | `session_end` |
+| `PreToolUse` / `PostToolUse` | 工具遥测（需 `--with-tools`） |
+
+Claude Code 的 hook 是可组合的，安装只追加自己的 matcher group，不覆盖任何已有 hook / permissions / 设置。
+`capture` 恒以 `0` 退出且**不写 stdout**——因为 exit code 2 会阻塞 Agent，而 `UserPromptSubmit` / `SessionStart` 的 stdout 会被注入模型上下文。
+
+### Troubleshooting
+
+| 现象 | 处理 |
+|---|---|
+| `doctor` 显示 `auth: INVALID` | `$RESEARCH_MEMORY_TOKEN` 未被接受；核对网关 `server.auth_token_env` 或写入 `api_keys`。 |
+| `doctor` 显示 `gateway_ingest_enabled: !!` | 在网关配置中同时打开 `conversation_archive.enabled` 与 `conversation_ingest.enabled` 后重启。 |
+| 事件一直 `pending` | 网关不可达或被拒绝；`status --json` 的 `last_error` 与 `doctor` 可定位。**不会丢数据**。 |
+| `dead_letter` 增长 | 查看 `status --json` 的 `dead_letter_sample`：`content_too_large` 表示超出 `max_content_chars`，`event_id_conflict` 表示客户端用同一 id 传了不同内容。 |
+| Codex hook 不触发 | 已有第三方 `notify` 时需 `--force`（原值会备份）。 |
+| 归档里看起来有重复 | hook 的 `last-assistant-message` 是摘要，与 transcript 的完整文本不同属正常；字节相同的副本会自动归并。 |
+| `conversation_search` 搜不到 | 先 `watch --agent <agent> --once` 做 transcript 对账；另外 FTS5 `unicode61` 不做中文分词，请用逐字出现的 token（如 `HNO3`）而不是中文短语。 |
+
+### Security
+
+```text
+客户端脱敏 -> 网络 -> 服务端二次脱敏 -> 归档
+```
+
+两层互不信任。覆盖 Authorization / bearer token / API key / 常见 secret env 赋值 / 类密码赋值 /
+GitHub token / OpenAI、Anthropic 风格 key / AWS access key / JWT / 私钥块 / cookie、session token / 连接串 / URL userinfo。
+
+脱敏以**精确性**为前提：只有出现“像密钥的标签”或高熵 token 形态才替换，
+`Fe(NO3)3`、`0.1 M HNO3`、`IC50 = 12.5 µM`、`NaCl 0.9%` 一律原样保留。
+
+Token 只从环境变量读取，不写入配置、不出现在 `status` / `doctor` / `config --json`、不写日志、不进错误信息。
+
+边界：
+- **Agent 工作 fail-open** —— 网关不可用不会阻塞 Codex / Claude Code；
+- **数据完整性 durable spool + retry** —— 不静默丢失；
+- **安全校验 fail-closed** —— 非法 server URL、无法验证的 payload、认证失败一律**不会**被当作成功 ACK。
+
+ChatGPT Web 没有官方本地生命周期接口，本次**不做** DOM 抓取 / 浏览器注入 / cookie 窃取，
+后续通过官方接口、Data Export 增量导入或受支持的 connector 单独处理。
+
 ## 重要说明：当前不需要 Nocturne
 
 本项目 Docker 镜像只部署 `research-memory-gateway` 本身，不部署 Nocturne。
@@ -505,6 +622,19 @@ pytest
 ./scripts/smoke.ps1
 ```
 
+Rust bridge（独立 crate，需 Rust stable）：
+
+```bash
+cd bridge
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+CI：`.github/workflows/tests.yml`（pytest）、`.github/workflows/docker-publish.yml`
+（pytest → Buildx → `linux/amd64,linux/arm64` → GHCR）、
+`.github/workflows/bridge-ci.yml`（Rust fmt/clippy/test + 三平台二进制 + `v*` tag 发布 release 资产与 SHA256SUMS）。
+
 已覆盖：
 
 - Agent Surface 默认只暴露 4 个低成本工具，Admin/Full Surface 保留 V1 管理能力。
@@ -513,6 +643,11 @@ pytest
 - `evidence_backed` claim 必须绑定 evidence。
 - `unverified` claim 可无 evidence。
 - SQLite 检索支持 `sulfur-doped`、`Hg2+` 等含连字符或符号的科研术语。
+- Conversation ingest：schema 契约（JSON Schema ↔ pydantic ↔ Rust 三方一致）、HTTP 认证、
+  幂等/重复/冲突、部分成功、session-end 对账、snapshot 归并、二次脱敏、归档与检索集成。
+- 端到端：provider fixture → spool → HTTP 网关 → ACK → 归档/FTS → `conversation_search` / `recall` 可召回。
+- Rust：归一化、确定性 event id、脱敏、spool 事务与崩溃恢复、重试、ACK、部分批次、
+  Codex/Claude fixture 解析、cursor 增量对账、hook 安装/卸载。
 
 ## 发布版本
 
@@ -532,12 +667,15 @@ tag 触发后会发布 `ghcr.io/<owner>/<repo>:v0.1.0` 和对应 sha 标签；�
 ```text
 src/research_memory_gateway/  # 网关源码
 src/research_memory_gateway/agent_surface/ # V2 Agent-facing adapter
+src/research_memory_gateway/ingest/        # 非 MCP 的 HTTP ingest（写入路径）
+bridge/                       # research-memory-bridge Rust 客户端（自动采集）
+schemas/                      # 语言无关的 ingest 契约与 event-id fixture
 prompts/                      # AI 客户端系统提示
 skills/                       # 可复制到 Kilo/Codex/Cherry 的调用策略
 benchmarks/                   # Recall/Capture 自然语言调用基准
-docs/                         # 部署、客户端配置、schema 文档
+docs/                         # 部署、客户端配置、schema、ingest 协议文档
 examples/                     # 示例记忆
-.github/workflows/            # GitHub Actions 镜像发布
+.github/workflows/            # GitHub Actions：pytest / 多架构镜像 / Rust bridge
 ```
 
 ## Conversation Memory Pipeline
@@ -637,6 +775,19 @@ conversation_archive:
   canonical_subdir: 90_System/AI-Memory
   require_explicit_vault_confirmation: true
   index_path: /app/data/conversation-index.sqlite
+  # bridge 自动采集的归档落在 staging（未确认 vault 时）：
+  #   <staging_dir>/bridge/<source_system>/<conversation>.md
+  staging_dir: /app/data/conversation-staging
+
+conversation_ingest:
+  # 非 MCP 的 HTTP 写入接口（research-memory-bridge 使用）。
+  # 需要 conversation_archive.enabled 同时为 true；任一为 false 时写入接口返回 503 ingest_disabled。
+  enabled: true
+  state_path: /app/data/conversation-ingest.sqlite
+  max_batch_events: 500
+  max_content_chars: 400000
+  retention_days: 30
+  reconcile_on_session_end: true
 
 retrieval:
   mode: hybrid
@@ -651,6 +802,9 @@ webui:
   host: 0.0.0.0
   port: 8788
 ```
+
+> 客户端（bridge）侧只需设置环境变量 `RESEARCH_MEMORY_TOKEN`，
+> 不要把它写进 `config.toml` 或命令行。
 
 ### WebUI 只读对话控制台 (`/admin/conversations`)
 

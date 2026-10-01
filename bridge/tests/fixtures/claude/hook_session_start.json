@@ -1,0 +1,9 @@
+{
+  "session_id": "3ba920a2-714f-4aad-a556-0b9b2a18587e",
+  "transcript_path": "C://Users//YING//.claude//projects//G--LLM-memory//3ba920a2-714f-4aad-a556-0b9b2a18587e.jsonl",
+  "cwd": "G://LLM//memory",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "model": "claude-opus-5",
+  "session_title": "Fe stock preparation"
+}
