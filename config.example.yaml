@@ -8,6 +8,18 @@ server:
   # full: both surfaces, intended for debugging/migration
   surface: agent
 
+oauth:
+  # Optional authorization-code + PKCE support on the MCP HTTP port.
+  enabled: false
+  # Required when enabled. Public HTTPS origin; loopback HTTP is allowed for local use.
+  # All OAuth routes and /mcp must be forwarded to port 8787.
+  public_url: ""
+  store_path: ./data/oauth.db
+  dynamic_registration: true
+  access_token_seconds: 3600
+  refresh_token_seconds: 2592000
+  max_clients: 1000
+
 backend:
   # Default self-contained backend. This is enough for direct MCP calls.
   # Nocturne is not required; keep SQLite when you already have embedding/rerank services.

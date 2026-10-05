@@ -39,6 +39,23 @@ interface RequestOptions {
   params?: Record<string, string | undefined>
 }
 
+export interface OAuthClient {
+  client_id: string
+  client_name: string
+  redirect_uris: string[]
+  token_endpoint_auth_method: 'none' | 'client_secret_post' | 'client_secret_basic'
+  status: 'active' | 'disabled'
+  created_at: number
+  last_used_at: number | null
+  active_grants: number
+}
+
+export interface OAuthClientInput {
+  client_name: string
+  redirect_uris: string[]
+  token_endpoint_auth_method: OAuthClient['token_endpoint_auth_method']
+}
+
 let isRefreshing = false
 let refreshSubscribers: ((token: string) => void)[] = []
 
@@ -454,6 +471,24 @@ export const api = {
   },
 
   // ─── Connections ───
+  oauth: {
+    list() {
+      return request<{ enabled: boolean; issuer: string | null; resource: string | null; dynamic_registration: boolean; items: OAuthClient[] }>('/security/oauth/clients')
+    },
+    create(input: OAuthClientInput) {
+      return request<{ client_id: string; client_secret?: string }>('/security/oauth/clients', { method: 'POST', body: input })
+    },
+    update(id: string, patch: { client_name?: string; status?: OAuthClient['status'] }) {
+      return request<{ updated: boolean }>(`/security/oauth/clients/${encodeURIComponent(id)}`, { method: 'PATCH', body: patch })
+    },
+    revoke(id: string) {
+      return request<{ revoked: boolean }>(`/security/oauth/clients/${encodeURIComponent(id)}/revoke`, { method: 'POST' })
+    },
+    delete(id: string) {
+      return request<{ deleted: boolean }>(`/security/oauth/clients/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    },
+  },
+
   connections: {
     list() {
       return request<{ items: Array<{ key_id: string; key_name: string | null; client_ip: string; client_info: string | null; request_count: number; last_request_at: string }> }>('/security/connections')

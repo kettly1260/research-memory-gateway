@@ -6,11 +6,15 @@ import logging
 import os
 import sqlite3
 import hashlib
+import secrets
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+from starlette.authentication import AuthCredentials
 from starlette.applications import Starlette
 from starlette.responses import Response
 from starlette.routing import Mount, Route
@@ -20,7 +24,8 @@ import uvicorn
 from . import __version__
 from .backends import build_backend
 from .agent_surface.tools import register_agent_tools
-from .config import AppConfig, load_config
+from .config import AppConfig, AuthStore, load_config
+from .oauth import OAuthService, PUBLIC_PATHS, oauth_routes
 from .models import ExportFormat
 from .service import ResearchMemoryService, serialize_results
 from .webui.app import build_webui_app
@@ -53,17 +58,23 @@ ADMIN_TOOL_NAMES = (
 
 
 class BearerAuthMiddleware:
-    def __init__(self, app: ASGIApp, token: str | None = None, sqlite_path: str = "") -> None:
+    def __init__(self, app: ASGIApp, token: str | None = None, sqlite_path: str = "",
+                 oauth: OAuthService | None = None) -> None:
         self.app = app
         self.token = token
         self.sqlite_path = sqlite_path
+        self.oauth = oauth
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or scope.get("path") in {"/health", "/healthz"} or scope.get("method") == "OPTIONS":
             await self.app(scope, receive, send)
             return
 
-        if not self.token and _is_loopback_client(scope):
+        if self.oauth and scope.get("path") in PUBLIC_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        if not self.oauth and not self.token and _is_loopback_client(scope):
             await self.app(scope, receive, send)
             return
 
@@ -73,20 +84,24 @@ class BearerAuthMiddleware:
                 authorization = raw_value.decode("latin-1")
                 break
 
-        if not authorization.startswith("Bearer "):
+        if not authorization.lower().startswith("bearer "):
             logger.warning("Rejected unauthenticated request path=%s: Missing Bearer token", scope.get("path"))
-            response = Response("Unauthorized", status_code=401)
+            response = self._unauthorized()
             await response(scope, receive, send)
             return
 
         token_val = authorization[7:]
         authenticated = False
         key_id = None
+        auth_info = None
 
         # 1. 优先校验内置 master token
-        if self.token and token_val == self.token:
+        if self.token and secrets.compare_digest(token_val.encode(), self.token.encode()):
             authenticated = True
-        elif os.path.exists(self.sqlite_path):
+        elif self.oauth and scope.get("path") in {"/mcp", "/mcp/"}:
+            auth_info = self.oauth.verify_access_token(token_val)
+            authenticated = auth_info is not None
+        if not authenticated and os.path.exists(self.sqlite_path):
             # 2. 从数据库中进行 API Key 匹配 (SHA-256)
             token_hash = hashlib.sha256(token_val.encode("utf-8")).hexdigest()
             try:
@@ -104,9 +119,18 @@ class BearerAuthMiddleware:
 
         if not authenticated:
             logger.warning("Rejected unauthorized request path=%s", scope.get("path"))
-            response = Response("Unauthorized", status_code=401)
+            response = self._unauthorized()
             await response(scope, receive, send)
             return
+
+        if self.oauth:
+            # Populate the SDK identity so sessions cannot be reused by another OAuth client.
+            auth_info = auth_info or AccessToken(
+                token=token_val, client_id=key_id or "legacy_master", scopes=["mcp"],
+                resource=self.oauth.resource, subject="admin", claims={"iss": self.oauth.issuer},
+            )
+            scope["user"] = AuthenticatedUser(auth_info)
+            scope["auth"] = AuthCredentials(auth_info.scopes)
 
         # 3. 校验通过，如果是 API Key，则记录活跃连接
         if key_id:
@@ -140,6 +164,12 @@ class BearerAuthMiddleware:
                 logger.error("Database error recording active connection: %s", e)
 
         await self.app(scope, receive, send)
+
+    def _unauthorized(self) -> Response:
+        challenge = "Bearer"
+        if self.oauth:
+            challenge += f' resource_metadata="{self.oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="mcp"'
+        return Response("Unauthorized", status_code=401, headers={"WWW-Authenticate": challenge})
 
 
 def _is_loopback_client(scope: Scope) -> bool:
@@ -521,19 +551,19 @@ def _build_streamable_http_app(mcp: MCPServer, auth_token: str | None, config: A
     _mount_uploads_if_enabled(app, config, mcp)
     _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
-    if auth_token or config.backend.type == "sqlite":
-        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
+    _configure_http_auth(app, auth_token, config)
     return app
 
 
 def _build_sse_app(mcp: MCPServer, auth_token: str | None, config: AppConfig) -> Starlette:
     """Build a Starlette app serving only legacy SSE at /sse + /messages/."""
+    if config.oauth.enabled:
+        raise ValueError("OAuth requires streamable-http or both transport; SSE-only supports Bearer/API Keys")
     app = mcp.sse_app(host=config.server.host)
     _mount_uploads_if_enabled(app, config, mcp)
     _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
-    if auth_token or config.backend.type == "sqlite":
-        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
+    _configure_http_auth(app, auth_token, config)
     return app
 
 
@@ -571,9 +601,22 @@ def _build_combined_app(mcp: MCPServer, auth_token: str | None, config: AppConfi
     _mount_uploads_if_enabled(app, config, mcp)
     _mount_ingest_if_service(app, mcp)
     _mount_health_if_service(app, mcp)
-    if auth_token or config.backend.type == "sqlite":
-        app.add_middleware(BearerAuthMiddleware, token=auth_token, sqlite_path=config.backend.sqlite_path)
+    _configure_http_auth(app, auth_token, config)
     return app
+
+
+def _configure_http_auth(app: Starlette, auth_token: str | None, config: AppConfig) -> None:
+    oauth = None
+    if config.oauth.enabled:
+        # Also validate configs constructed through attribute assignment rather than YAML loading.
+        config.oauth = type(config.oauth).model_validate(config.oauth.model_dump())
+        AuthStore(config.webui.auth_store_path).bootstrap(config.webui)
+        oauth = OAuthService(config)
+        app.router.routes.extend(oauth_routes(oauth))
+        app.state.oauth = oauth
+    if auth_token or config.backend.type == "sqlite" or oauth:
+        app.add_middleware(BearerAuthMiddleware, token=auth_token,
+                           sqlite_path=config.backend.sqlite_path, oauth=oauth)
 
 
 def main() -> None:
@@ -589,7 +632,7 @@ def main() -> None:
     auth_token = os.getenv(config.server.auth_token_env)
     transport = args.transport
 
-    if transport != "stdio" and not auth_token:
+    if transport != "stdio" and not auth_token and not config.oauth.enabled:
         print(
             f"Warning: {config.server.auth_token_env} is not set. "
             "Put this behind Tailscale/WireGuard or an authenticated reverse proxy."

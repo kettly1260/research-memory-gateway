@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { OAuthClientsTab } from './security/OAuthClientsTab'
 import { useTranslation } from 'react-i18next'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -32,9 +33,10 @@ export function Security() {
       <h1 className="text-2xl font-bold tracking-tight">{t('security.title')}</h1>
 
       <Tabs defaultValue="password">
-        <TabsList>
+        <TabsList className="flex flex-wrap h-auto">
           <TabsTrigger value="password">{t('security.tab_password')}</TabsTrigger>
           <TabsTrigger value="apikeys">{t('security.tab_apikeys')}</TabsTrigger>
+          <TabsTrigger value="oauth">{t('oauth.title')}</TabsTrigger>
           <TabsTrigger value="connections">{t('security.tab_connections')}</TabsTrigger>
         </TabsList>
 
@@ -48,6 +50,9 @@ export function Security() {
 
         <TabsContent value="connections" className="mt-4">
           <ConnectionsTab />
+        </TabsContent>
+        <TabsContent value="oauth" className="mt-4">
+          <OAuthClientsTab />
         </TabsContent>
       </Tabs>
     </div>

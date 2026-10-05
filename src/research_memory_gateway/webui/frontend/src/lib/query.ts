@@ -464,6 +464,33 @@ export function useConnections() {
   })
 }
 
+export function useOAuthClients() {
+  return useQuery({
+    queryKey: ['security', 'oauth-clients'],
+    queryFn: () => api.oauth.list(),
+    refetchInterval: 15000,
+  })
+}
+
+export function useOAuthClientMutation() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (action:
+      | { type: 'create'; input: Parameters<typeof api.oauth.create>[0] }
+      | { type: 'update'; id: string; patch: Parameters<typeof api.oauth.update>[1] }
+      | { type: 'revoke' | 'delete'; id: string }
+    ) => {
+      switch (action.type) {
+        case 'create': return api.oauth.create(action.input)
+        case 'update': return api.oauth.update(action.id, action.patch)
+        case 'revoke': return api.oauth.revoke(action.id)
+        case 'delete': return api.oauth.delete(action.id)
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['security', 'oauth-clients'] }),
+  })
+}
+
 // ─── Conversation Queries ───
 
 export function useConversationStatus() {

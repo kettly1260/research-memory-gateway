@@ -10,9 +10,10 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Sequence
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 
 class ServerConfig(BaseModel):
@@ -21,6 +22,33 @@ class ServerConfig(BaseModel):
     port: int = 8787
     auth_token_env: str = "RESEARCH_MEMORY_TOKEN"
     surface: Literal["agent", "admin", "full"] = "agent"
+
+
+class OAuthConfig(BaseModel):
+    enabled: bool = False
+    public_url: str = ""
+    store_path: str = "./data/oauth.db"
+    dynamic_registration: bool = True
+    access_token_seconds: int = Field(default=3600, ge=60, le=86400)
+    refresh_token_seconds: int = Field(default=2592000, ge=600, le=7776000)
+    max_clients: int = Field(default=1000, ge=1, le=100000)
+
+    @model_validator(mode="after")
+    def validate_public_url(self) -> "OAuthConfig":
+        if not self.enabled and not self.public_url:
+            return self
+        parsed = urlsplit(self.public_url)
+        if (
+            any(c.isspace() or ord(c) < 32 or c in '"\\?#' for c in self.public_url)
+            or not parsed.hostname or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or parsed.path not in {"", "/"}
+            or parsed.scheme not in {"https", "http"}
+            or (parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"})
+        ):
+            raise ValueError("oauth.public_url must be an HTTPS origin (loopback HTTP is allowed)")
+        parsed.port
+        self.public_url = self.public_url.rstrip("/")
+        return self
 
 
 class BackendConfig(BaseModel):
@@ -302,6 +330,7 @@ def validate_safe_path(target_path: str | Path, allowed_roots: Sequence[str | Pa
 
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
+    oauth: OAuthConfig = Field(default_factory=OAuthConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)

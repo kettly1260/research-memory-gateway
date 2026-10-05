@@ -37,7 +37,61 @@ Set `RESEARCH_MEMORY_TOKEN` and configure the client to send:
 Authorization: Bearer <token>
 ```
 
-When `RESEARCH_MEMORY_TOKEN` is unset, only loopback HTTP/SSE clients from `127.0.0.1` or `::1` are allowed without a token.
+When `RESEARCH_MEMORY_TOKEN` is unset and OAuth is disabled, only loopback HTTP/SSE clients from `127.0.0.1` or `::1` are allowed without a token.
+
+## OAuth For Remote MCP
+
+OAuth is optional and disabled by default. Existing master Bearer tokens and WebUI API Keys
+continue to work. Enable OAuth in `config.yaml`:
+
+```yaml
+oauth:
+  enabled: true
+  public_url: https://memory.example.com
+  store_path: ./data/oauth.db
+  dynamic_registration: true
+webui:
+  enabled: true
+  initial_password: CHANGE-THIS-ON-FIRST-START
+```
+
+Use `--transport streamable-http` or `--transport both`. OAuth protects `/mcp`; legacy SSE,
+uploads, and conversation ingest still use existing Bearer/API Key authentication.
+SSE-only mode rejects an enabled OAuth configuration rather than advertising a nonexistent
+MCP resource. Stdio does not use HTTP OAuth.
+
+`public_url` must be the externally reachable HTTPS **origin**, without a path, query, or
+fragment. For a local test, `http://127.0.0.1:8787` is allowed. Configure the reverse proxy to
+forward `/mcp`, `/.well-known/*`, `/authorize`, `/oauth/consent`, `/register`, `/token`, and
+`/revoke` to the MCP port (8787), preserving the path. Keep the WebUI port (8788) private.
+Do not derive the issuer from untrusted Host or forwarded headers. Only trust proxy headers
+from your actual proxy.
+
+OAuth-capable clients connect to `https://memory.example.com/mcp`. A 401 response advertises
+protected-resource metadata, which links to authorization-server discovery. Dynamic
+registration creates public PKCE clients by default; confidential clients can choose
+`client_secret_post` or `client_secret_basic`. Disable `dynamic_registration` to allow only
+clients created in the WebUI. The registration limit applies to all clients.
+
+The consent page displays the client name and callback URL, and requires the existing
+WebUI administrator password plus explicit approval. The password store is also required
+when OAuth is used without starting the WebUI. Remove `initial_password` from configuration
+after first bootstrap. Every grant uses S256 PKCE, exact registered callback matching, a
+five-minute single-use authorization code, and tokens bound to this server's `/mcp` resource.
+The `mcp` scope permits the configured MCP tool surface; it does not grant WebUI admin access.
+Enabling OAuth disables unauthenticated loopback access to the MCP HTTP app.
+
+In **Security & Auth -> OAuth Clients**, administrators can create and rename clients, view
+callback URLs and authentication methods, enable/disable clients, revoke all client grants,
+and delete clients. A confidential client's secret is displayed only at creation. Disable,
+delete, and revoke invalidate existing token families immediately; re-enabling a client does
+not restore old grants. Renaming does not change the client ID or invalidate grants.
+
+Clients, pending authorizations, authorization codes, and token families persist in
+`oauth.store_path`. Client secrets and bearer credentials are stored only as SHA-256 hashes.
+Refresh tokens rotate on every exchange; reuse revokes the entire family. The refresh
+family has a fixed lifetime, so rotation cannot extend access indefinitely. Back up and
+restrict filesystem access to the OAuth database and the administrator password store.
 
 ## ChatGPT Custom App / Workspace Agent Notes
 

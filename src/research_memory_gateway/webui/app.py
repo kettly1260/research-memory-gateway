@@ -24,7 +24,9 @@ from ..config import (
 from ..models import ExportFormat, MemoryStatus, ResearchMemory
 from ..nocturne import NocturneReservedConnector
 from ..service import ResearchMemoryService
+from ..oauth import OAuthService
 from .auth_routes import SessionManager, security_routes
+from .oauth_routes import oauth_admin_routes
 from .runtime import (
     BackfillManager,
     ConversationVectorizationManager,
@@ -78,6 +80,7 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         conversation_vectors,
         media_vectors,
         vector_rebuilds,
+        OAuthService(config) if config.oauth.enabled else None,
     )
 
     routes = [
@@ -131,6 +134,7 @@ def build_webui_app(config: AppConfig, service: ResearchMemoryService | None = N
         Route("/admin/api/media/vectorization/jobs/{job_id:str}", api_media_vectorization_job, methods=["GET"]),
         Route("/admin/api/media/vectorization/jobs/{job_id:str}/cancel", api_media_vectorization_cancel, methods=["POST"]),
         *security_routes(),
+        *oauth_admin_routes(),
         Mount("/admin/assets", StaticFiles(directory=Path(__file__).parent / "static" / "dist" / "assets"), name="admin-assets"),
         Route("/admin/favicon.svg", serve_favicon, methods=["GET"]),
         Route("/admin/{path:path}", serve_spa, methods=["GET"]),
@@ -155,6 +159,7 @@ class WebState:
     conversation_vectors: ConversationVectorizationManager
     media_vectors: MediaVectorizationManager
     vector_rebuilds: UnifiedVectorRebuildManager
+    oauth: OAuthService | None
 
 
 class SecurityMiddleware:
